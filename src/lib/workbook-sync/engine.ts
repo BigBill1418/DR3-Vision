@@ -120,6 +120,14 @@ export interface SyncOneResult {
   graceWindow: boolean;
   /** Days left alone because an approved invoice already covers them (B1). */
   rowsSkippedBilled: number;
+  /**
+   * ADR-0123 — days left alone because a PERSON owns the row (`source = 'manual'`).
+   *
+   * Non-zero means the spreadsheet and a human correction disagree. Like
+   * `rowsSkippedBilled`, that is a human decision this sync deliberately does not
+   * make; unlike it, the previous behaviour was to overwrite the human.
+   */
+  rowsSkippedManual: number;
   error: string | null;
   runId: string;
   /** Whether this poll fired an ntfy page (A4 — one `high` per site per day). */
@@ -213,6 +221,7 @@ export async function syncOneSource(
   const monthAnchor = isGrace ? priorMonthAnchor(started) : started;
   const tag = isGrace ? ' [grace]' : '';
   let rowsSkippedBilled = 0;
+  let rowsSkippedManual = 0;
 
   let status: SyncStatus = 'ok';
   let error: string | null = null;
@@ -425,10 +434,11 @@ export async function syncOneSource(
           );
           rowsUpserted = counts.upserted;
           rowsOverwritten = counts.overwritten;
+          rowsSkippedManual = counts.skippedManual;
           workbookRead = true;
           log(
             'info',
-            `[workbook-sync] run=${runId} site=${source.site_id}${tag} "${fileName}" gen=${daily.templateGeneration} month=${parsed.workbookMonth ?? 'n/a'} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit} skippedBilled=${rowsSkippedBilled}`,
+            `[workbook-sync] run=${runId} site=${source.site_id}${tag} "${fileName}" gen=${daily.templateGeneration} month=${parsed.workbookMonth ?? 'n/a'} daysSeen=${daily.daysSeen} upserted=${rowsUpserted} overwritten=${rowsOverwritten} midEdit=${rowsSkippedMidedit} skippedBilled=${rowsSkippedBilled} skippedManual=${rowsSkippedManual}`,
           );
         }
       }
@@ -517,6 +527,7 @@ export async function syncOneSource(
         rows_overwritten: rowsOverwritten,
         grace_window: isGrace,
         rows_skipped_billed: rowsSkippedBilled,
+        rows_skipped_manual: rowsSkippedManual,
         cutover_noop: cutoverNoop,
         error_text: error,
         run_id: runId,
@@ -542,6 +553,7 @@ export async function syncOneSource(
     rowsOverwritten,
     graceWindow: isGrace,
     rowsSkippedBilled,
+    rowsSkippedManual,
     error,
     runId,
     paged,

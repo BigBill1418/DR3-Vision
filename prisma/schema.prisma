@@ -5493,6 +5493,13 @@ model WorkbookSyncRun {
   /// invoice already covers them. Non-zero means the spreadsheet and a sent invoice
   /// disagree and a human must decide — it is never a silent drop.
   rows_skipped_billed  Int                       @default(0)
+  /// ADR-0123 — days the workbook wanted to change that a PERSON owns
+  /// (`processed_units_daily.source = 'manual'`). Non-zero means the spreadsheet
+  /// and a human correction disagree, and this sync deliberately leaves the
+  /// human's figure standing. Before ADR-0123 the sync overwrote it and flipped
+  /// `source` to 'import', which also locked the MyMRC bridge out of the row for
+  /// good — audited, and destroyed.
+  rows_skipped_manual  Int                       @default(0)
   cutover_noop         Boolean                   @default(false) // true when the surface is live (post-cutover): sync no-op'd
   error_text           String? // human error (never credentials)
   run_id               String? // per-run correlation id (crypto.randomUUID)

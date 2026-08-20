@@ -1,0 +1,33 @@
+-- ADR-0123 — the run ledger records the days the sync LEFT ALONE for a person.
+--
+-- The workbook-import writer was `processed_units_daily`'s third author and the
+-- only one with no ownership rule: it wrote `source = 'import'` unconditionally
+-- on both the insert and the update path. ADR-0119 gave a human correction the
+-- claim `source = 'manual'` (which permanently yields the row from the MyMRC
+-- bridge), and this writer overwrote it anyway — reading `existing.source` only
+-- to LABEL the audit row `vision_overwrite: true`, then destroying the figure.
+--
+-- `stripped_program` is the billing basis P2 invoices MRC on, and the sync
+-- re-reads the same file every ten minutes during business hours (Mon–Fri,
+-- 06:00–20:00 PT), so a correction that disagreed with the spreadsheet had a
+-- life expectancy of under ten minutes.
+--
+-- ── Why a COLUMN and not just a log line ────────────────────────────────────
+--
+-- A guard whose only trace is the absence of a write cannot be told apart from a
+-- sync that had nothing to do. This column fires on exactly the days where the
+-- spreadsheet and a human disagree, which is the case an operator most needs
+-- surfaced — and it is the shape `rows_skipped_billed` (ADR-0049 Am.4 B1)
+-- already established one level up for the approved-invoice guard, which makes
+-- the same argument: "resolving that is a human decision, not this sync's."
+--
+-- An audit row per refusal was rejected. The sync retries every ten minutes, so
+-- a single disputed day would add ~84 rows a day to a table that is append-only
+-- and must never be cleaned up (hard rule #6). The ledger already has one row
+-- per run; the count belongs on it.
+--
+-- Additive and defaulted, so existing rows read 0 — which is honest: before this
+-- change the sync never skipped a manual row, it overwrote it.
+
+ALTER TABLE "workbook_sync_runs"
+  ADD COLUMN "rows_skipped_manual" INTEGER NOT NULL DEFAULT 0;

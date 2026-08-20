@@ -19,6 +19,30 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BH — 2026-08-20 workbook-import ownership (ADR-0123) — one Bill action, one open question, one residual
+
+- **O-1 — BILL'S DATA ENTRY (ADR-0123): re-enter the M-186301 correction.**
+  2026-08-19 Woodland, **960 program / 110 non-program**. Prod currently reads
+  970.0/100.0 with `source = 'import'`. It was deliberately NOT written on his
+  behalf — it is his figure and his decision. Do it AFTER this deploys: before
+  the guard, the next sync tick would have overwritten it back to 970/100 within
+  ten minutes. Once entered it takes ownership and stands.
+
+- **Q-1 — OPEN QUESTION (ADR-0123): where did the original 960/110 correction
+  go?** The brief said the 09:39 AM PT workbook import overwrote it. It did not.
+  The row's audit trail holds exactly one entry — an INSERT by workbook-sync at
+  09:39, so no row existed before it. No manual write to `processed_units_daily`
+  exists in four days; the MyMRC mirror also reads 970/100; the sync has been
+  healthy every ten minutes all day. **The correction was never persisted
+  anywhere the system can see.** Candidates worth Bill's eye: a save that failed
+  silently on the manager screen, a correction typed into a surface that does not
+  write this table, or one never submitted. Not resolvable from the data.
+
+- **R-1 — ACCEPTED RESIDUAL (ADR-0123): the sync's INSERT path still has no
+  conflict clause.** A manual row created between the loop's `findUnique` and its
+  `create` raises a unique violation that fails the tick. Pre-existing, retried
+  ten minutes later, and out of scope for an ownership ADR — but it is the one
+  remaining read-then-write in this writer.
 ## 0.BG — 2026-08-20 floor dead-end pager (ADR-0122) — ONE blocking operator action
 
 Fast-follow to the ADR-0121 emergency. The detector and the page are live; one

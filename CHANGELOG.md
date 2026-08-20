@@ -9,6 +9,66 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (3:30 PM PT) — the third author (ADR-0123)
+
+`processed_units_daily` holds the number MRC is invoiced on and has **three**
+writers. Until today only two of them had a rule about each other.
+
+ADR-0119's whole mechanism is that a human correction sets `source = 'manual'`,
+which permanently yields the row from the MyMRC bridge. The **workbook sync** was
+writing `source = 'import'` unconditionally on both paths — an ownership seizure,
+not a guard. It read the existing `source` only to LABEL the audit row
+(`vision_overwrite: true`) and then overwrote the correction. Audited, and
+destroyed.
+
+`upsert.ts`'s own header already described the mechanism without noticing it
+applied to a person: under "Worse:" it records that rewriting `source` to
+`'import'` is "an irreversible ownership transfer" that "permanently locks the
+MyMRC bridge out of the row". It reached that conclusion about **headcounts** and
+stopped one field short of the figures.
+
+The sync re-reads the same file every ten minutes during business hours, so **a
+manual correction that disagreed with the spreadsheet had a life expectancy of
+under ten minutes.**
+
+**Fixed** — the precedence lattice is now stated in one place and enforced:
+`manual > import > mymrc`. Two of the three edges already existed; this adds the
+missing one. ADR-0049 D3 (workbook wins over the portal) is unchanged, with a
+test asserting that edge so nobody mistakes this for its retirement.
+
+The guard rides **on the writing statement** —
+`updateMany({ where: { id, source: { not: 'manual' } } })`, `count === 0` is the
+verdict — because Prisma's fluent `update` takes a unique selector, so the check
+would otherwise sit on the read above it, and under READ COMMITTED a correction
+committing in between is invisible to a check taken before it. The real-DB suite
+has a case that fails on exactly that.
+
+**Added** — `workbook_sync_runs.rows_skipped_manual`, mirroring
+`rows_skipped_billed`. A guard whose only trace is the absence of a write cannot
+be told apart from a sync that had nothing to do. No audit row per refusal: the
+sync retries every ten minutes, so one disputed day would be ~84 rows a day in a
+table that is append-only and must never be cleaned up.
+
+**Two existing tests were INVERTED, not deleted.** `upsert.test.ts`'s "overwrites
+a disagreeing VISION-CAPTURED (manual) row and writes an audit entry flagging the
+overwrite" and `engine.test.ts`'s "overwrites a Vision-captured day with an audit
+entry" asserted the clobber **as the contract**, and asserted the audit row as
+evidence of correctness. The loss was recorded; it was just not prevented. Both
+carry their old titles and their recorded red.
+
+**The brief's causal premise was falsified, and that is recorded rather than
+repeated.** Bill's M-186301 correction (2026-08-19 Woodland, 970→960 program /
+100→110 non-program) is indeed absent from prod — but the row carries a *single*
+audit entry, an **insert** by workbook-sync at 09:39 AM PT, so no row existed
+before it and no manual row was overwritten. There is no manual write to the
+table in four days, the MyMRC mirror also reads 970/100, and the sync has been
+healthy every ten minutes all day. The correction was never persisted anywhere
+the system can see — a separate open question. What this change fixes is the
+reason **re-entering it would not have helped**.
+
+**Bill must re-enter the 960/110 correction after this deploys.** The current
+prod value is the uncorrected import figure; it was not written on his behalf.
+Once entered, it will now stand.
 ## 2026-08-20 (2:45 PM PT) — the floor tells us it is stuck (ADR-0122)
 
 Fast-follow to the emergency below. **The uncomfortable measurement from that

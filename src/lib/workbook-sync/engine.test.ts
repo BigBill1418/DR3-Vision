@@ -128,7 +128,20 @@ describe('runWorkbookSyncPoll', () => {
     expect(db.pud.some((p) => p.production_date.toISOString().startsWith('2026-06-04'))).toBe(true);
   });
 
-  it('overwrites a Vision-captured day with an audit entry (test-plan line 4)', async () => {
+  // ADR-0123 — INVERTED, and read the old title before the new one:
+  //
+  //     'overwrites a Vision-captured day with an audit entry (test-plan line 4)'
+  //
+  // The behaviour it locked in was a scheduled job destroying a person's
+  // correction to `stripped_program`, the figure P2 invoices MRC on, every ten
+  // minutes until they gave up. The audit assertion made the loss look like a
+  // feature, because the loss WAS recorded — just not prevented.
+  //
+  // Recorded red — this case against `main` at b622494, before the guard:
+  //
+  //   × leaves a manually corrected day standing, through the whole poll
+  //     → expected 1 to be +0 // Object.is equality      (rowsOverwritten)
+  it('leaves a manually corrected day standing, through the whole poll', async () => {
     const db = new FakePrisma();
     const source = db.seedSource();
     // A manual close for 6/1 that disagrees with the workbook (150).
@@ -154,11 +167,27 @@ describe('runWorkbookSyncPoll', () => {
       allowNonGraphWrites: true,
       now: JUNE,
     });
-    expect(res.results[0]!.rowsOverwritten).toBe(1);
-    const overwriteAudit = db.audits.find(
-      (a) => (a.before as { vision_overwrite?: boolean })?.vision_overwrite === true,
-    );
-    expect(overwriteAudit).toBeDefined();
+    expect(res.results[0]!.rowsOverwritten).toBe(0);
+    expect(res.results[0]!.rowsSkippedManual).toBe(1);
+
+    // The person's number is still there, unchanged, with their ownership intact.
+    const kept = db.pud.find((p) => p.id === 'pud-manual')!;
+    expect(kept.stripped_program.equals(dec(999))).toBe(true);
+    expect(kept.source).toBe('manual');
+    expect(kept.import_id).toBeNull();
+
+    // No overwrite audit, because there was no overwrite.
+    expect(
+      db.audits.find(
+        (a) => (a.before as { vision_overwrite?: boolean })?.vision_overwrite === true,
+      ),
+    ).toBeUndefined();
+
+    // And the count reaches the run ledger, which is the surface an operator can
+    // actually read — a guard whose only trace is the absence of a write cannot
+    // be told apart from a sync that had nothing to do.
+    const run = db.syncRuns.at(-1)!;
+    expect(run['rows_skipped_manual']).toBe(1);
   });
 
   it('rolls over to the August file on 8/1 without a config change (test-plan line 5)', async () => {

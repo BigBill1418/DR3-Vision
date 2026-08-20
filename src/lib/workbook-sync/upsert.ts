@@ -50,6 +50,46 @@
 // from Vision — while `source` remains a single scalar reading 'import'. `source`
 // therefore describes the PRODUCTION FIGURES, not the whole row. The per-field
 // audit trail remains the record of what actually changed.
+//
+// ── ADR-0123 — `manual` is ABOVE `import`, and the sync yields to it ─────────
+//
+// Everything above describes workbook-wins as a rule between the SYNC and the
+// MyMRC BRIDGE. There is a third author, and the paragraph at "Worse:" already
+// names the mechanism without noticing it applies to a human: writing
+// `source = 'import'` is an OWNERSHIP SEIZURE, and it was unconditional.
+//
+// ADR-0119 gave the office desktop the same claim — a correction sets
+// `source = 'manual'` on the UPDATE path, permanently locking the bridge out of
+// a row a person has fixed. It did nothing about this writer, which read
+// `existing.source` only to LABEL the audit row (`vision_overwrite`) and then
+// overwrote the correction anyway. Audited, and destroyed. `stripped_program` is
+// the billing basis P2 invoices MRC on, and this sync re-reads the same file
+// every ten minutes during business hours, so a manual correction that disagreed
+// with the spreadsheet had a life expectancy of under ten minutes.
+//
+// The precedence lattice, now stated in one place:
+//
+//     manual  >  import  >  mymrc
+//
+//   - `manual` — a person looked at the day and decided. Nothing overwrites it.
+//     Corrections are re-corrected by people, on the same screen.
+//   - `import` — the workbook, authoritative pre-cutover, still wins over the
+//     portal (the original D3 rule, unchanged).
+//   - `mymrc`  — the portal's own figure, the weakest claim. Its bridge already
+//     yields to both by keying its UPDATE on `WHERE source = 'mymrc'`.
+//
+// Two of the three edges already existed. This adds the missing one, and the
+// guard rides ON THE WRITING STATEMENT rather than on the read above it —
+// `updateMany({ where: { id, source: { not: 'manual' } } })` — for the reason
+// ADR-0119 D2 gives: under READ COMMITTED only a condition on the writing
+// statement is evaluated against the row version actually being written, so a
+// correction that commits between this loop's `findUnique` and its `update`
+// would otherwise be overwritten by a check that had already passed.
+//
+// A skipped day is COUNTED and surfaced on the run ledger, never dropped
+// silently. It is the same posture the approved-invoice guard (Am.4 B1) takes
+// one level up: "the spreadsheet disagrees with something a human owns, and
+// resolving that is a human decision, not this sync's."
 
 import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
@@ -68,6 +108,15 @@ export interface UpsertArgs {
 export interface UpsertResult {
   upserted: number; // inserts + value-changing updates
   overwritten: number; // subset of upserts that overwrote a Vision-captured row (audited)
+  /**
+   * ADR-0123 — days the workbook wanted to change that a PERSON owns.
+   *
+   * Counted rather than dropped. A guard whose only trace is the absence of a
+   * write is a guard nobody can tell from a sync that had nothing to do, and
+   * this one fires on exactly the days where the spreadsheet and a human
+   * disagree — which is the case an operator most needs surfaced.
+   */
+  skippedManual: number;
 }
 
 function dec(n: number): Prisma.Decimal {
@@ -130,6 +179,7 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
   const { db, siteId, syncRunId, rows } = args;
   let upserted = 0;
   let overwritten = 0;
+  let skippedManual = 0;
 
   for (const row of rows) {
     const productionDate = new Date(`${row.productionDate}T00:00:00.000Z`);
@@ -179,7 +229,32 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
     if (!disagrees(row, existing)) continue; // agreement ⇒ no-op
 
     const wasVisionCaptured = existing.source !== 'import';
-    await db.processedUnitsDaily.update({ where: { id: existing.id }, data });
+
+    // ADR-0123 — the ownership guard, ON the writing statement.
+    //
+    // `updateMany` rather than `update` for one reason: Prisma's fluent `update`
+    // takes a UNIQUE selector, not an arbitrary predicate, so `source` cannot
+    // ride along and the check would have to sit on the `findUnique` above —
+    // read-then-write, the exact shape ADR-0119 D2 and ADR-0118 D1 were written
+    // to remove. Under READ COMMITTED a correction committing between the read
+    // and the write is invisible to a check taken before it. `count === 0` is
+    // the verdict, the same way `count === 0` is the verdict in `releaseHold`.
+    //
+    // The payload is scalar-only, so `updateMany`'s restriction costs nothing
+    // here — `data` carries no nested writes and never has.
+    const written = await db.processedUnitsDaily.updateMany({
+      where: { id: existing.id, source: { not: 'manual' } },
+      data,
+    });
+    if (written.count === 0) {
+      // A person owns this day. Leave it, count it, and write NO audit row: the
+      // sync re-reads the same file every ten minutes, so an audit row per
+      // refusal would add ~150 rows a day per disputed day to an append-only
+      // table that must never be cleaned up (hard rule #6). The run ledger
+      // carries the count, which is the readable surface.
+      skippedManual += 1;
+      continue;
+    }
     upserted += 1;
     if (wasVisionCaptured) overwritten += 1;
 
@@ -205,7 +280,7 @@ export async function upsertDailyProduction(args: UpsertArgs): Promise<UpsertRes
     });
   }
 
-  return { upserted, overwritten };
+  return { upserted, overwritten, skippedManual };
 }
 
 /**
