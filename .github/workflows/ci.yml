@@ -93,6 +93,25 @@ jobs:
       - name: Typecheck (tsc --noEmit) — the payroll Decimal type-lie gate
         run: npm run typecheck
 
+      - name: Typecheck the MyMRC standalone project (the Dockerfile's second compile)
+        # `src/lib/mymrc/**` is compiled TWICE: once by the app's tsconfig above,
+        # and once standalone by `tsconfig.mymrc.json` so the scraper runs as
+        # plain compiled JS with no Next. That second project sets
+        # `rootDir: ./src/lib/mymrc` and defines NO `paths`, so it cannot resolve
+        # the `@/` alias — and until 2026-08-20 nothing in CI ran it.
+        #
+        # On 2026-08-20 an `@/lib/audit/promotion-lock` import landed in
+        # `inbound-bridge.ts`. `tsc --noEmit` was clean, this job was GREEN, the
+        # PR merged, and the DEPLOY then failed at `Dockerfile:70`
+        # (`RUN npx tsc --project tsconfig.mymrc.json`) with
+        # `TS2307: Cannot find module '@/lib/audit/promotion-lock'`. The build
+        # was the only thing that ran the compile that mattered, and it runs
+        # after merge — so main was unbuildable until a hotfix.
+        #
+        # It is the same command the Dockerfile runs, so a break surfaces here,
+        # on the PR, instead of in the deploy.
+        run: npm run build:mymrc
+
       - name: Lint
         run: npm run lint
 

@@ -81,5 +81,25 @@ export async function lockSiteAgainstPromotion(
   tx: Prisma.TransactionClient,
   siteId: string,
 ): Promise<void> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`dr3:promotion:${siteId}`})::bigint)`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${promotionLockKey(siteId)})::bigint)`;
+}
+
+/**
+ * The lock key string. Exported because ONE caller cannot import this module.
+ *
+ * `src/lib/mymrc/inbound-bridge.ts` is compiled a second time, standalone, by
+ * `tsconfig.mymrc.json` — `rootDir: ./src/lib/mymrc`, no `paths` alias — so the
+ * MyMRC scraper can run as plain compiled JS without Next. That project cannot
+ * resolve `@/lib/audit/promotion-lock`, and it cannot use a relative import
+ * either, because the target sits outside its `rootDir`. So the bridge carries
+ * its own copy of this one line.
+ *
+ * A duplicated lock key that silently drifts is worthless — the two sides would
+ * take DIFFERENT locks and serialise against nothing while looking correct. So
+ * the copy is not left on trust: `promotion-lock-key-parity.test.ts` imports
+ * both and asserts they produce byte-identical keys. If you change the key
+ * here, that test goes red until the bridge matches.
+ */
+export function promotionLockKey(siteId: string): string {
+  return `dr3:promotion:${siteId}`;
 }
