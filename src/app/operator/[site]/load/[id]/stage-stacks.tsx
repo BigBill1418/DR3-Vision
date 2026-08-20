@@ -6,6 +6,7 @@ import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import { addStackAction, finishUnloadAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
+import { useLiveControl, type StageDisableReason } from './stage-liveness';
 
 // Stage 5a — stack counter UI per charter §4.3. Three modes:
 //   ledger     — tap +1 per mattress
@@ -63,6 +64,18 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
   // selects `orderBy: stack_index asc`, but a silent assumption whose failure
   // mode is a lost or refused count.
   const nextIndex = stacks.reduce((max, s) => Math.max(max, s.stack_index), 0) + 1;
+
+  // ADR-0122 — this stage has never trapped anyone: the mode picker and "change
+  // mode" are unconditional, so one of them is always live. It is instrumented
+  // regardless, because an inventory that covers only the stages already known
+  // to be dangerous is an inventory of yesterday's incident. The add control
+  // registers from inside each mode component, next to its own validity.
+  useLiveControl('stacks_pick_mode', mode ? 'not_rendered' : null);
+  useLiveControl('stacks_change_mode', mode ? null : 'not_rendered');
+  useLiveControl(
+    'stacks_finish',
+    mode === null ? 'not_rendered' : isPending ? 'pending' : live.length === 0 ? 'no_stacks' : null,
+  );
 
   // ADR-0078 D2/D6 — a stack is a BILLED unit: `finishUnload` sums `load_stacks`
   // into `total_units`. Losing one silently undercounts the load, and reporting a
@@ -253,6 +266,10 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
 
 function LedgerControls({ onAdd, disabled }: { onAdd: (n: number) => void; disabled: boolean }) {
   const t = useT();
+  // ADR-0122 — declared here rather than by the parent, because only this
+  // component knows whether its own input is satisfied. `disabled` is the
+  // parent's in-flight transition.
+  useLiveControl('stacks_add', disabled ? 'pending' : null);
   return (
     <button
       type="button"
@@ -276,6 +293,12 @@ function MultiplierControls({
   const [units, setUnits] = useState('');
   const n = Number.parseInt(units, 10);
   const valid = Number.isInteger(n) && n >= 1;
+  const addReason: StageDisableReason | null = disabled
+    ? 'pending'
+    : !valid
+      ? 'invalid_count'
+      : null;
+  useLiveControl('stacks_add', addReason);
   return (
     <div className="flex flex-col gap-3">
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
@@ -292,7 +315,7 @@ function MultiplierControls({
       </label>
       <button
         type="button"
-        disabled={disabled || !valid}
+        disabled={addReason !== null}
         onClick={() => {
           onAdd(n);
           setUnits('');
@@ -310,6 +333,12 @@ function TotalControls({ onAdd, disabled }: { onAdd: (n: number) => void; disabl
   const [units, setUnits] = useState('');
   const n = Number.parseInt(units, 10);
   const valid = Number.isInteger(n) && n >= 1;
+  const addReason: StageDisableReason | null = disabled
+    ? 'pending'
+    : !valid
+      ? 'invalid_count'
+      : null;
+  useLiveControl('stacks_add', addReason);
   return (
     <div className="flex flex-col gap-3">
       <label className="flex flex-col gap-1 text-sm font-medium text-dr3-cream/80">
@@ -326,7 +355,7 @@ function TotalControls({ onAdd, disabled }: { onAdd: (n: number) => void; disabl
       </label>
       <button
         type="button"
-        disabled={disabled || !valid}
+        disabled={addReason !== null}
         onClick={() => {
           onAdd(n);
           setUnits('');

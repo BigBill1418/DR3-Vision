@@ -5,6 +5,7 @@ import { useT } from '@/i18n/provider';
 import { weightCapturedAction, weightSkipAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
 import { PhotoInput } from './photo-input';
+import { useLiveControl, type StageDisableReason } from './stage-liveness';
 
 // Stage 2 — optional weight ticket. Two equal-weight buttons (Add /
 // None) per SPRINT-1-PLAN. If Add: photo + integer-pounds numeric
@@ -31,6 +32,38 @@ export function StageWeight({
   // is redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
+
+  // Hoisted ABOVE the `choose` early return: hooks may not be called
+  // conditionally, and `lbsValid` is a pure derivation that reads the same
+  // state either way. Nothing about the rendered output moves.
+  const lbsNum = Number.parseInt(lbs, 10);
+  const lbsValid = Number.isInteger(lbsNum) && lbsNum >= 1 && lbsNum <= 100_000;
+
+  // ADR-0122 — both sub-modes declared, because a control that is NOT RENDERED
+  // is not a live control. Letting the hook fall out of the tree with its button
+  // would shrink the denominator and let a dead screen read as healthy.
+  //
+  // The `add` sub-mode is a REAL second instance of the ADR-0121 trap and is why
+  // this stage is instrumented rather than waved past: it has no way back to
+  // `choose`, so an operator who re-enters a load whose weight ticket is already
+  // on the server and taps "Add weight" finds capture withheld (ADR-0109),
+  // "add another" unrendered, and Continue held by `!hasPhoto` — which no amount
+  // of typing a weight can satisfy. ADR-0121 recorded stage 2 as safe on the
+  // strength of the `choose` screen's None button; that is true only until the
+  // operator leaves `choose`.
+  const choosing = mode === 'choose';
+  useLiveControl('weight_add', !choosing ? 'not_rendered' : null);
+  useLiveControl('weight_none', !choosing ? 'not_rendered' : isPending ? 'pending' : null);
+  const continueReason: StageDisableReason | null = choosing
+    ? 'not_rendered'
+    : isPending
+      ? 'pending'
+      : !hasPhoto
+        ? 'no_photo'
+        : !lbsValid
+          ? 'invalid_weight'
+          : null;
+  useLiveControl('weight_continue', continueReason);
 
   if (mode === 'choose') {
     return (
@@ -65,9 +98,6 @@ export function StageWeight({
     );
   }
 
-  const lbsNum = Number.parseInt(lbs, 10);
-  const lbsValid = Number.isInteger(lbsNum) && lbsNum >= 1 && lbsNum <= 100_000;
-
   return (
     <section className="flex flex-col gap-6">
       <header>
@@ -97,7 +127,7 @@ export function StageWeight({
       {error && <p className="text-sm text-red-300">{error}</p>}
       <button
         type="button"
-        disabled={!hasPhoto || !lbsValid || isPending}
+        disabled={continueReason !== null}
         onClick={() =>
           startTransition(async () => {
             try {

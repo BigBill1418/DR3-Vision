@@ -6,6 +6,7 @@ import { useI18n } from '@/i18n/provider';
 import { rejectLoadAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
 import { PhotoInput } from './photo-input';
+import { useLiveControl, type StageDisableReason } from './stage-liveness';
 
 const CATEGORIES: RejectionCategory[] = [
   'contamination',
@@ -42,6 +43,20 @@ export function StageReject({
   // is redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
+
+  // ADR-0122 — Back is unconditional, so this stage always has one live control.
+  // Registering Submit anyway is what makes the RECORD useful: the disable-reason
+  // snapshot on a future `no_live_controls` elsewhere is only readable if the
+  // vocabulary is consistent across stages.
+  const submitReason: StageDisableReason | null = isPending
+    ? 'pending'
+    : !category
+      ? 'no_category'
+      : !hasPhoto
+        ? 'no_photo'
+        : null;
+  useLiveControl('reject_back', null);
+  useLiveControl('reject_submit', submitReason);
 
   const submit = () => {
     if (!category || !hasPhoto) return;
@@ -109,7 +124,7 @@ export function StageReject({
       {error && <p className="text-sm text-red-300">{error}</p>}
       <button
         type="button"
-        disabled={isPending || !category || !hasPhoto}
+        disabled={submitReason !== null}
         onClick={submit}
         className="rounded-lg bg-red-700 px-6 py-4 text-lg font-semibold text-white transition-colors hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-40"
       >

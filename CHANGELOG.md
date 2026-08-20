@@ -9,6 +9,64 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (2:45 PM PT) — the floor tells us it is stuck (ADR-0122)
+
+Fast-follow to the emergency below. **The uncomfortable measurement from that
+incident is that it produced no signal at all** — healthz 0.13 s, Postgres idle,
+check-ins and photo uploads succeeding throughout, while the Woodland floor could
+not advance a load for 90 minutes. That is not a monitoring gap; it is the shape
+of the defect. A trapped operator does not make requests, so this whole class is
+invisible to every request-driven signal the fleet owns.
+
+`DeadEndBeacon` (ADR-0100) was built for exactly this and was mounted on the list
+surfaces and on **none of the seven `stage-*.tsx` files**, which is where the work
+happens. Mounted on stage 1 it would have fired at 12:36:35; the floor discovered
+the defect at 12:52, and the discovery mechanism was Bill's phone.
+
+**Added** — a zero-live-controls detector across all seven stages. Each control
+registers its own liveness next to where it renders, with the *same* expression
+feeding the button's `disabled` prop, and the boundary fires when every registered
+control is dark. It DETECTS rather than DECLARES: every existing beacon sits
+inside an `if` a human decided was a dead end, which cannot work for a stage,
+because a stage is never supposed to be one.
+
+**Added** — an ntfy page on the new topic `dr3-vision-floor`, `high`, 15-minute
+cooldown fingerprinted on (load, stage) — so the three operators who took
+H-137810 over in turn would have produced ONE page — with a tier-1 click straight
+to the trapped load and the disable-reason snapshot in the body.
+
+**Behaviour-neutral.** No control changes state, no layout moves, no copy is
+added. `stage-reentry.test.tsx`, `photo-input.limit.test.tsx`,
+`photo-input.auth.test.tsx` and `load-workflow.test.tsx` were not modified and are
+the standing proof; 225 tests green across the affected trees.
+
+**Found while instrumenting, and deliberately NOT fixed here:** stage 2 (weight)
+has a second live instance of the same trap. Its `add` sub-screen has no way back
+to `choose`, so a re-entry with a weight photo already on the server leaves
+capture withheld, "add another" unrendered and Continue held by `!hasPhoto`.
+ADR-0121 recorded stage 2 as safe on the strength of the `choose` screen's None
+button — true only until the operator leaves `choose`. It now pages instead of
+hiding; the fix is a behaviour change and waits for a before-noon window.
+
+**Both directions of the detector were falsified by mutation** before shipping —
+made blind (it stayed silent on a dead screen) and made trigger-happy (it paged on
+a live one). Two of the route's cases could not fail as first written; both are
+recorded in that file's header rather than quietly fixed.
+
+**Delivery proven, not assumed.** A 200 is not proof — the helper's ntfy.sh
+fallback can present a 403 as success. A labelled test page was published to
+`dr3-vision-floor`, read back off the topic via the API, and confirmed present in
+BOS-HQ's `cache.db` (`NY2I2pm7ghWN`). `dr3-vision-publisher` already held
+`dr3-vision-* rw`, so no ACL change was needed. Fallback topic registered in
+`~/noc-master/data/ntfy-fallback-topics.yml` (`4374402`, 10/10 registry tests).
+
+**OPERATOR ACTION, BLOCKING:** `dr3-vision-floor` is a new topic and the ntfy
+server has no `user_subscription` table, so subscriptions are device-local and
+unverifiable from the server. **Until Bill subscribes his phone to
+`dr3-vision-floor`, the page reaches nobody** — the state `dr3-vision-loads` and
+`dr3-vision-deploys` have been in since 2026-05-06. Tracked in
+`docs/OPEN-ITEMS.md` §0.BG O-1.
+
 ## 2026-08-20 (1:30 PM PT) — EMERGENCY: a re-entered load stage had no live control
 
 **The Woodland floor was trapped one step into the dock workflow for ~90 minutes
