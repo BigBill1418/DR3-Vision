@@ -69,6 +69,45 @@ reason **re-entering it would not have helped**.
 **Bill must re-enter the 960/110 correction after this deploys.** The current
 prod value is the uncorrected import figure; it was not written on his behalf.
 Once entered, it will now stand.
+
+## 2026-08-20 — PROPOSED, NOT MERGED: the stage is a fact, not a memory (ADR-0124)
+
+**Held for a before-noon operator window.** ADR-0121 made a dead control live and
+ADR-0122 changes nothing an operator can see; this changes **which screen an
+operator lands on**, and that is not a change to make with trucks on the dock.
+ADR-0121 said so when it deferred it.
+
+`load-workflow.tsx` selected the stage from `load.status` plus **two client
+`useState` latches**, and both recorded — in one browser tab — that a step done on
+the server was finished:
+
+- `bolDone`. Taking the BOL photo does not move `load.status` (it stays
+  `arrived`), and `recordBolCapture`'s entire body is `await assertOwn(args)` —
+  it writes **nothing**. Any reload or takeover returned to stage 1.
+- `weightSkipped`. `recordWeightSkip` also wrote nothing, under a comment stating
+  the design out loud: *"no DB change needed; the weight stage gates only on the
+  user's choice."* The choice died with the tab.
+
+The first put three operators in turn onto a BOL screen for a load whose photo
+was already in Postgres. The second has trapped nobody — "None" is always live —
+but retiring one latch and leaving the other keeps half the defect alive.
+
+**The stage is now a pure function of server facts**, with no room for a client
+hint: BOL done ⟺ `photo_counts.bol > 0` (the photo row *is* the completion, and
+it was already plumbed for ADR-0109 — no column added), and the weight skip gets
+`inbound_loads.weight_skipped_at`, stamped idempotently so a takeover's second
+"None" tap cannot re-attribute an earlier operator's decision.
+
+**The floor behaviour that changes:** a load at `arrived` **with a BOL photo
+already on the server** now opens on stage 2 (weight) instead of stage 1. First
+visits are unchanged.
+
+Falsified by reverting the dispatch to the pre-change fresh-mount behaviour — all
+six re-entry cases go red, every composition failure with the BOL heading on
+screen. That is the incident, reproduced in a test.
+
+Merge checklist for the window is in the ADR's last section.
+
 ## 2026-08-20 (2:45 PM PT) — the floor tells us it is stuck (ADR-0122)
 
 Fast-follow to the emergency below. **The uncomfortable measurement from that

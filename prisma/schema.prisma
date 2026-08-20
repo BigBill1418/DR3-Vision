@@ -748,6 +748,16 @@ model InboundLoad {
   dock_appointment_at          DateTime?
   arrived_at                   DateTime?
   weight_captured_at           DateTime?
+  /// ADR-0124 — the operator declared this load has NO weight ticket ("None").
+  ///
+  /// It existed only as a `useState` in the browser, so the decision died on
+  /// every reload and every takeover and the next operator was asked again. It
+  /// is a real fact about the truck — somebody looked and there was no ticket —
+  /// and the seven-stage dispatch now reads it instead of a latch. Distinct from
+  /// `weight_captured_at`, deliberately: "no ticket" and "a ticket weighing
+  /// nothing" are different claims, and a `weight_captured` status with a NULL
+  /// `weight_lbs` would say the second while meaning the first.
+  weight_skipped_at            DateTime?
   unload_started_at            DateTime? // when door-open photo submitted; timer reference
   unload_finished_at           DateTime?
   submitted_at                 DateTime?

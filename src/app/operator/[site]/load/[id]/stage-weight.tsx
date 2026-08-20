@@ -14,13 +14,11 @@ import { useLiveControl, type StageDisableReason } from './stage-liveness';
 export function StageWeight({
   siteCode,
   loadId,
-  onSkipped,
   /** ADR-0109 — weight-ticket photos already on the server. */
   photoCount = 0,
 }: {
   siteCode: string;
   loadId: string;
-  onSkipped: () => void;
   photoCount?: number;
 }) {
   const t = useT();
@@ -84,9 +82,12 @@ export function StageWeight({
             type="button"
             disabled={isPending}
             onClick={() =>
+              // ADR-0124 — the skip is now RECORDED (`weight_skipped_at`) and
+              // the route revalidates onto the door stage. It used to set a
+              // `useState` in the parent, so the decision died on reload and the
+              // next operator was asked about the same truck again.
               startTransition(async () => {
                 await weightSkipAction(siteCode, loadId);
-                onSkipped();
               })
             }
             className="rounded-lg bg-dr3-green-dark/50 px-6 py-8 text-xl font-semibold text-dr3-cream transition-colors hover:bg-dr3-green-dark/70 disabled:cursor-not-allowed disabled:opacity-40"

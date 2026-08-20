@@ -13,7 +13,8 @@ import { StageDecision } from './stage-decision';
 import { StageStacks } from './stage-stacks';
 import { StageReject } from './stage-reject';
 import { StageFinish } from './stage-finish';
-import { StageLivenessBoundary, type StageId } from './stage-liveness';
+import { StageLivenessBoundary } from './stage-liveness';
+import { selectStage, WORKING_STATUSES } from '@/lib/loads/stage-selection';
 import { VoidLoadPanel } from './void-load-panel';
 import { ReviewPanel, type ReviewStack } from './review-panel';
 
@@ -43,25 +44,17 @@ type LoadView = {
    * standing lesson about one fact with two representations.
    */
   photo_counts: Partial<Record<PhotoKind, number>>;
+  /**
+   * ADR-0124 — the operator declared this load has no weight ticket.
+   *
+   * A SERVER fact (`inbound_loads.weight_skipped_at IS NOT NULL`), where it used
+   * to be a `useState` in this file. The "None" path is the only step in the
+   * flow that leaves no other trace — no photo, no status move, no weight — so
+   * it is the one that needed a column.
+   */
+  weight_skipped: boolean;
   stacks: ReviewStack[];
 };
-
-/**
- * The seven stages — the statuses at which an operator is still WORKING the
- * load, and therefore the statuses that offer a way back.
- *
- * Same set as the void's (`OPEN_DOCK_STATUSES`), and for the same reason: past
- * `submitted` the load has left the floor's hands. It is restated here rather
- * than imported because `open-loads.ts` sits beside `prisma` and cannot enter
- * the browser bundle — the identical constraint `consumed-slot.ts` documents.
- */
-const STAGE_STATUSES: readonly LoadStatus[] = [
-  'arrived',
-  'weight_captured',
-  'unload_started',
-  'in_progress',
-  'finished',
-] as const;
 
 type Props = {
   siteCode: string;
@@ -71,20 +64,18 @@ type Props = {
 
 export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   const { t } = useI18n();
-  // `weightDecided` only lives during the `arrived` phase; once the
-  // server status moves on, this ref is moot.
-  const [weightSkipped, setWeightSkipped] = useState(false);
   const [showReject, setShowReject] = useState(false);
   // ADR-0090 Am.1 B — the review view. The FIRST back-edge in this component:
   // `weightSkipped` and `bolDone` are one-way latches, and only `showReject` had
   // a control that reset it.
   const [review, setReview] = useState(false);
-  // ADR-0090 Am.1 B — lifted out of the old `FromBol` wrapper. It has to survive
-  // the review being opened and closed: unmounting the BOL/weight sub-flow would
-  // reset this latch and send an operator who tapped "check what I entered"
-  // straight back to the BOL photo they already took. (The wrapper's `onBolDone`
-  // prop was also declared and never used.)
-  const [bolDone, setBolDone] = useState(false);
+  // ADR-0124 — `bolDone` and `weightSkipped` are GONE. Both were client
+  // `useState`, and both recorded, in one browser tab, that a step done on the
+  // server was finished. `bolDone` is the latch that put three operators in turn
+  // onto a BOL screen for a load whose BOL photo was already in Postgres on
+  // 2026-08-20 (ADR-0121); `weightSkipped` is the same shape with a softer
+  // landing, because "None" is always live. The stage is now a function of
+  // server facts alone — see `@/lib/loads/stage-selection`.
 
   // ADR-0078 — the replay tick and the pending pill that used to live here are
   // GONE, folded into `ConnectionState` in the floor chrome. This screen ran a
@@ -148,7 +139,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     );
   }
 
-  if (!STAGE_STATUSES.includes(load.status)) {
+  if (!WORKING_STATUSES.includes(load.status)) {
     // Audit D-4 — this branch WAS the whole of it:
     //
     //     return <p>{t('workflow.unhandled_status', { status: load.status })}</p>;
@@ -197,94 +188,75 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     );
   }
 
-  // ADR-0122 — the stage NODE and its stage ID are produced by one expression,
-  // so the label the beacon reports can never name a different screen than the
-  // one that rendered. Same reasoning `DeadEndBeacon` gives for living inside the
-  // branch it measures, and `describeConsumedSlot` (ADR-0091) for decisions: put
-  // the thing next to the thing so they cannot disagree.
-  const { id: stageId, node: stageNode } = ((): { id: StageId; node: React.ReactNode } => {
-    if (load.status === 'arrived' && !weightSkipped) {
-      // BOL captured? We track it via the photo-row presence rather
-      // than client state, but for T-006 the simplest thing is to
-      // surface BOL first and require the operator to confirm capture
-      // before showing weight. Since BOL doesn't change `load.status`
-      // (it stays `arrived`), we show BOL until the operator confirms,
-      // then fall through to weight.
-      //
-      // For minimum-tap UX we just chain BOL → weight in a single
-      // visual flow with internal client state.
-      return bolDone
-        ? {
-            id: 'weight',
-            node: (
-              <StageWeight
-                siteCode={siteCode}
-                loadId={load.id}
-                onSkipped={() => setWeightSkipped(true)}
-                photoCount={load.photo_counts.weight_ticket ?? 0}
-              />
-            ),
-          }
-        : {
-            id: 'bol',
-            node: (
-              <StageBol
-                siteCode={siteCode}
-                loadId={load.id}
-                onCaptured={() => setBolDone(true)}
-                photoCount={load.photo_counts.bol ?? 0}
-              />
-            ),
-          };
-    }
-    if (load.status === 'arrived' || load.status === 'weight_captured') {
-      return {
-        id: 'door',
-        node: (
+  // ADR-0122 / ADR-0124 — the stage id comes from `selectStage`, a pure function
+  // of SERVER FACTS, and the node is chosen from it in one `switch`. Two things
+  // fall out of that shape and both matter:
+  //
+  //   - the id the beacon reports can never name a different screen than the one
+  //     that rendered, because the id is what picked the screen;
+  //   - the whole dispatch matrix is exercisable without mounting React, so the
+  //     seam that produced the 2026-08-20 incident is examinable rather than
+  //     reachable only through the DOM.
+  //
+  // `selectStage` returns null only for statuses the branch above already
+  // handled, so the fallthrough is unreachable — it renders the closed-load card
+  // rather than throwing, because an operator standing at a truck is owed a way
+  // out and never a stack trace (ADR-0074 Am.1).
+  const stageId = selectStage({
+    status: load.status,
+    bolPhotoCount: load.photo_counts.bol ?? 0,
+    weightSkipped: load.weight_skipped,
+  });
+
+  const stageNode = ((): React.ReactNode => {
+    switch (stageId) {
+      case 'bol':
+        return (
+          <StageBol siteCode={siteCode} loadId={load.id} photoCount={load.photo_counts.bol ?? 0} />
+        );
+      case 'weight':
+        return (
+          <StageWeight
+            siteCode={siteCode}
+            loadId={load.id}
+            photoCount={load.photo_counts.weight_ticket ?? 0}
+          />
+        );
+      case 'door':
+        return (
           <StageDoor
             siteCode={siteCode}
             loadId={load.id}
             photoCount={load.photo_counts.door_open ?? 0}
           />
-        ),
-      };
-    }
-    if (load.status === 'unload_started') {
-      return {
-        id: 'decision',
-        node: (
+        );
+      case 'decision':
+        return (
           <StageDecision
             siteCode={siteCode}
             loadId={load.id}
             onReject={() => setShowReject(true)}
           />
-        ),
-      };
-    }
-    if (load.status === 'in_progress') {
-      return {
-        id: 'stacks',
-        node: (
+        );
+      case 'stacks':
+        return (
           <StageStacks
             siteCode={siteCode}
             loadId={load.id}
             unloadStartedAt={load.unload_started_at}
             existingStacks={load.stacks}
           />
-        ),
-      };
+        );
+      default:
+        return (
+          <StageFinish
+            siteCode={siteCode}
+            loadId={load.id}
+            operatorName={operatorName}
+            totalUnits={load.total_units}
+          />
+        );
     }
-    return {
-      id: 'finish',
-      node: (
-        <StageFinish
-          siteCode={siteCode}
-          loadId={load.id}
-          operatorName={operatorName}
-          totalUnits={load.total_units}
-        />
-      ),
-    };
   })();
 
   return (
@@ -298,7 +270,7 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           of the stage — which is a worse dead end than the one this panel exists
           to remove. */}
       <div hidden={review}>
-        <StageLivenessBoundary siteCode={siteCode} loadId={load.id} stage={stageId}>
+        <StageLivenessBoundary siteCode={siteCode} loadId={load.id} stage={stageId ?? 'finish'}>
           {stageNode}
         </StageLivenessBoundary>
       </div>

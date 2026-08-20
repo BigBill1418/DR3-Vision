@@ -19,6 +19,23 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BJ — 2026-08-20 server-derived stage selection (ADR-0124) — PARKED, awaiting a window
+
+- **W-1 — WINDOW GATE (ADR-0124): PR is open and NOT merged.** It changes which
+  screen an operator lands on, so it waits for the next before-noon `/operator`
+  window with an operator available to walk one real load through the flow. The
+  checklist is the ADR's last section: confirm the roll, confirm the migration,
+  then BOL photo → reload → must open on stage 2; "None" → reload → must open on
+  stage 3; then read `dr3-vision-floor` for anything ADR-0122 paged during the
+  walk.
+
+- **R-1 — CARRIED FORWARD from 0.BG R-1: stage 2's `add` trap is still armed**,
+  and ADR-0124 makes the weight stage MORE reachable on re-entry, so it is
+  arguably easier to hit after that merge. It pages rather than hiding
+  (ADR-0122), and it is the first thing to fix in the same window.
+
+---
+
 ## 0.BI — 2026-08-24 early AM: orchestrator resume — the h276 audits land on main, the parked pair gets rebased, Phase 1 launches
 
 The 8/19 orchestrator session ended mid-flight; the 8/19–20 sessions shipped

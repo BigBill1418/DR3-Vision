@@ -124,12 +124,7 @@ describe('stage 1 (BOL) — post-#286, every band is alive and silent', () => {
     it(`photoCount=${photoCount}`, async () => {
       render(
         <StageLivenessBoundary siteCode="woodland" loadId="load-1" stage="bol">
-          <StageBol
-            siteCode="woodland"
-            loadId="load-1"
-            onCaptured={vi.fn()}
-            photoCount={photoCount}
-          />
+          <StageBol siteCode="woodland" loadId="load-1" photoCount={photoCount} />
         </StageLivenessBoundary>,
       );
       // The ADR-0121 fix is what makes this band alive; if it were reverted the
@@ -175,12 +170,7 @@ describe('stage 2 (weight) — the SECOND live instance of the ADR-0121 trap', (
       posts = [];
       render(
         <StageLivenessBoundary siteCode="woodland" loadId={`wl-${photoCount}`} stage="weight">
-          <StageWeight
-            siteCode="woodland"
-            loadId={`wl-${photoCount}`}
-            onSkipped={vi.fn()}
-            photoCount={photoCount}
-          />
+          <StageWeight siteCode="woodland" loadId={`wl-${photoCount}`} photoCount={photoCount} />
         </StageLivenessBoundary>,
       );
       expect(liveControls().length).toBeGreaterThan(0);
@@ -191,7 +181,7 @@ describe('stage 2 (weight) — the SECOND live instance of the ADR-0121 trap', (
   it('add screen with a server photo is a dead end, and the detector says so', async () => {
     render(
       <StageLivenessBoundary siteCode="woodland" loadId="load-2" stage="weight">
-        <StageWeight siteCode="woodland" loadId="load-2" onSkipped={vi.fn()} photoCount={1} />
+        <StageWeight siteCode="woodland" loadId="load-2" photoCount={1} />
       </StageLivenessBoundary>,
     );
     fireEvent.click(screen.getByRole('button', { name: /add weight/i }));
@@ -219,7 +209,7 @@ describe('stage 2 (weight) — the SECOND live instance of the ADR-0121 trap', (
   it('add screen on a FIRST visit is alive — capture is the way forward', async () => {
     render(
       <StageLivenessBoundary siteCode="woodland" loadId="load-3" stage="weight">
-        <StageWeight siteCode="woodland" loadId="load-3" onSkipped={vi.fn()} photoCount={0} />
+        <StageWeight siteCode="woodland" loadId="load-3" photoCount={0} />
       </StageLivenessBoundary>,
     );
     fireEvent.click(screen.getByRole('button', { name: /add weight/i }));
@@ -252,7 +242,7 @@ describe('the beacon is an instrument, not a megaphone', () => {
   it('fires at most once per (stage, load) per page lifetime', async () => {
     const { rerender } = render(
       <StageLivenessBoundary siteCode="woodland" loadId="load-6" stage="weight">
-        <StageWeight siteCode="woodland" loadId="load-6" onSkipped={vi.fn()} photoCount={1} />
+        <StageWeight siteCode="woodland" loadId="load-6" photoCount={1} />
       </StageLivenessBoundary>,
     );
     fireEvent.click(screen.getByRole('button', { name: /add weight/i }));
@@ -263,7 +253,7 @@ describe('the beacon is an instrument, not a megaphone', () => {
     for (let i = 0; i < 5; i++) {
       rerender(
         <StageLivenessBoundary siteCode="woodland" loadId="load-6" stage="weight">
-          <StageWeight siteCode="woodland" loadId="load-6" onSkipped={vi.fn()} photoCount={1} />
+          <StageWeight siteCode="woodland" loadId="load-6" photoCount={1} />
         </StageLivenessBoundary>,
       );
     }
@@ -274,7 +264,7 @@ describe('the beacon is an instrument, not a megaphone', () => {
   it('a DIFFERENT load in the same dead stage is a different event', async () => {
     render(
       <StageLivenessBoundary siteCode="woodland" loadId="load-7" stage="weight">
-        <StageWeight siteCode="woodland" loadId="load-7" onSkipped={vi.fn()} photoCount={2} />
+        <StageWeight siteCode="woodland" loadId="load-7" photoCount={2} />
       </StageLivenessBoundary>,
     );
     fireEvent.click(screen.getByRole('button', { name: /add weight/i }));
@@ -283,7 +273,7 @@ describe('the beacon is an instrument, not a megaphone', () => {
 
     render(
       <StageLivenessBoundary siteCode="woodland" loadId="load-8" stage="weight">
-        <StageWeight siteCode="woodland" loadId="load-8" onSkipped={vi.fn()} photoCount={2} />
+        <StageWeight siteCode="woodland" loadId="load-8" photoCount={2} />
       </StageLivenessBoundary>,
     );
     fireEvent.click(screen.getByRole('button', { name: /add weight/i }));
@@ -303,7 +293,7 @@ describe('the beacon is an instrument, not a megaphone', () => {
   });
 
   it('a stage mounted with no boundary above it does not throw or post', async () => {
-    render(<StageBol siteCode="woodland" loadId="load-10" onCaptured={vi.fn()} photoCount={0} />);
+    render(<StageBol siteCode="woodland" loadId="load-10" photoCount={0} />);
     await new Promise((r) => setTimeout(r, 0));
     expect(beacons()).toHaveLength(0);
   });
