@@ -136,6 +136,34 @@ export class FakePrisma {
       if (r) Object.assign(r, args.data);
       return r;
     },
+    /**
+     * ADR-0123 — the ownership guard rides on the WRITING statement, so the fake
+     * has to evaluate the predicate rather than just the id.
+     *
+     * Only the two filter shapes the production code actually uses are modelled,
+     * and an unrecognised one THROWS rather than silently matching everything. A
+     * permissive fake here would make the guard's own test vacuous: the write
+     * would land, the assertion would read the clobbered row, and the suite
+     * would be measuring the double instead of the code.
+     */
+    updateMany: async (args: {
+      where: { id: string; source?: { not?: string } };
+      data: Record<string, unknown>;
+    }) => {
+      const keys = Object.keys(args.where).sort().join(',');
+      if (keys !== 'id' && keys !== 'id,source') {
+        throw new Error(`fake-prisma: unmodelled updateMany filter {${keys}}`);
+      }
+      const not = args.where.source?.not;
+      if (args.where.source !== undefined && not === undefined) {
+        throw new Error('fake-prisma: unmodelled updateMany source filter');
+      }
+      const r = this.pud.find((x) => x.id === args.where.id);
+      if (!r) return { count: 0 };
+      if (not !== undefined && r.source === not) return { count: 0 };
+      Object.assign(r, args.data);
+      return { count: 1 };
+    },
   };
 
   auditLog = {
