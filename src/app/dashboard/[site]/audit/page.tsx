@@ -57,8 +57,16 @@ export default async function AuditPage({ params, searchParams }: Props) {
   });
   if (!site) notFound();
 
-  const isAdmin = session.user.role === 'admin';
-  const canReach = isAdmin || session.user.all_sites === true || session.user.primary_site_id === site.id;
+  // ADR-0116 — ROLE first, then reach (CLAUDE.md hard rule #2). Without the
+  // role gate an operator whose `primary_site_id` matches renders the manager
+  // audit-review surface. `/dashboard` is the manager portal; no `/operator`
+  // surface links into it.
+  const role = session.user.role;
+  const isAdmin = role === 'admin';
+  const isManager = role === 'manager' || isAdmin;
+  const canReach =
+    isManager &&
+    (isAdmin || session.user.all_sites === true || session.user.primary_site_id === site.id);
   if (!canReach) {
     return (
       <main className="mx-auto max-w-2xl px-6 py-16 text-center">

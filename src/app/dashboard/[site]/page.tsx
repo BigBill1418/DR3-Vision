@@ -49,9 +49,15 @@ export default async function SiteDashboardPage({ params }: Props) {
   });
   if (!site) notFound();
 
-  const isAdmin = session.user.role === 'admin';
+  // ADR-0116 — ROLE first, then reach (CLAUDE.md hard rule #2). Without the
+  // role gate an operator whose `primary_site_id` matches renders the manager
+  // dashboard. The sibling `[site]/loads/page.tsx:166-167` already does this;
+  // this page and three others had drifted from it.
+  const role = session.user.role;
+  const isAdmin = role === 'admin';
+  const isManager = role === 'manager' || isAdmin;
   const isAssigned = session.user.primary_site_id === site.id || session.user.all_sites === true;
-  if (!isAdmin && !isAssigned) {
+  if (!isManager || (!isAdmin && !isAssigned)) {
     // A manager scoped to Eugene hitting /dashboard/woodland sees a 403, not a
     // redirect or a misleading 404 (an all-sites manager reaches every site).
     return (
