@@ -35,6 +35,7 @@
 // paper path, the MyMRC bridge, and `onHand`'s inbound window all key on.
 
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { VERIFIED_INBOUND_STATUSES } from '@/lib/inventory/running-balance';
 import {
   assertSplit,
@@ -142,6 +143,9 @@ export async function confirmFloorInboundDay(args: {
   };
 
   const row = await prisma.$transaction(async (tx) => {
+    // ADR-0120 — serialise against workbook promotion at this site, FIRST
+    // statement in the transaction so the hold is the write itself.
+    await lockSiteAgainstPromotion(tx, args.siteId);
     // 1. MONEY-SAFETY GUARD (ADR-0060 D5). A VERIFIED per-load (non-aggregate) inbound row
     //    for this Pacific day means onHand already counts that day's intake per-truck;
     //    adding an aggregate row would double-count. Refuse — confirm on the per-load queue.

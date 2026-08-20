@@ -32,6 +32,25 @@ floor is closed overnight.
   behaviour was unbounded and invisible, and shortening it is a schedule change
   (a more frequent sweep), not a code change. Revisit only if a real loss is ever
   observed to have cost a payroll day.
+- **R-4 — ACCEPTED RESIDUAL (ADR-0120): the promotion lock is a convention, and
+  the index only backstops one table.** Eleven call sites take
+  `lockSiteAgainstPromotion`; a NEW writer of `inbound_loads`,
+  `outbound_materials`, `landfilled_units`, `consumer_dropoffs` or
+  `site_inventory_snapshots` that forgets it reopens the hole for its own path.
+  The database-level backstop covers only the snapshot table, and only
+  `source = 'import'` rows — the manual-count half must stay index-free because
+  ADR-0078 D1 requires same-instant manual rows to be legal. A lint/CI check that
+  every writer of the five tables takes the lock would close this; it is not
+  built.
+- **R-5 — DEVIATION FROM SPEC, recorded (ADR-0120 D3).** The
+  transaction-boundary review specified the snapshot unique index WITHOUT the
+  `source = 'import'` clause, on the premise that correct-count's void-first
+  ordering already satisfied it, and asked for that to be verified against the
+  real-DB suite. The verification FALSIFIED the premise: the unscoped index takes
+  ADR-0078 D1's suite red and would refuse the second same-day physical count at
+  a site. Narrowed and shipped; the evidence is in ADR-0120 D3 and in the
+  migration header. **Flagged for Bill** — this is the one place tonight's build
+  departed from the specification.
 - **R-3 — ACCEPTED RESIDUAL (ADR-0118): two read-side races are narrowed, not
   closed.** `releaseHold` still recomputes the ADR-0072 swing classification
   BEFORE its transaction, so an anchor landing in between is classified against

@@ -32,6 +32,7 @@
 // in the SAME transaction (CLAUDE.md hard rule #6).
 
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { RecordValidationError } from '@/lib/loads/record-guards';
 import { dayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
 
@@ -154,6 +155,9 @@ export async function upsertBulkInboundDay(args: {
   };
 
   const row = await prisma.$transaction(async (tx) => {
+    // ADR-0120 — serialise against workbook promotion at this site, FIRST
+    // statement in the transaction so the hold is the write itself.
+    await lockSiteAgainstPromotion(tx, args.siteId);
     // ADR-0059 — confirmation supersedes provisional. Before installing the manager's
     // paper_bulk row, retire any provisional `mymrc_haul` aggregate the bridge wrote for
     // the same (site, arrived_at): otherwise the generalized partial unique index would

@@ -16,6 +16,7 @@
 
 import { Prisma, type OutboundCommodity, type OutboundSubCategory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { RecordValidationError, RecordNotFoundError, assertUnlocked } from '@/lib/loads/record-guards';
 import { deriveOutboundRecycling, type OutboundRecyclingResult } from '@/lib/loads/recycling-rates';
 
@@ -228,6 +229,9 @@ export async function createOutbound(args: {
     await deriveOutboundRecycling({ vendorId, commodity: args.commodity, shipDate: day, weightLbs: args.weightLbs }),
   );
   const row = await prisma.$transaction(async (tx) => {
+    // ADR-0120 — serialise against workbook promotion at this site, FIRST
+    // statement in the transaction so the hold is the write itself.
+    await lockSiteAgainstPromotion(tx, args.siteId);
     const created = await tx.outboundMaterial.create({
       data: {
         site_id: args.siteId,

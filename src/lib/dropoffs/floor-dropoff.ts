@@ -48,6 +48,7 @@
 
 import type { Prisma } from '@prisma/client';
 import { assertWholeUnits } from '@/lib/dropoffs/service';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { RecordValidationError } from '@/lib/loads/record-guards';
 
 const TABLE = 'consumer_dropoffs';
@@ -141,6 +142,11 @@ export async function createFloorDropoff(args: CreateFloorDropoffArgs): Promise<
   // entry against today, which is the one thing ADR-0078's day pin exists to
   // prevent.
   const day = new Date(`${args.dropoffDate}T00:00:00Z`);
+
+  // ADR-0120 — serialise against workbook promotion at this site. Taken on the
+  // CALLER's transaction (this function requires one), so the hold ends with the
+  // idempotency claim and the insert it guards.
+  await lockSiteAgainstPromotion(args.tx, args.siteId);
 
   const created = await args.tx.consumerDropoff.create({
     data: {

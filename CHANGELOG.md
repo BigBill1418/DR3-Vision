@@ -9,6 +9,76 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (1:35 AM PT) — The scan that could not see the write (ADR-0120)
+
+**A workbook promotion could double-count a month of a site's volume, silently.**
+`promoteWorkbookImport` refuses to promote into a window that already holds live
+rows — `detectConflicts` scans five operational tables inside the promotion
+transaction and throws on any hit. That scan is correct. The problem is that it
+is a **read**, and this application runs at READ COMMITTED: a live floor write
+that commits after the scan and before the promotion's own inserts is invisible
+to the scan and lands in the window anyway. Both sets of rows stand, `onHand`
+sums both, and the promotion ledger records a conflict-free promotion that was
+not one. Nothing errors, and the numbers are MRC billing inputs.
+
+Both sides now take one transaction-scoped `pg_advisory_xact_lock` keyed on the
+**site** — the coarsest thing both genuinely know, because a floor write knows
+one row on one day and cannot name the window it might be inside. Acquired
+**before** the conflict scan, not merely before the inserts: taken after, it
+would serialise the writes while leaving the scan reading a snapshot a
+concurrent writer could still invalidate. Eleven call sites take it, listed in
+`src/lib/audit/promotion-lock.ts`, each as the first statement inside the
+transaction that performs its write so the hold is the write itself. Exactly one
+advisory lock per path, which is what makes it deadlock-free — the lock-ordering
+rule for the next author is written down in that file.
+
+### The index Bill specified was narrowed, and here is why
+
+The review called for a partial unique index on
+`(site_id, snapshot_at) WHERE snapshot_kind = 'physical' AND voided_at IS NULL`,
+on the premise — stated as a thing to verify — that correct-count's void-first
+ordering already satisfied it. **The verification falsified the premise.**
+
+Two live physical counts at one site on one day, sharing a byte-identical
+`snapshot_at`, are a supported and production-observed state. The floor anchors
+every count at Pacific midnight of its day (ADR-0060 D-3), so two counts on one
+day are stored at the same instant *by construction* — and **ADR-0078 D1 exists
+because of that**, adding the `created_at DESC` tiebreak so the latest anchor is
+a fact rather than a planner preference. Its suite header records: *"verified in
+production, where both existing physical snapshots sit exactly on 07:00:00 UTC."*
+
+Applied to a scratch database with the full migration chain, the unscoped index
+took ADR-0078 D1's own suite red:
+
+```
+Raw query failed. Code: `23505`.
+Message: `Key (site_id, snapshot_at)=(tiebreak-site, 2026-08-07 07:00:00) already exists.`
+ Test Files  1 failed (1)   Tests  3 failed (3)
+```
+
+— and green again on its removal, nothing else changed. Shipping it would have
+made the **second same-day physical count at a site** fail with a raw Postgres
+unique violation, on the operator floor, on an overnight deploy.
+
+So the index is scoped to `source = 'import'`. It catches the
+promotion-vs-promotion half (two *different* imports anchoring one site-instant;
+same-import collisions already hit the UNIQUE on `workbook_promotions.import_id`)
+and is silent on the manual counts ADR-0078 D1 governs. Production was checked
+first: 4 snapshot rows, 3 live physical, zero duplicate groups under either
+predicate.
+
+Proven against a real Postgres, including the site scoping — a lock that
+serialised every site would pass "it blocks" while turning both floors into one
+queue, against hard rule #2. Removing the lock from a writer:
+
+```
+→ timed out waiting for the floor write to block on the site lock
+```
+
+- `src/lib/audit/promotion-lock.ts` — the helper, the key rationale, the ordering rule.
+- `prisma/migrations/20260852_adr0120_import_anchor_unique/`
+- `src/lib/audit/promotion-lock.db.test.ts` — four real-Postgres cases.
+- Eleven writers + the promotion transaction.
 ## 2026-08-20 (12:55 AM PT) — The bridge kept overwriting the office (ADR-0119)
 
 **A human correction to a processed-units day did not survive the next MyMRC

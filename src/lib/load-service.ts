@@ -8,6 +8,7 @@ import {
   type RejectionCategory,
 } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { writeAudit } from '@/lib/audit';
 import { pacificDayISO } from '@/lib/time';
 import { withIdempotency } from '@/lib/idempotency';
@@ -223,6 +224,8 @@ export async function startInboundLoad(args: {
 }): Promise<{ id: string; claimed: boolean }> {
   try {
     return await prisma.$transaction(async (tx) => {
+      // ADR-0120 — serialise against workbook promotion at this site.
+      await lockSiteAgainstPromotion(tx, args.siteId);
       const expected = await tx.expectedLoad.findUnique({
         where: { id: args.expectedLoadId },
         select: {

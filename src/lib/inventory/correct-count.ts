@@ -99,6 +99,7 @@
 
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { withIdempotency } from '@/lib/idempotency';
 import { pacificDayISO, pacificDayStartInstantPlus } from '@/lib/time';
 import { NOT_VOIDED } from './snapshot-void';
@@ -563,6 +564,12 @@ async function applyCorrection(
 ): Promise<CorrectPhysicalCountResult> {
   const { args, now, original } = plan;
   const writeAuditRow = args.auditWriter ?? defaultAuditWriter;
+
+  // ADR-0120 — serialise against workbook promotion at this site, before the
+  // void-then-insert pair. Taken first so it is the outermost lock on this path
+  // and the row locks below are acquired after it, consistently with every other
+  // writer.
+  await lockSiteAgainstPromotion(tx, original.site_id);
 
   const { count } = await tx.siteInventorySnapshot.updateMany({
     where: { ...NOT_VOIDED, id: original.id },

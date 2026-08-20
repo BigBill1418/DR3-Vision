@@ -6,6 +6,7 @@
 
 import { type LandfilledReason } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { RecordValidationError, RecordNotFoundError, assertUnlocked } from '@/lib/loads/record-guards';
 
 const TABLE = 'landfilled_units';
@@ -83,6 +84,9 @@ export async function createLandfilledUnit(args: {
   assertSplit(args.units, args.programUnits, args.nonProgramUnits);
   const day = disposalDateUTC(args.disposalDate);
   const row = await prisma.$transaction(async (tx) => {
+    // ADR-0120 — serialise against workbook promotion at this site, FIRST
+    // statement in the transaction so the hold is the write itself.
+    await lockSiteAgainstPromotion(tx, args.siteId);
     const created = await tx.landfilledUnit.create({
       data: {
         site_id: args.siteId,
