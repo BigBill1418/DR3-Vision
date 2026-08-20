@@ -44,7 +44,12 @@ export class VerifyGateError extends Error {
       | 'wrong_state'
       | 'not_found'
       | 'wrong_site'
-      | 'no_source_for_default',
+      | 'no_source_for_default'
+      // ADR-0118 — the load moved out of `submitted` (or already got a DR3
+      // number) between the read at the top of `verifyLoad` and the guarded
+      // write inside its transaction. Distinct from `wrong_state`, which is the
+      // same refusal made against a load that was already wrong when we looked.
+      | 'concurrent_verify',
     message: string,
     status: 409 | 422 = 422,
   ) {
@@ -205,8 +210,40 @@ export async function verifyLoad(args: {
   // that may be rejected). Woodland-style (CA) sites only; Eugene (OR) leaves it
   // null (their scan-timestamp lives in existing arrival fields). Issued INSIDE the
   // verify transaction so the atomic counter increment rolls back with a failed
-  // verify. `verified` is reached exactly once per load, and we only issue when
-  // `dr3_number` is still null, so a number is never double-assigned.
+  // verify.
+  //
+  // ── ADR-0118 — what the comment here used to claim, and why it was false ────
+  //
+  // It said: "`verified` is reached exactly once per load, and we only issue
+  // when `dr3_number` is still null, so a number is never double-assigned."
+  // Neither clause held. `verified` was reached exactly once per load only
+  // because nothing enforced it — the write below was an UNGUARDED
+  // `update({ where: { id } })`, which succeeds whatever the row's state. And
+  // "we only issue when `dr3_number` is still null" was decided from `load`,
+  // read on the shared client OUTSIDE this transaction, before the split
+  // arithmetic and the source lookups above.
+  //
+  // So two managers verifying the same submitted load — the office desktop and
+  // a second tab, or a double-submit on a slow save — both read
+  // `status: 'submitted', dr3_number: null`, both issued a DR3 number from the
+  // counter, and both wrote. Two numbers burned off a sequence that documents
+  // MRC loads, one of them attached to nothing, and the load silently carrying
+  // the loser's. `document_sequences` guarantees the two issuers get DIFFERENT
+  // numbers (`sequences.ts` — one `UPDATE … RETURNING`, row-locked); it cannot
+  // guarantee that only one of them was asked.
+  //
+  // The decision is now CONDITIONAL ON the state it was made from. `issuesDr3`
+  // is still derived from the pre-transaction read, and that is safe precisely
+  // because the guarded write below re-states BOTH fields it depends on: if
+  // either moved, the write matches zero rows and we throw. The throw is the
+  // point — it rolls the transaction back, and `sequences.ts:11-14` says
+  // exactly what that means: "if that transaction rolls back, the counter
+  // increment rolls back with it — a rejected/failed verify never burns a DR3
+  // number." The loser's number is returned to the sequence.
+  //
+  // `dr3_number: null` is in the guard ONLY when we are issuing. A load that
+  // already carries a number from another path (a MyMRC import) is verified
+  // without issuing one, and must not be refused for holding it.
   const issuesDr3 =
     load.site != null && siteGetsVisionDr3Number(load.site.jurisdiction) && load.dr3_number == null;
 
@@ -214,8 +251,12 @@ export async function verifyLoad(args: {
     const dr3Number = issuesDr3
       ? String(await issueDocumentNumber(load.site_id, DR3_NUMBER_SEQUENCE, tx))
       : null;
-    await tx.inboundLoad.update({
-      where: { id: args.loadId },
+    const { count } = await tx.inboundLoad.updateMany({
+      where: {
+        id: args.loadId,
+        status: load.status,
+        ...(issuesDr3 ? { dr3_number: null } : {}),
+      },
       data: {
         status: 'verified',
         program_unit_count: programUnits,
@@ -223,6 +264,13 @@ export async function verifyLoad(args: {
         ...(dr3Number != null ? { dr3_number: dr3Number } : {}),
       },
     });
+    if (count === 0) {
+      throw new VerifyGateError(
+        'concurrent_verify',
+        `load ${args.loadId} was verified by someone else while this verify was in flight — nothing was written and no DR3 number was burned`,
+        409,
+      );
+    }
     await tx.auditLog.create({
       data: {
         actor_user_id: args.verifierUserId,
