@@ -172,6 +172,11 @@ interface PeriodRow {
   amended_from_period_id: string | null;
   pdf_storage_key: string | null;
   pdf_generated_at: Date | null;
+  // ADR-0117 — the attempt marker. Present on the fixture row (as `null`) so
+  // the `updateMany` CAS below can actually match on it: the fake's default
+  // comparison is `row[k] !== where[k]`, and an ABSENT property is `undefined`,
+  // which would never equal the `null` the guard asks for.
+  payroll_attempt_at: Date | null;
   payroll_sent_at: Date | null;
   payroll_message_id: string | null;
   payroll_retry_count: number;
@@ -346,6 +351,26 @@ function makeStore(): Store {
         }
       }
       return { ...p };
+    },
+    // ADR-0117 — the delivery-attempt compare-and-swap goes through
+    // `updateMany`, and its VERDICT is the returned `count`. Modelled here
+    // faithfully rather than as `async () => ({ count: 1 })`: a fake that
+    // always reports a win cannot fail when the guard stops guarding, and the
+    // whole point of the CAS is that exactly one caller may win.
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }) => {
+      const hits = s.periods.filter((x) => matchPeriod(x, where));
+      for (const p of hits) {
+        for (const [k, v] of Object.entries(data)) {
+          (p as unknown as Record<string, unknown>)[k] = v;
+        }
+      }
+      return { count: hits.length };
     },
   };
   s.bonusDailyEntry = {
@@ -573,6 +598,7 @@ function p12(siteId: string, site: { code: string; name: string }, id: string): 
     amended_from_period_id: null,
     pdf_storage_key: null,
     pdf_generated_at: null,
+    payroll_attempt_at: null,
     payroll_sent_at: null,
     payroll_message_id: null,
     payroll_retry_count: 0,

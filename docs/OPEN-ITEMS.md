@@ -19,6 +19,27 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BF — 2026-08-19 late: the transaction-boundary set (ADRs 0117–0120)
+
+Bill's 2026-08-19 ~10:30 PM PT review of the engineering audit's five criticals
+and eight high-severity siblings. Operator-window override (CONTRIBUTING's
+before-noon `/operator` rule) explicitly approved by Bill for this set — the
+floor is closed overnight.
+
+- **R-1 — ACCEPTED RESIDUAL (ADR-0117): payroll re-drive latency is up to ~24 h.**
+  The sweep rides the 06:30 PT chain-health cron, so a delivery lost just after a
+  fire waits for the next one. This is bounded and visible where the previous
+  behaviour was unbounded and invisible, and shortening it is a schedule change
+  (a more frequent sweep), not a code change. Revisit only if a real loss is ever
+  observed to have cost a payroll day.
+- **R-2 — ACCEPTED RESIDUAL (ADR-0117): a gate-blocked period re-pages daily.**
+  A signed period that a refusal gate (reconciliation, suspected-wrong-$0,
+  unconfigured R2) keeps blocking is re-driven by every sweep and pages each
+  time, fingerprinted and cooled. Intended: a signed period with no payroll is an
+  open problem and silence is the failure mode ADR-0117 exists to end.
+
+---
+
 ## 0.BE — 2026-08-19: the count lands split, the digest reaches the managers, a bed-bug load gets rejected, and two watchdogs get honest
 
 Status ledger for the day, written ~11:30 AM PT; in-flight items say so.
