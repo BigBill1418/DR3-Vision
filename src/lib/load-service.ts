@@ -351,7 +351,20 @@ async function transition(args: {
   operatorUserId: string;
   siteId: string;
   to: LoadStatus;
-  data?: Prisma.InboundLoadUpdateInput;
+  /**
+   * ADR-0118 — `InboundLoadUncheckedUpdateInput`, NOT `InboundLoadUpdateInput`.
+   * The write below is a guarded `updateMany`, and `updateMany` accepts SCALAR
+   * fields only: a nested relation write (`submitted_by: { connect: … }`) is
+   * rejected by Prisma at ARGUMENT VALIDATION, before the query is sent — the
+   * ADR-0115 failure mode, which aborts the enclosing transaction and refuses
+   * the transition at runtime with nothing having gone wrong in the data.
+   *
+   * The `Unchecked` variant is exactly the scalar-only surface, so `tsc` now
+   * refuses a `connect` here instead of letting it reach production. The two
+   * call sites that used one (`submitLoad`, `rejectLoad`) set
+   * `submitted_by_id` directly; it is the same column.
+   */
+  data?: Prisma.InboundLoadUncheckedUpdateInput;
   /**
    * ADR-0090 Am.1 — narrow this particular write to a SUBSET of the edges
    * `ALLOWED_PRIOR[to]` declares.
@@ -378,17 +391,47 @@ async function transition(args: {
     ? declared.filter((s) => args.allowedFrom!.includes(s))
     : declared;
   if (!allowed.includes(current.status)) throw new TransitionError(current.status, args.to);
-  await prisma.inboundLoad.update({
-    where: { id: args.loadId },
-    data: { ...args.data, status: args.to },
-  });
-  await writeAudit({
-    actor_user_id: args.operatorUserId,
-    action: 'update',
-    table_name: 'inbound_loads',
-    row_id: args.loadId,
-    before: { status: current.status },
-    after: { status: args.to, ...(args.reason ? { reason: args.reason } : {}) },
+
+  // ── ADR-0118 — the transition is guarded, and its audit row rides with it ───
+  //
+  // `assertOwn` read the status above, on the shared client; the write was an
+  // unguarded `update({ where: { id } })`, which succeeds whatever the row's
+  // status is by the time it runs. `load-claim.ts:372-376` names this exact
+  // defect in a comment. The floor makes it ordinary rather than exotic: one
+  // load is reachable from the shared kiosk, the operator's own iPad and the
+  // offline-queue replay endpoint, so two requests routinely pass the same
+  // check and both write — the state machine's table is consulted and then not
+  // enforced.
+  //
+  // The `updateMany` restates the status the transition was authorised FROM,
+  // and `count === 0` raises the same `TransitionError` the pre-check raises,
+  // so every route that already translates it keeps working. The in-file model
+  // is `finishUnload`'s duration freeze (~line 905), which has used this shape
+  // since ADR-0090 Am.1.
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.inboundLoad.updateMany({
+      where: { id: args.loadId, status: current.status },
+      data: { ...args.data, status: args.to },
+    });
+    if (count === 0) {
+      const now = await tx.inboundLoad.findUniqueOrThrow({
+        where: { id: args.loadId },
+        select: { status: true },
+      });
+      throw new TransitionError(now.status, args.to);
+    }
+    // Hard rule #6 — same transaction as the state change it describes.
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        before: { status: current.status },
+        after: { status: args.to, ...(args.reason ? { reason: args.reason } : {}) },
+      },
+      { tx },
+    );
   });
 }
 
@@ -847,17 +890,39 @@ export async function finishUnload(args: {
       select: { total_units: true },
     });
     if (row && row.total_units !== total) {
-      await prisma.inboundLoad.update({
-        where: { id: args.loadId },
-        data: { total_units: total },
-      });
-      await writeAudit({
-        actor_user_id: args.operatorUserId,
-        action: 'update',
-        table_name: 'inbound_loads',
-        row_id: args.loadId,
-        before: { total_units: row.total_units },
-        after: { total_units: total, reason: 'stack replayed after finish (ADR-0078)' },
+      // ── ADR-0118 — the BILLED total and its audit row commit together ───────
+      //
+      // This branch rewrites `total_units` on an already-finished load, which
+      // is the number the load is billed on. It was two sequential writes on
+      // the shared client, so a failure between them left the billed total
+      // changed with nothing recording that it had been — and the non-replay
+      // path fifty lines below already does this inside a transaction, so the
+      // two halves of one function disagreed about whether a total rewrite is
+      // auditable.
+      //
+      // Guarded on `total_units: row.total_units`, the value the recompute was
+      // measured against: two replays of the same queued stack both compute the
+      // same total, and the second must not write a second audit row claiming a
+      // change that had already happened. `count === 0` is that case and is a
+      // silent no-op, not an error — a replay is the ordinary case on a dock
+      // connection, which is the whole reason this branch exists.
+      await prisma.$transaction(async (tx) => {
+        const { count } = await tx.inboundLoad.updateMany({
+          where: { id: args.loadId, total_units: row.total_units },
+          data: { total_units: total },
+        });
+        if (count === 0) return;
+        await writeAudit(
+          {
+            actor_user_id: args.operatorUserId,
+            action: 'update',
+            table_name: 'inbound_loads',
+            row_id: args.loadId,
+            before: { total_units: row.total_units },
+            after: { total_units: total, reason: 'stack replayed after finish (ADR-0078)' },
+          },
+          { tx },
+        );
       });
     }
     return;
@@ -1084,7 +1149,7 @@ export async function submitLoad(args: {
     to: 'submitted',
     data: {
       submitted_at: new Date(),
-      submitted_by: { connect: { id: args.operatorUserId } },
+      submitted_by_id: args.operatorUserId,
     },
   });
 }
@@ -1103,7 +1168,7 @@ export async function rejectLoad(args: {
       rejection_category: args.category,
       rejection_note: args.note,
       submitted_at: new Date(),
-      submitted_by: { connect: { id: args.operatorUserId } },
+      submitted_by_id: args.operatorUserId,
     },
   });
   // rejection photo row already written by the client.

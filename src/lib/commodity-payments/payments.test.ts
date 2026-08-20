@@ -42,11 +42,42 @@ function stubDb(payment: StubPayment | null) {
     notes: null,
     ...data,
   }));
+  // ADR-0118 — the update path is now a GUARDED `updateMany` whose `count` is
+  // the verdict, followed by a re-read, all on one transaction. Modelled
+  // faithfully: `updateMany` re-evaluates the `where` against the fixture's
+  // current status and returns `count: 0` on a miss, so a suite that changes
+  // the fixture's status out from under the transition still sees the refusal.
+  // A fake that always answered `count: 1` could not fail when the guard stops
+  // guarding, which is the whole point of having one.
+  const updateMany = vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+    if (where['status'] !== undefined && where['status'] !== payment?.status) {
+      return { count: 0 };
+    }
+    return { count: 1 };
+  });
+  const findUniqueOrThrow = vi.fn(async () => ({ ...payment!, ...lastData }));
+  let lastData: Record<string, unknown> = {};
+  const updateManyRecording = vi.fn(
+    async (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      lastData = args.data;
+      // Route through `update` too, so the existing assertions on the `update`
+      // spy's payload keep measuring the data this write actually sends.
+      await update({ data: args.data });
+      return updateMany(args);
+    },
+  );
   const db = {
     outboundMaterial: {
       findUnique: vi.fn(async () => ({ id: 'load-1', site_id: 'site-w', payment })),
     },
-    outboundMaterialPayment: { update, create },
+    outboundMaterialPayment: {
+      update,
+      create,
+      updateMany: updateManyRecording,
+      findUniqueOrThrow,
+    },
+    // Runs the callback against the same fake, the shape the other suites use.
+    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
   };
   return { db: db as unknown as PrismaClient, update, create };
 }

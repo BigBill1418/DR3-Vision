@@ -32,6 +32,15 @@ floor is closed overnight.
   behaviour was unbounded and invisible, and shortening it is a schedule change
   (a more frequent sweep), not a code change. Revisit only if a real loss is ever
   observed to have cost a payroll day.
+- **R-6 — FOUND AND FIXED IN FLIGHT (ADR-0118 batch).** Converting
+  `transition()` to a guarded `updateMany` surfaced a latent ADR-0115-class
+  defect: `submitLoad` and `rejectLoad` passed `submitted_by: { connect: … }`,
+  a nested relation write that `updateMany` cannot accept and that Prisma
+  refuses at argument validation. Both now set `submitted_by_id`, and the
+  `data` parameter was retyped to `InboundLoadUncheckedUpdateInput` so `tsc`
+  refuses the shape. **Worth a sweep:** other services may pass nested relation
+  writes into helpers that were converted to `updateMany` in this set. Not
+  swept tonight.
 - **R-4 — ACCEPTED RESIDUAL (ADR-0120): the promotion lock is a convention, and
   the index only backstops one table.** Eleven call sites take
   `lockSiteAgainstPromotion`; a NEW writer of `inbound_loads`,

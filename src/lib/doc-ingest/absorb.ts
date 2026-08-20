@@ -696,16 +696,6 @@ async function absorbTrailerList(
     );
   }
 
-  const written = await prisma.$transaction((tx) =>
-    writeTrailerRows(tx, {
-      sourceId: source.id,
-      versionId: version.id,
-      siteId,
-      perSheet: extracted.perSheet,
-      now,
-    }),
-  );
-
   // Coverage = distinct entry dates the absorbed rows actually state. Rows with
   // no entry date (14 of the live file's 96) contribute nothing rather than
   // being counted against an invented day.
@@ -714,21 +704,45 @@ async function absorbTrailerList(
     for (const r of sheet.rows) if (r.entryDate !== null) dates.add(r.entryDate);
   }
 
-  await writeAudit({
-    actor_label: ABSORB_ACTOR,
-    action: 'insert',
-    table_name: 'doc_trailer_rows',
-    row_id: version.id,
-    after: {
-      doc_source_id: source.id,
-      doc_class: 'trailer_list',
-      rows_written: written,
-      dates_covered: dates.size,
-      sheets: extracted.sheetNames,
-      // Sheets that declined are recorded even on a SUCCESSFUL absorption — a
-      // partially-read document must not look identical to a fully-read one.
-      sheet_notes: describeSheetFailures(extracted.perSheet),
-    },
+  const written = await prisma.$transaction(async (tx) => {
+    const written = await writeTrailerRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      perSheet: extracted.perSheet,
+      now,
+    });
+    // ADR-0118 — the audit row commits with the rows it describes.
+    //
+    // It used to be written on the shared client AFTER this transaction had
+    // already committed. A failure in between — a container recreate, and this
+    // stack recreates on every push to `main` — left the absorbed rows standing
+    // with no record of which document version produced them, how many landed,
+    // or which sheets declined. For a staging table whose whole purpose is to
+    // be reconciled against later, that is the one row that must not go
+    // missing. `absorb.ts`'s own reference-row path (~line 445) already had it
+    // right; these five had drifted from it.
+    await writeAudit(
+      {
+        actor_label: ABSORB_ACTOR,
+        action: 'insert',
+        table_name: 'doc_trailer_rows',
+        row_id: version.id,
+        after: {
+          doc_source_id: source.id,
+          doc_class: 'trailer_list',
+          rows_written: written,
+          dates_covered: dates.size,
+          sheets: extracted.sheetNames,
+          // Sheets that declined are recorded even on a SUCCESSFUL absorption — a
+          // partially-read document must not look identical to a fully-read one.
+          sheet_notes: describeSheetFailures(extracted.perSheet),
+        },
+      },
+      { tx },
+    );
+
+    return written;
   });
 
   await resolveAnomaly(
@@ -835,42 +849,56 @@ async function absorbTerexLog(
     );
   }
 
-  const staged = await prisma.$transaction((tx) =>
-    stageTerexRows(tx, {
+  const dates = new Set<string>();
+  for (const r of extracted.result.rows) if (r.eventDate !== null) dates.add(r.eventDate);
+
+  const staged = await prisma.$transaction(async (tx) => {
+    const staged = await stageTerexRows(tx, {
       sourceId: source.id,
       versionId: version.id,
       siteId,
       result: extracted.result,
       now,
-    }),
-  );
+    });
+    // ADR-0118 — the audit row commits with the rows it describes.
+    //
+    // It used to be written on the shared client AFTER this transaction had
+    // already committed. A failure in between — a container recreate, and this
+    // stack recreates on every push to `main` — left the absorbed rows standing
+    // with no record of which document version produced them, how many landed,
+    // or which sheets declined. For a staging table whose whole purpose is to
+    // be reconciled against later, that is the one row that must not go
+    // missing. `absorb.ts`'s own reference-row path (~line 445) already had it
+    // right; these five had drifted from it.
+    await writeAudit(
+      {
+        actor_label: ABSORB_ACTOR,
+        action: 'insert',
+        table_name: 'doc_terex_maintenance_rows',
+        row_id: version.id,
+        after: {
+          doc_source_id: source.id,
+          doc_class: 'terex_maintenance_log',
+          rows_staged: staged,
+          // Staged, NOT counted. Recorded explicitly so a reader of this audit row
+          // cannot mistake extraction for acceptance.
+          awaiting_confirmation: true,
+          totals_preview: extracted.result.totals,
+          duplicates_removed: extracted.result.duplicatesRemoved,
+          undated_events: extracted.result.undatedEvents,
+          sheets_read: extracted.result.sheets
+            .filter((s) => s.skipped === null)
+            .map((s) => s.sheetName),
+          sheets_skipped: extracted.result.sheets
+            .filter((s) => s.skipped !== null)
+            .map((s) => s.sheetName),
+          note: describeTerexSheets(extracted.result),
+        },
+      },
+      { tx },
+    );
 
-  const dates = new Set<string>();
-  for (const r of extracted.result.rows) if (r.eventDate !== null) dates.add(r.eventDate);
-
-  await writeAudit({
-    actor_label: ABSORB_ACTOR,
-    action: 'insert',
-    table_name: 'doc_terex_maintenance_rows',
-    row_id: version.id,
-    after: {
-      doc_source_id: source.id,
-      doc_class: 'terex_maintenance_log',
-      rows_staged: staged,
-      // Staged, NOT counted. Recorded explicitly so a reader of this audit row
-      // cannot mistake extraction for acceptance.
-      awaiting_confirmation: true,
-      totals_preview: extracted.result.totals,
-      duplicates_removed: extracted.result.duplicatesRemoved,
-      undated_events: extracted.result.undatedEvents,
-      sheets_read: extracted.result.sheets
-        .filter((s) => s.skipped === null)
-        .map((s) => s.sheetName),
-      sheets_skipped: extracted.result.sheets
-        .filter((s) => s.skipped !== null)
-        .map((s) => s.sheetName),
-      note: describeTerexSheets(extracted.result),
-    },
+    return staged;
   });
 
   await resolveAnomaly(
@@ -1002,16 +1030,6 @@ async function absorbCommodityTracker(
     );
   }
 
-  const { staged, collisions } = await prisma.$transaction((tx) =>
-    stageCommodityRows(tx, {
-      sourceId: source.id,
-      versionId: version.id,
-      siteId,
-      perSheet: extracted.perSheet,
-      now,
-    }),
-  );
-
   // Coverage here is DAYS AN AUDIT WAS DATED — not months covered. The two are
   // different questions and only the second one is this document's subject, so
   // the field the interface calls `datesCovered` is filled with the thing it is
@@ -1033,31 +1051,58 @@ async function absorbCommodityTracker(
   const monthsNotAudited = allRows.filter((r) => r.audited === false).length;
   const monthsNotRecorded = allRows.filter((r) => r.audited === null).length;
 
-  await writeAudit({
-    actor_label: ABSORB_ACTOR,
-    action: 'insert',
-    table_name: 'doc_commodity_audit_rows',
-    row_id: version.id,
-    after: {
-      doc_source_id: source.id,
-      doc_class: 'commodity_audit_tracker',
-      rows_staged: staged,
-      // Staged, NOT accepted. Recorded explicitly so a reader of this audit row
-      // cannot mistake extraction for acceptance.
-      awaiting_confirmation: true,
-      // Stated so nobody has to open the extractor to know what this document is.
-      carries_money: false,
-      carries_tonnage: false,
-      months_audited: monthsAudited,
-      months_not_audited: monthsNotAudited,
-      months_not_recorded: monthsNotRecorded,
-      audit_dates_recorded: dates.size,
-      sheets: extracted.sheetNames,
-      // Dropped rows are recorded even on a SUCCESSFUL absorption — a partially
-      // read document must not look identical to a fully read one.
-      label_collisions: collisions,
-      note: describeCommoditySheets(extracted.perSheet),
-    },
+  // Only `staged` is read below; `collisions` is consumed by the audit row
+  // INSIDE the transaction (ADR-0118), so destructuring it out here again would
+  // be an unused binding.
+  const { staged } = await prisma.$transaction(async (tx) => {
+    const { staged, collisions } = await stageCommodityRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      perSheet: extracted.perSheet,
+      now,
+    });
+    // ADR-0118 — the audit row commits with the rows it describes.
+    //
+    // It used to be written on the shared client AFTER this transaction had
+    // already committed. A failure in between — a container recreate, and this
+    // stack recreates on every push to `main` — left the absorbed rows standing
+    // with no record of which document version produced them, how many landed,
+    // or which sheets declined. For a staging table whose whole purpose is to
+    // be reconciled against later, that is the one row that must not go
+    // missing. `absorb.ts`'s own reference-row path (~line 445) already had it
+    // right; these five had drifted from it.
+    await writeAudit(
+      {
+        actor_label: ABSORB_ACTOR,
+        action: 'insert',
+        table_name: 'doc_commodity_audit_rows',
+        row_id: version.id,
+        after: {
+          doc_source_id: source.id,
+          doc_class: 'commodity_audit_tracker',
+          rows_staged: staged,
+          // Staged, NOT accepted. Recorded explicitly so a reader of this audit row
+          // cannot mistake extraction for acceptance.
+          awaiting_confirmation: true,
+          // Stated so nobody has to open the extractor to know what this document is.
+          carries_money: false,
+          carries_tonnage: false,
+          months_audited: monthsAudited,
+          months_not_audited: monthsNotAudited,
+          months_not_recorded: monthsNotRecorded,
+          audit_dates_recorded: dates.size,
+          sheets: extracted.sheetNames,
+          // Dropped rows are recorded even on a SUCCESSFUL absorption — a partially
+          // read document must not look identical to a fully read one.
+          label_collisions: collisions,
+          note: describeCommoditySheets(extracted.perSheet),
+        },
+      },
+      { tx },
+    );
+
+    return { staged, collisions };
   });
 
   await resolveAnomaly(
@@ -1181,53 +1226,68 @@ async function absorbOutboundAudit(
     );
   }
 
-  const staged = await prisma.$transaction((tx) =>
-    stageOutboundRows(tx, {
+  // Coverage = distinct SHIPMENT DAYS the absorbed loads actually state. A load
+  // whose date cell could not be read contributes nothing rather than being
+  // counted against an invented day.
+  const dates = new Set<string>();
+  for (const l of extracted.result.loads)
+    if (l.shipmentDateISO !== null) dates.add(l.shipmentDateISO);
+
+  const staged = await prisma.$transaction(async (tx) => {
+    const staged = await stageOutboundRows(tx, {
       sourceId: source.id,
       versionId: version.id,
       siteId,
       result: extracted.result,
       now,
-    }),
-  );
+    });
+    // ADR-0118 — the audit row commits with the rows it describes.
+    //
+    // It used to be written on the shared client AFTER this transaction had
+    // already committed. A failure in between — a container recreate, and this
+    // stack recreates on every push to `main` — left the absorbed rows standing
+    // with no record of which document version produced them, how many landed,
+    // or which sheets declined. For a staging table whose whole purpose is to
+    // be reconciled against later, that is the one row that must not go
+    // missing. `absorb.ts`'s own reference-row path (~line 445) already had it
+    // right; these five had drifted from it.
+    await writeAudit(
+      {
+        actor_label: ABSORB_ACTOR,
+        action: 'insert',
+        table_name: 'doc_outbound_load_rows',
+        row_id: version.id,
+        after: {
+          doc_source_id: source.id,
+          doc_class: 'outbound_weight_audit',
+          rows_staged: staged.staged,
+          commodity_rows_staged: staged.commodityRows,
+          // Staged, NOT counted. Recorded explicitly so a reader of this audit row
+          // cannot mistake extraction for acceptance.
+          awaiting_confirmation: true,
+          // Stated so nobody has to open the absorber to know what this write did
+          // NOT do.
+          reference_only: true,
+          wrote_operational_tables: false,
+          total_weight_lbs: extracted.result.totals.totalWeightLbs,
+          shipment_days_covered: dates.size,
+          duplicates_removed: extracted.result.duplicatesRemoved,
+          sign_check_failures: extracted.result.signCheckFailures,
+          parts_check_failures: extracted.result.partsCheckFailures,
+          label_collisions: staged.collisions,
+          sheets_read: extracted.result.sheets
+            .filter((s) => s.skipped === null)
+            .map((s) => s.sheetName),
+          sheets_skipped: extracted.result.sheets
+            .filter((s) => s.skipped !== null)
+            .map((s) => s.sheetName),
+          note: describeOutboundSheets(extracted.result),
+        },
+      },
+      { tx },
+    );
 
-  // Coverage = distinct SHIPMENT DAYS the absorbed loads actually state. A load
-  // whose date cell could not be read contributes nothing rather than being
-  // counted against an invented day.
-  const dates = new Set<string>();
-  for (const l of extracted.result.loads) if (l.shipmentDateISO !== null) dates.add(l.shipmentDateISO);
-
-  await writeAudit({
-    actor_label: ABSORB_ACTOR,
-    action: 'insert',
-    table_name: 'doc_outbound_load_rows',
-    row_id: version.id,
-    after: {
-      doc_source_id: source.id,
-      doc_class: 'outbound_weight_audit',
-      rows_staged: staged.staged,
-      commodity_rows_staged: staged.commodityRows,
-      // Staged, NOT counted. Recorded explicitly so a reader of this audit row
-      // cannot mistake extraction for acceptance.
-      awaiting_confirmation: true,
-      // Stated so nobody has to open the absorber to know what this write did
-      // NOT do.
-      reference_only: true,
-      wrote_operational_tables: false,
-      total_weight_lbs: extracted.result.totals.totalWeightLbs,
-      shipment_days_covered: dates.size,
-      duplicates_removed: extracted.result.duplicatesRemoved,
-      sign_check_failures: extracted.result.signCheckFailures,
-      parts_check_failures: extracted.result.partsCheckFailures,
-      label_collisions: staged.collisions,
-      sheets_read: extracted.result.sheets
-        .filter((s) => s.skipped === null)
-        .map((s) => s.sheetName),
-      sheets_skipped: extracted.result.sheets
-        .filter((s) => s.skipped !== null)
-        .map((s) => s.sheetName),
-      note: describeOutboundSheets(extracted.result),
-    },
+    return staged;
   });
 
   await resolveAnomaly(
@@ -1352,16 +1412,6 @@ async function absorbFacilityExpenseLog(
     );
   }
 
-  const staged = await prisma.$transaction((tx) =>
-    stageFacilityExpenseRows(tx, {
-      sourceId: source.id,
-      versionId: version.id,
-      siteId,
-      perSheet: extracted.perSheet,
-      now,
-    }),
-  );
-
   // Coverage = distinct INVOICE DATES the rows actually state, and on this
   // document that is expected to be ZERO: the `Invoice Date` column holds
   // day-of-month numbers, not dates (see `facility-expense-extract.ts`). The
@@ -1382,32 +1432,57 @@ async function absorbFacilityExpenseLog(
   );
   const allRows = absorbedSheets.flatMap((s) => s.rows);
 
-  await writeAudit({
-    actor_label: ABSORB_ACTOR,
-    action: 'insert',
-    table_name: 'doc_facility_expense_rows',
-    row_id: version.id,
-    after: {
-      doc_source_id: source.id,
-      doc_class: 'facility_expense_log',
-      rows_staged: staged.staged,
-      awaiting_confirmation: true,
-      reference_only: true,
-      wrote_invoices_table: false,
-      totals_preview: totals,
-      // The finding this document forced. Recorded here so the absence of dates
-      // is a stated reading rather than a silent zero.
-      rows_with_a_real_invoice_date: dates.size,
-      rows_with_a_day_number: allRows.filter((r) => r.invoiceDay !== null).length,
-      rows_above_the_first_month_banner: allRows.filter((r) => r.invoiceMonthLabel === null).length,
-      haul_references: allRows.filter((r) => r.haulRef !== null).length,
-      sheets_absorbed: absorbedSheets.map((s) => s.sheetName),
-      sheets_refused: extracted.perSheet
-        .filter((s) => s.failure !== null)
-        .map((s) => ({ sheet: s.sheetName, reason: s.failure?.kind })),
-      label_collisions: staged.collisions,
-      note: describeFacilityExpenseSheets(extracted.perSheet),
-    },
+  const staged = await prisma.$transaction(async (tx) => {
+    const staged = await stageFacilityExpenseRows(tx, {
+      sourceId: source.id,
+      versionId: version.id,
+      siteId,
+      perSheet: extracted.perSheet,
+      now,
+    });
+    // ADR-0118 — the audit row commits with the rows it describes.
+    //
+    // It used to be written on the shared client AFTER this transaction had
+    // already committed. A failure in between — a container recreate, and this
+    // stack recreates on every push to `main` — left the absorbed rows standing
+    // with no record of which document version produced them, how many landed,
+    // or which sheets declined. For a staging table whose whole purpose is to
+    // be reconciled against later, that is the one row that must not go
+    // missing. `absorb.ts`'s own reference-row path (~line 445) already had it
+    // right; these five had drifted from it.
+    await writeAudit(
+      {
+        actor_label: ABSORB_ACTOR,
+        action: 'insert',
+        table_name: 'doc_facility_expense_rows',
+        row_id: version.id,
+        after: {
+          doc_source_id: source.id,
+          doc_class: 'facility_expense_log',
+          rows_staged: staged.staged,
+          awaiting_confirmation: true,
+          reference_only: true,
+          wrote_invoices_table: false,
+          totals_preview: totals,
+          // The finding this document forced. Recorded here so the absence of dates
+          // is a stated reading rather than a silent zero.
+          rows_with_a_real_invoice_date: dates.size,
+          rows_with_a_day_number: allRows.filter((r) => r.invoiceDay !== null).length,
+          rows_above_the_first_month_banner: allRows.filter((r) => r.invoiceMonthLabel === null)
+            .length,
+          haul_references: allRows.filter((r) => r.haulRef !== null).length,
+          sheets_absorbed: absorbedSheets.map((s) => s.sheetName),
+          sheets_refused: extracted.perSheet
+            .filter((s) => s.failure !== null)
+            .map((s) => ({ sheet: s.sheetName, reason: s.failure?.kind })),
+          label_collisions: staged.collisions,
+          note: describeFacilityExpenseSheets(extracted.perSheet),
+        },
+      },
+      { tx },
+    );
+
+    return staged;
   });
 
   await resolveAnomaly(
