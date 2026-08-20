@@ -3,6 +3,7 @@
 import { useTransition } from 'react';
 import { useT } from '@/i18n/provider';
 import { beginUnloadAction } from '../../actions';
+import { useLiveControl } from './stage-liveness';
 
 // Stage 4 — Begin unload OR Reject load. Two equal-weight buttons.
 
@@ -17,6 +18,12 @@ export function StageDecision({
 }) {
   const t = useT();
   const [isPending, startTransition] = useTransition();
+
+  // ADR-0122 — Reject carries no `disabled` at all, so this stage can only ever
+  // be all-dark while a transition is in flight. Registered anyway: the value of
+  // an inventory is that it covers the stages nobody expects to break.
+  useLiveControl('decision_begin_unload', isPending ? 'pending' : null);
+  useLiveControl('decision_reject', null);
 
   return (
     <section className="flex flex-col gap-6">

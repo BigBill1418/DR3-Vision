@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useT } from '@/i18n/provider';
 import { doorOpenCapturedAction } from '../../actions';
 import { PhotoInput } from './photo-input';
+import { useLiveControl, type StageDisableReason } from './stage-liveness';
 
 // Stage 3 — forced door-open photo. Per ADR-0012 §1, the visible
 // timer starts on submission of THIS photo (not BOL). The server
@@ -23,6 +24,15 @@ export function StageDoor({
   const t = useT();
   const [hasFile, setHasFile] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // ADR-0122 — see `stage-bol.tsx`. Truth-equivalent to the `(!hasFile &&
+  // photoCount === 0) || isPending` that shipped in #286.
+  const continueReason: StageDisableReason | null = isPending
+    ? 'pending'
+    : !hasFile && photoCount === 0
+      ? 'no_photo'
+      : null;
+  useLiveControl('door_continue', continueReason);
 
   return (
     <section className="flex flex-col gap-6">
@@ -48,7 +58,7 @@ export function StageDoor({
           truck. (Stage 2, weight, escapes via its own "None" button.) */}
       <button
         type="button"
-        disabled={(!hasFile && photoCount === 0) || isPending}
+        disabled={continueReason !== null}
         onClick={() =>
           startTransition(async () => {
             await doorOpenCapturedAction(siteCode, loadId);

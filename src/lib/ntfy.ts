@@ -56,6 +56,10 @@ const FALLBACK_TOPIC_BY_PRIMARY: Readonly<Record<string, string>> = {
   'dr3-vision-container': 'barnardhq-fleet-dr3-vision-8a7f2c91e6b4d3a85f0c9d2e7b1a8f4c3',
   'dr3-vision-deploys': 'bhq-fb-dr3v-deploys-6438a50ae307f3744cbcc19d314f787a',
   'dr3-vision-loads': 'bhq-fb-dr3v-loads-43e1bf27f2c2e628478017a0e756cf73',
+  // ADR-0122, added 2026-08-20 — the floor dead-end pager. Mirrored into
+  // `~/noc-master/data/ntfy-fallback-topics.yml` in the same change; nothing at
+  // runtime notices if these two drift, which is why they move together.
+  'dr3-vision-floor': 'bhq-fb-dr3v-floor-8393dc46c01da9992f600caf8fdef584',
 };
 
 // ADR-0036 §Click URL priority tier 3.

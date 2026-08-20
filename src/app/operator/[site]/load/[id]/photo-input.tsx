@@ -10,6 +10,7 @@ import {
 } from '@/lib/offline-queue';
 import { useT, useLocale } from '@/i18n/provider';
 import { MAX_PHOTOS_PER_KIND, canAddPhoto } from '@/lib/loads/photo-limit';
+import { useLiveControl, type StageDisableReason } from './stage-liveness';
 
 // Touch-first camera input + R2 upload (T-007), now with offline-queue
 // fallback (T-009 / ADR-0006). Sequence:
@@ -138,6 +139,30 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured, initialCount = 
 
   const label = t(`photo.label_${labelKey}`);
   const atLimit = !canAddPhoto(count);
+
+  // ADR-0122 — the two controls this component owns, declared to the enclosing
+  // stage so the detector counts them. HALF THE 2026-08-20 TRAP lived here: on a
+  // re-entry with a photo already on the server, capture is withheld (correctly,
+  // ADR-0109) and "add another" is not rendered (a fresh mount is `idle`), so the
+  // stage's own Continue was the only thing left and it was disabled too.
+  //
+  // Each reason chain below is truth-equivalent to the `disabled` / render
+  // condition it feeds, and the SAME value drives both — a second expression
+  // restating the rule is how the registration would drift away from the DOM.
+  const captureReason: StageDisableReason | null =
+    status === 'uploading'
+      ? 'uploading'
+      : atLimit
+        ? 'photo_limit'
+        : count > 0 && status !== 'error'
+          ? 'photo_present'
+          : null;
+  const addAnotherShown = (status === 'done' || status === 'queued') && !atLimit;
+  useLiveControl('photo_capture', captureReason);
+  useLiveControl(
+    'photo_add_another',
+    addAnotherShown ? null : atLimit ? 'photo_limit' : 'not_captured',
+  );
 
   const handleFile = async (file: File) => {
     setStatus('uploading');

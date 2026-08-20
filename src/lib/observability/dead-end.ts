@@ -62,7 +62,15 @@ export type DeadEndSurface =
   | 'inbound'
   | 'processed'
   | 'dropoff'
-  | 'site_picker';
+  | 'site_picker'
+  /**
+   * ADR-0122 — one of the seven `stage-*.tsx` screens inside a load. DISTINCT
+   * from `load`, which is the workflow shell: `load` reports a status the
+   * workflow will not work (voided, verified), a state the app knows it is in.
+   * `load_stage` reports the opposite — a stage the app believes is WORKABLE
+   * while every control on it is dark. That is a defect report, not a state.
+   */
+  | 'load_stage';
 
 /**
  * The named condition. Also closed, and named for the OPERATOR'S situation
@@ -78,7 +86,14 @@ export type DeadEndState =
   | 'no_inbound_days' // audit D-6
   | 'queue_unreadable' // audit D-14 — IndexedDB would not answer
   | 'hold_gone' // audit D-9 — a manager already resolved it
-  | 'no_sites'; // audit D-18
+  | 'no_sites' // audit D-18
+  /**
+   * ADR-0122 — the stage rendered with NO enabled control. The one state in this
+   * union that is not a situation in the yard: it is the application failing to
+   * offer the operator a next action, measured rather than declared. It is also
+   * the only one that pages — see `publishStageDeadEndAlert`.
+   */
+  | 'no_live_controls';
 
 /** The two refusals every floor WRITE client can earn (see `write-refusal.tsx`). */
 export type WriteRefusalKind = 'wrong_day' | 'signed_out';
@@ -101,6 +116,26 @@ export interface DeadEndEvent {
   userId: string;
   role: string;
   locale: string;
+  /**
+   * ADR-0122 — which of the seven load stages, when `surface` is `load_stage`.
+   *
+   * Deliberately NOT a Prometheus label. `deadEndRenders` is labelled
+   * (surface, state, site) and stays that way: a fourth label multiplies the
+   * series count for every existing caller and quietly changes what the shipped
+   * queries mean. Loki holds the full-fidelity event — exactly the split this
+   * module's header argues for — so "which stage" is one filter away without
+   * touching the counter's shape.
+   */
+  stage?: string | undefined;
+  /**
+   * ADR-0122 — control id → why it was dark, at the moment of the render.
+   *
+   * The whole diagnostic payload. A `no_live_controls` line without it says a
+   * screen was dead; with it, the first question anyone asks ("which control,
+   * and why?") is answered from the log instead of from a reproduction attempt.
+   * Log-only, for the same cardinality reason as `stage`.
+   */
+  disableReasons?: Readonly<Record<string, string>> | undefined;
 }
 
 /**
@@ -132,6 +167,10 @@ export function recordDeadEnd(e: DeadEndEvent): void {
         user_id: e.userId,
         role: e.role,
         locale: e.locale,
+        // ADR-0122 — absent on every pre-existing caller, so no shipped Loki
+        // query changes shape; present only on `load_stage`.
+        ...(e.stage ? { stage: e.stage } : {}),
+        ...(e.disableReasons ? { disable_reasons: e.disableReasons } : {}),
       },
       // A human-readable message so the Loki line is greppable without knowing
       // the label schema — the first question anyone asks is "show me today's".

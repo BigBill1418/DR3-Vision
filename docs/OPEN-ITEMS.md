@@ -19,6 +19,43 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BG — 2026-08-20 floor dead-end pager (ADR-0122) — ONE blocking operator action
+
+Fast-follow to the ADR-0121 emergency. The detector and the page are live; one
+step is Bill's and the alert does nothing until it is taken.
+
+- **O-1 — OPERATOR ACTION, BLOCKING (ADR-0122): subscribe the phone to
+  `dr3-vision-floor` on `https://ntfy.barnardhq.com`.** This is a NEW primary
+  topic. The ntfy server's `auth.db` carries no `user_subscription` table —
+  account subscription sync is not enabled — so subscriptions live on the device
+  and **cannot be verified from the server.** Publishing is proven end to end
+  (a labelled test page was published and read back off the topic, and it is in
+  BOS-HQ's `cache.db`), but a topic nobody has added is a black hole. That is the
+  state `dr3-vision-loads` and `dr3-vision-deploys` have been in since
+  2026-05-06, and the reason ADR-0088 D4 refused to mint a new topic at all.
+  Until this is done, a trapped operator still reaches nobody.
+  _Owner: Bill. One-time, ~30 seconds in the ntfy app._
+
+- **R-1 — ACCEPTED RESIDUAL (ADR-0122): a SECOND live instance of the ADR-0121
+  trap is now instrumented but NOT fixed.** Stage 2 (weight) `add` sub-screen has
+  no way back to `choose`. An operator re-entering a load whose weight ticket is
+  already on the server and tapping "Add weight" lands on: capture withheld
+  (ADR-0109), "add another" unrendered, Continue held by `!hasPhoto` — which
+  typing a weight cannot satisfy. ADR-0121 recorded stage 2 as safe on the
+  strength of the `choose` screen's None button, which is true only until the
+  operator leaves `choose`. It is armed in `main` today. It now PAGES instead of
+  hiding; the fix is a behaviour change and rides with ADR-0121 §Follow-ups
+  item 2 (server-derived stage selection), which waits for a before-noon window.
+
+- **R-2 — ACCEPTED RESIDUAL (ADR-0122): the obscured fallback topic is a
+  hand-mirrored constant in two repos** — DR3-Vision `src/lib/ntfy.ts` and
+  `~/noc-master/data/ntfy-fallback-topics.yml`. Nothing at runtime notices drift,
+  because the fallback hop only runs when the primary is already down and ntfy.sh
+  answers 200 for any topic name. Both were written in the same change
+  (noc-master `4374402`).
+
+---
+
 ## 0.BF — 2026-08-19 late: the transaction-boundary set (ADRs 0117–0120)
 
 Bill's 2026-08-19 ~10:30 PM PT review of the engineering audit's five criticals

@@ -37,6 +37,13 @@ import {
   type DeadEndState,
   type WriteRefusalKind,
 } from '@/lib/observability/dead-end';
+import {
+  STAGE_IDS,
+  STAGE_CONTROL_IDS,
+  STAGE_DISABLE_REASONS,
+  type StageId,
+} from '@/lib/floor/stage-controls';
+import { publishStageDeadEndAlert } from '@/lib/floor/dead-end-alert';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +59,7 @@ const SURFACES = [
   'processed',
   'dropoff',
   'site_picker',
+  'load_stage',
 ] as const satisfies readonly DeadEndSurface[];
 
 const STATES = [
@@ -64,6 +72,7 @@ const STATES = [
   'queue_unreadable',
   'hold_gone',
   'no_sites',
+  'no_live_controls',
 ] as const satisfies readonly DeadEndState[];
 
 const REFUSALS = ['wrong_day', 'signed_out'] as const satisfies readonly WriteRefusalKind[];
@@ -73,6 +82,34 @@ const OBJECT_ID_MAX = 64;
 
 function isOneOf<T extends string>(vals: readonly T[], v: unknown): v is T {
   return typeof v === 'string' && (vals as readonly string[]).includes(v);
+}
+
+/**
+ * ADR-0122 — the disable-reason snapshot, validated key AND value.
+ *
+ * Both sides come from the closed arrays in `@/lib/floor/stage-controls`, so a
+ * client cannot post prose into the log line. `MAX_REASONS` is a belt-and-braces
+ * cap: the control inventory has 19 entries today, and a payload larger than the
+ * entire vocabulary is a client that is not ours.
+ *
+ * Returns `{}` rather than refusing on a malformed entry. The event itself — a
+ * stage with no live control — is the thing worth having; dropping it because
+ * one key was unrecognised would trade the signal for the diagnostic.
+ */
+const MAX_REASONS = 32;
+
+function parseReasons(raw: unknown): Record<string, string> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (n >= MAX_REASONS) break;
+    if (!isOneOf(STAGE_CONTROL_IDS, k)) continue;
+    if (!isOneOf(STAGE_DISABLE_REASONS, v)) continue;
+    out[k] = v;
+    n++;
+  }
+  return out;
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ site: string }> }) {
@@ -116,6 +153,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
 
     if (!isOneOf(STATES, b['state'])) return new Response(null, { status: 204 });
 
+    // ADR-0122 — `stage` and the disable-reason snapshot ride only on the
+    // `load_stage` surface. Validated against the same closed arrays the browser
+    // derives its types from, so neither can drift from the other.
+    const stage: StageId | undefined = isOneOf(STAGE_IDS, b['stage']) ? b['stage'] : undefined;
+    const disableReasons = parseReasons(b['reasons']);
+
     recordDeadEnd({
       surface: b['surface'],
       state: b['state'],
@@ -124,7 +167,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       userId: ctx.userId,
       role,
       locale,
+      stage,
+      ...(Object.keys(disableReasons).length > 0 ? { disableReasons } : {}),
     });
+
+    // ADR-0122 / ADR-0121 §Follow-ups — the ONE dead-end state that pages.
+    //
+    // `objectId` and `stage` are required for it, not optional: the alert's whole
+    // value is the tier-1 click to the trapped load, and a page whose click lands
+    // on a status dashboard is the tier-3 shape ADR-0036 asks us to avoid. A
+    // report missing either is still counted and logged above — the metric does
+    // not depend on the page.
+    //
+    // AWAITED rather than fired-and-forgotten. `publishNtfy` carries its own
+    // 12-second total budget and never throws, and the 15-minute per-(load,
+    // stage) cooldown means at most one publish per trapped load. A floating
+    // promise here would be a page that races the response — the ADR-0117 shape
+    // (a promise in one process's memory is not a delivery). The client never
+    // reads this response, so the added latency costs the operator nothing.
+    if (b['state'] === 'no_live_controls' && objectId !== null && stage !== undefined) {
+      await publishStageDeadEndAlert({
+        siteCode: ctx.siteCode,
+        loadId: objectId,
+        stage,
+        disableReasons,
+      });
+    }
     return new Response(null, { status: 204 });
   } catch (e) {
     // The auth guards throw a bare `Response`. Pass its STATUS through — a 401

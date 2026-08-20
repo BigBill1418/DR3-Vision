@@ -13,6 +13,7 @@ import { StageDecision } from './stage-decision';
 import { StageStacks } from './stage-stacks';
 import { StageReject } from './stage-reject';
 import { StageFinish } from './stage-finish';
+import { StageLivenessBoundary, type StageId } from './stage-liveness';
 import { VoidLoadPanel } from './void-load-panel';
 import { ReviewPanel, type ReviewStack } from './review-panel';
 
@@ -136,12 +137,14 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
   // things that have to agree about what back means.
   if (load.status === 'unload_started' && showReject) {
     return (
-      <StageReject
-        siteCode={siteCode}
-        loadId={load.id}
-        onCancel={() => setShowReject(false)}
-        photoCount={load.photo_counts.rejection ?? 0}
-      />
+      <StageLivenessBoundary siteCode={siteCode} loadId={load.id} stage="reject">
+        <StageReject
+          siteCode={siteCode}
+          loadId={load.id}
+          onCancel={() => setShowReject(false)}
+          photoCount={load.photo_counts.rejection ?? 0}
+        />
+      </StageLivenessBoundary>
     );
   }
 
@@ -194,7 +197,12 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
     );
   }
 
-  const stage = (() => {
+  // ADR-0122 — the stage NODE and its stage ID are produced by one expression,
+  // so the label the beacon reports can never name a different screen than the
+  // one that rendered. Same reasoning `DeadEndBeacon` gives for living inside the
+  // branch it measures, and `describeConsumedSlot` (ADR-0091) for decisions: put
+  // the thing next to the thing so they cannot disagree.
+  const { id: stageId, node: stageNode } = ((): { id: StageId; node: React.ReactNode } => {
     if (load.status === 'arrived' && !weightSkipped) {
       // BOL captured? We track it via the photo-row presence rather
       // than client state, but for T-006 the simplest thing is to
@@ -205,54 +213,78 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
       //
       // For minimum-tap UX we just chain BOL → weight in a single
       // visual flow with internal client state.
-      return bolDone ? (
-        <StageWeight
-          siteCode={siteCode}
-          loadId={load.id}
-          onSkipped={() => setWeightSkipped(true)}
-          photoCount={load.photo_counts.weight_ticket ?? 0}
-        />
-      ) : (
-        <StageBol
-          siteCode={siteCode}
-          loadId={load.id}
-          onCaptured={() => setBolDone(true)}
-          photoCount={load.photo_counts.bol ?? 0}
-        />
-      );
+      return bolDone
+        ? {
+            id: 'weight',
+            node: (
+              <StageWeight
+                siteCode={siteCode}
+                loadId={load.id}
+                onSkipped={() => setWeightSkipped(true)}
+                photoCount={load.photo_counts.weight_ticket ?? 0}
+              />
+            ),
+          }
+        : {
+            id: 'bol',
+            node: (
+              <StageBol
+                siteCode={siteCode}
+                loadId={load.id}
+                onCaptured={() => setBolDone(true)}
+                photoCount={load.photo_counts.bol ?? 0}
+              />
+            ),
+          };
     }
     if (load.status === 'arrived' || load.status === 'weight_captured') {
-      return (
-        <StageDoor
-          siteCode={siteCode}
-          loadId={load.id}
-          photoCount={load.photo_counts.door_open ?? 0}
-        />
-      );
+      return {
+        id: 'door',
+        node: (
+          <StageDoor
+            siteCode={siteCode}
+            loadId={load.id}
+            photoCount={load.photo_counts.door_open ?? 0}
+          />
+        ),
+      };
     }
     if (load.status === 'unload_started') {
-      return (
-        <StageDecision siteCode={siteCode} loadId={load.id} onReject={() => setShowReject(true)} />
-      );
+      return {
+        id: 'decision',
+        node: (
+          <StageDecision
+            siteCode={siteCode}
+            loadId={load.id}
+            onReject={() => setShowReject(true)}
+          />
+        ),
+      };
     }
     if (load.status === 'in_progress') {
-      return (
-        <StageStacks
+      return {
+        id: 'stacks',
+        node: (
+          <StageStacks
+            siteCode={siteCode}
+            loadId={load.id}
+            unloadStartedAt={load.unload_started_at}
+            existingStacks={load.stacks}
+          />
+        ),
+      };
+    }
+    return {
+      id: 'finish',
+      node: (
+        <StageFinish
           siteCode={siteCode}
           loadId={load.id}
-          unloadStartedAt={load.unload_started_at}
-          existingStacks={load.stacks}
+          operatorName={operatorName}
+          totalUnits={load.total_units}
         />
-      );
-    }
-    return (
-      <StageFinish
-        siteCode={siteCode}
-        loadId={load.id}
-        operatorName={operatorName}
-        totalUnits={load.total_units}
-      />
-    );
+      ),
+    };
   })();
 
   return (
@@ -265,7 +297,11 @@ export function LoadWorkflow({ siteCode, load, operatorName }: Props) {
           review would throw all of it away and drop the operator back at the top
           of the stage — which is a worse dead end than the one this panel exists
           to remove. */}
-      <div hidden={review}>{stage}</div>
+      <div hidden={review}>
+        <StageLivenessBoundary siteCode={siteCode} loadId={load.id} stage={stageId}>
+          {stageNode}
+        </StageLivenessBoundary>
+      </div>
       {review ? (
         <ReviewPanel
           siteCode={siteCode}

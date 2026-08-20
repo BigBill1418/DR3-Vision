@@ -6,6 +6,7 @@ import { useI18n } from '@/i18n/provider';
 import { newIdempotencyKey } from '@/lib/offline-queue';
 import { addConcernAction, submitLoadAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
+import { useLiveControl } from './stage-liveness';
 
 const CONCERN_CATEGORIES: ConcernCategory[] = [
   'damaged',
@@ -39,6 +40,17 @@ export function StageFinish({ siteCode, loadId, operatorName, totalUnits }: Prop
   // is redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, loadId);
   const [error, setError] = useState<string | null>(null);
+
+  // ADR-0122 — Submit is gated only by `isPending`, so this stage is safe by the
+  // same accident stage 4 is. Registered so the detector's denominator is the
+  // whole screen rather than the controls somebody remembered.
+  useLiveControl('finish_add_concern', showConcern ? 'not_rendered' : null);
+  useLiveControl('finish_concern_cancel', showConcern ? null : 'not_rendered');
+  useLiveControl(
+    'finish_concern_save',
+    !showConcern ? 'not_rendered' : isPending ? 'pending' : !category ? 'no_category' : null,
+  );
+  useLiveControl('finish_submit', isPending ? 'pending' : null);
 
   const saveConcern = () => {
     if (!category) return;

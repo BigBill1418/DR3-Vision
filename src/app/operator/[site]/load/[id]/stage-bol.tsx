@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useT } from '@/i18n/provider';
 import { bolCapturedAction } from '../../actions';
 import { PhotoInput } from './photo-input';
+import { useLiveControl, type StageDisableReason } from './stage-liveness';
 
 // Stage 1 — forced BOL photo. Per SPRINT-1-PLAN: "Forced BOL photo
 // (timer does not start)". The Continue button stays disabled until
@@ -26,6 +27,17 @@ export function StageBol({
   const t = useT();
   const [hasFile, setHasFile] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // ADR-0122 — ONE expression, read by both the button and the detector. Written
+  // as a reason chain rather than a boolean so a screen that is merely BUSY
+  // (`pending`) is never mistaken for one that is trapped; truth-equivalent to
+  // the `(!hasFile && photoCount === 0) || isPending` that shipped in #286.
+  const continueReason: StageDisableReason | null = isPending
+    ? 'pending'
+    : !hasFile && photoCount === 0
+      ? 'no_photo'
+      : null;
+  useLiveControl('bol_continue', continueReason);
 
   return (
     <section className="flex flex-col gap-6">
@@ -56,7 +68,7 @@ export function StageBol({
           visit with nothing captured and nothing on the server still refuses. */}
       <button
         type="button"
-        disabled={(!hasFile && photoCount === 0) || isPending}
+        disabled={continueReason !== null}
         onClick={() =>
           startTransition(async () => {
             await bolCapturedAction(siteCode, loadId);
