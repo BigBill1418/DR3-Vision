@@ -9,6 +9,49 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (2:40 AM PT) — HOTFIX: ADR-0120 broke a compile scope nothing runs
+
+**`main` was unbuildable for ~20 minutes and the deploy failed twice.**
+ADR-0120 (#283) added `import { lockSiteAgainstPromotion } from
+'@/lib/audit/promotion-lock'` to `src/lib/mymrc/inbound-bridge.ts`. That file is
+compiled **twice**: by the app's `tsconfig.json`, and again standalone by
+`tsconfig.mymrc.json` so the MyMRC scraper can run as plain compiled JS with no
+Next. The second project sets `rootDir: ./src/lib/mymrc` and defines **no
+`paths`**, so it can resolve neither the `@/` alias nor a relative path to a file
+outside its rootDir.
+
+`tsc --noEmit` was clean. CI's `typecheck · test · build` job was **green**. The
+PR merged. The deploy then failed at `Dockerfile:70`
+(`RUN npx tsc --project tsconfig.mymrc.json`):
+
+```
+error TS2307: Cannot find module '@/lib/audit/promotion-lock'
+Remote docker compose build failed — aborting deploy
+```
+
+**Nothing in CI ran that compile.** Only the image build did, and the image build
+runs after merge — so the gate that could have caught it was on the far side of
+the merge from the change.
+
+Three fixes:
+
+1. **The bridge carries its own copy of the one line.** There is no import that
+   works from both scopes: the alias is unavailable and the target is outside
+   `rootDir`.
+2. **The key is not duplicated on trust.** `promotionLockKey` is exported from
+   the shared helper, and `promotion-lock-key-parity.test.ts` imports the REAL
+   lock function from *both* modules and asserts they emit a byte-identical
+   statement and key. A drifted key is worse than no lock: the two sides would
+   take DIFFERENT advisory locks, serialise against nothing, and look correct.
+   The test also pins `pg_advisory_xact_lock` specifically — a copy that said
+   `pg_advisory_lock` would build the same key and hold it for the whole
+   session, never released, wedging the pool. Falsified by hand:
+   `→ expected [ 'dr3:promo:site-woodland' ] to deeply equal [ 'dr3:promotion:site-woodland' ]`
+3. **CI now runs `npm run build:mymrc`** — the same command the Dockerfile runs
+   — so this class breaks on the PR instead of in the deploy.
+
+*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+
 ## 2026-08-20 (1:35 AM PT) — The scan that could not see the write (ADR-0120)
 
 **A workbook promotion could double-count a month of a site's volume, silently.**

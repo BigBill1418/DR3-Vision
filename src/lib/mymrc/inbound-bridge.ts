@@ -68,8 +68,7 @@
 // POSITIONAL parameters (injection-safe — the SQL text is a constant, every value bound).
 
 import { randomUUID } from 'node:crypto';
-import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 
 export type BridgeLogger = (level: 'info' | 'warn' | 'error', message: string) => void;
 
@@ -262,6 +261,35 @@ RETURNING id, (xmax = 0) AS inserted
  * writes an operational table other than `inbound_loads`; never touches a paper_bulk /
  * manager row.
  */
+/**
+ * ADR-0120 — the workbook-promotion site lock, carried locally.
+ *
+ * This file is compiled TWICE: by the app's `tsconfig.json` (which has the
+ * `@/*` path alias) and, standalone, by `tsconfig.mymrc.json` so the MyMRC
+ * scraper can run as plain compiled JS with no Next. That second project sets
+ * `rootDir: ./src/lib/mymrc` and defines no `paths`, so it can resolve NEITHER
+ * `@/lib/audit/promotion-lock` NOR a relative path to it (the target is outside
+ * its rootDir). Importing the shared helper here breaks `npm run build:mymrc`
+ * and therefore the Docker build — which is exactly what it did on 2026-08-20,
+ * after `tsc --noEmit` and CI both passed, because neither runs that project.
+ *
+ * So the one line is duplicated. The KEY is not: it comes from
+ * `promotionLockKey` in the shared helper, and
+ * `promotion-lock-key-parity.test.ts` asserts this copy produces the identical
+ * string. A drifted key would take a DIFFERENT lock and serialise against
+ * nothing while looking perfectly correct.
+ */
+function promotionLockKeyLocal(siteId: string): string {
+  return `dr3:promotion:${siteId}`;
+}
+
+export async function lockSiteAgainstPromotion(
+  tx: Prisma.TransactionClient,
+  siteId: string,
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${promotionLockKeyLocal(siteId)})::bigint)`;
+}
+
 export async function bridgeInboundHaulsToInventory(
   ctx: InboundBridgeContext,
 ): Promise<InboundBridgeResult> {
