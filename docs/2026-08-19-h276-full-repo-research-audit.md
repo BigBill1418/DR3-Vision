@@ -793,6 +793,52 @@ accident, with nothing holding it true.*
   disabled test, zero `.only` leaks**, which is a credit. But the 11 real-DB files hold 81 cases
   (**1.5%**) and skip entirely in default `npm test`.
 
+### F-V — the coverage gap, partly closed: the drift is *behavioural*, not nominal
+
+The sweep lane returned to the ADR 0001–0080 gap and, rather than claim to have read 80 ADR
+bodies, ran two scripted integrity checks over the whole corpus. Both came back **far cleaner**
+than the headline findings suggested, and the result reshapes the diagnosis.
+
+- **Test-citation integrity: 110 of 111 resolve.** Every `*.test.ts` / `*.test.tsx` named
+  anywhere in `docs/adr/` exists on disk. The single exception: `docs/adr/0085:107` cites
+  `service.money-minting.test.ts`; the real path is `src/lib/dropoffs/money-minting.test.ts`.
+  **So the "enforced by test X" class of claim — one of this audit's stated priorities — is
+  sound corpus-wide.**
+- **Identifier integrity: 645 backticked snake_case tokens across ADRs 0001–0079, 8 phantoms,
+  5 of which turned out to be correct usage** — four CHECK constraints that do exist in
+  migration SQL (ADR-0068 / ADR-0046 hold), and three that are properly-labelled *rejected
+  alternatives* (`doc_ingest_oauth_states`, `session_version`, `verified_by_user_id`).
+  `inbound_load_corrections` (ADR-0073) is genuinely unimplemented and the ADR honestly says
+  so — though it has now sat "design only" for three weeks.
+- **Genuine minor drift found:** `docs/adr/0047:20,39` names a **`notification_surfaces`**
+  registry and **`ui_surfaces`** rows; neither table exists — the concept shipped as **one
+  `rollout_surfaces` table with a `kind` discriminator**. *(Independently corroborated by my own
+  production query in F-S, which reads `kind='ui'`.)* Also `docs/adr/0063:115` describes a
+  `site_locked_by_links` 409 refusal with **zero hits** in `src/`, and `docs/adr/0042:56` calls a
+  config value `cor_signer_title` when the real field is `signer_title`/`signerTitle`.
+
+**The reshaped conclusion, and it is the most useful sentence in Part 3:**
+
+> The repo already has machinery that keeps **names** honest — `check-adr-citations.mjs`,
+> `PROMISES.md`, the guard tests — and it demonstrably works. What has **no guard** is the prose
+> describing **mechanism**, and that is precisely where every high-severity finding landed.
+
+Every S1 in Part 3 is a *behavioural* claim no grep can falsify: ADR-0007's middleware that
+does not exist · ADR-0005's inverted photo flow, absent EXIF strip and absent retention purge ·
+ADR-0013's `deploy/` path and missing `r2_ok` · ADR-0030's removed on-save path ·
+ADR-0052's never-wired rollout gate · ADR-0054's absent PR-template control · the four-writer
+ledger · the three wrong cron comments.
+
+That is a sharper diagnosis than "the docs have drifted", and it points at a different fix:
+extending the citation gate (A-5) catches the *nominal* class, which is already the healthy one.
+**Catching the behavioural class needs a different instrument** — most plausibly, requiring every
+ADR that asserts a mechanism to name the test or assertion that pins it, and failing CI when an
+ADR claims an invariant with nothing pointing at it.
+
+*Residual, stated plainly:* ADR **bodies** 0001–0080 remain unread end-to-end. The two scripted
+checks bound the risk on named artifacts, but a behavioural claim of ADR-0007's severity could
+still be sitting in an ADR nobody opened — that is exactly the class the scripts cannot see.
+
 ### F-U — additional VERIFIED OK (from both lanes)
 
 Adding to the V-list in F-F — these were checked and hold:
@@ -822,7 +868,7 @@ Adding to the V-list in F-F — these were checked and hold:
 | A-2 | Add a verify-gate guard: refuse (or reconcile) verification when a `mymrc_haul` aggregate already covers that load's Pacific day. Needs a test with a **real** Prisma client, not a fake. | F-A |
 | A-3 | **Annotate the `.map()` callback return type on every Prisma `createMany`/`createManyAndReturn` in the repo.** Empirically proven to catch the exact bug class that shipped 2026-07-06, at compile time, with no test rewrite. Highest leverage per line changed. | F-L |
 | A-4 | Fix the three `docker-compose.yml` cron comments (17:30→07:00+1d, 17:00→20:00, 06:00/Mon-Sun/Monday/DISABLED→20:00/Mon-Fri/Friday/live) and `prisma/schema.prisma:969` (`CA: 75` → `74`). Pure documentation, zero risk, prevents an operator watching the wrong clock. | F-O, F-P |
-| A-5 | Point `scripts/check-adr-citations.mjs` at `docs/**/*.md` and add fleet-vs-local handling for ADR-0036/0037. Turns ~15 dangling citations and the biggest collision in the corpus into CI failures instead of audit findings. | F-Q |
+| A-5 | Point `scripts/check-adr-citations.mjs` at `docs/**/*.md` and add fleet-vs-local handling for ADR-0036/0037. Turns the verified dangling citations and the biggest collision in the corpus into CI failures instead of audit findings. **But note F-V: the nominal class is already the healthy one** — this is cheap insurance, not the main event. | F-Q, F-V |
 | A-6 | Correct the `processed_units_daily` "one writer" claim at its ~20 sites — and make the correction say **four**, not three. Start with `CHANGELOG.md:820`, `README.md:53`, `prisma/schema.prisma:1539`. | F-I |
 | A-7 | Add `r2_ok` to `/healthz` (a bucket HEAD), per ADR-0013:92 — or amend the ADR and `FLEET-DEPLOYMENT.md:155`, which currently advertise a field that does not exist. | F-R |
 | A-8 | Give `roundCents` a fractional test case; add the `rollout_surfaces` rows as a migration and put a real log line in `rollout.ts:192`. | F-M, F-S |
@@ -841,6 +887,7 @@ Adding to the V-list in F-F — these were checked and hold:
 | B-7 | **ADR-0007: build the Prisma middleware, or amend the ADR to describe the opt-in reality and name which tables must be audited.** The audit table is described in CLAUDE.md as legally load-bearing; today ~72% of mutations write no row, and the ADR tells builders otherwise. | F-G |
 | B-8 | **Photo compliance: are EXIF/GPS stripping and the retention purge obligations or aspirations?** Both are documented as shipped; neither exists, and the direct-PUT architecture makes server-side stripping impossible without re-architecting. This is a contractual question, not a code question. | F-H |
 | B-9 | **Resolve `CLAUDE.md:43`.** Either delete the `npx playwright test` clause and the dead `e2e` script (honest — the repo has no E2E strategy), or add a config that scopes Playwright away from `src/`. A mandated gate that cannot run is worse than no gate. | F-J |
+| B-10 | **The structural question this audit raises: how do we guard *behavioural* ADR claims?** F-V shows the repo's name-level machinery works and the drift is entirely in prose describing mechanism — which is where every S1 landed. Candidate: require an ADR asserting an invariant to name the test that pins it, and fail CI on an unpinned assertion. This is a convention change, not a patch. | F-V |
 
 ### Roadmap
 
