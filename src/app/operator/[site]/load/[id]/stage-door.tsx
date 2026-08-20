@@ -37,9 +37,18 @@ export function StageDoor({
         onCaptured={() => setHasFile(true)}
         initialCount={photoCount}
       />
+      {/* ADR-0121 — same gate as `stage-bol.tsx`, and armed for the same reason.
+          This stage was not the one that trapped the floor on 2026-08-20 only
+          because `stage-stacks` had not been reached yet; the shape is
+          identical. A door-open photo does not move `load.status` off
+          `unload_started` on its own, so a reload or a takeover returns here
+          with the photo on the server and `hasFile` false — capture disabled,
+          "add another" absent, and this button dead. Fixed in the same change
+          rather than left to be rediscovered by an operator standing at a
+          truck. (Stage 2, weight, escapes via its own "None" button.) */}
       <button
         type="button"
-        disabled={!hasFile || isPending}
+        disabled={(!hasFile && photoCount === 0) || isPending}
         onClick={() =>
           startTransition(async () => {
             await doorOpenCapturedAction(siteCode, loadId);
