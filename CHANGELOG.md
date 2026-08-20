@@ -9,6 +9,53 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (11:40 PM PT) — Releasing a held count is one transaction (ADR-0118)
+
+**One counted event could produce two anchors.** ADR-0072 deliberately built two
+ways to release a Tier-2 held count — a manager's PIN on the device, and the
+manager's own screen remotely. `releaseHold` checked `status === 'pending'` with
+a read, then wrote the anchor, then stamped the hold, then wrote the audit row —
+four sequential writes on the shared client, none of them guarded by that check.
+Two managers releasing the same hold both passed the read and both called
+`reconcilePhysicalCount`, so both wrote a `physical` snapshot. Per ADR-0078 D1's
+`created_at DESC` tiebreak the second one silently becomes the floor's inventory
+anchor, with the hold recording only one of them. The same shape also allowed an
+anchor to commit while the stamp or the audit row failed — a live anchor,
+unattributable, with the hold still `pending` so the count could be released
+again.
+
+The release is now ONE transaction with the `pending`-guarded `updateMany`
+first, in the order `correct-count.ts` `applyCorrection` documents: if the gate
+matches nothing we abort before writing anything at all, so the two-anchor state
+never exists even transiently. The anchor is then written with `tx` — the seam
+ADR-0078 added to `reconcilePhysicalCount` for exactly this — followed by the
+snapshot link and the audit row, all in the same commit.
+
+**The anti-laundering audit row now commits with the re-anchor it describes.**
+`POST /api/admin/inventory/anchors/reactivate` is the one action in the app that
+moves the whole floor without counting anything: it copies a prior count's
+figures forward into a new live anchor. Its `anchor_reactivation` audit row is
+the *only* thing distinguishing that from a count somebody took, and it was
+written on the shared client after the snapshot had already committed. A failure
+between the two left a brand-new live anchor with no trace of where its numbers
+came from — indistinguishable from a physical count that never happened, which
+is precisely the laundering the ADR-0084 voided-source refusal three lines above
+exists to prevent, arriving through the back door.
+
+Proven against a real Postgres, both directions. Reverting `releaseHold` to the
+pre-fix sequence makes both racers succeed:
+`expected [ … ] to have a length of 1 but got 2`. Dropping the `tx` argument —
+the exact pre-fix shape of the reactivation route — leaves the snapshot standing
+after its enclosing transaction throws: `expected 1 to be +0`.
+
+- `src/lib/inventory/anchor-holds.ts` — `releaseHold` single transaction, CAS first.
+- `src/app/api/admin/inventory/anchors/reactivate/route.ts` — re-anchor + audit atomic.
+- `src/lib/inventory/anchor-holds.db.test.ts` — two real-Postgres cases.
+- `docs/adr/0118-a-decision-and-its-record-commit-together.md` — the rule, covering
+  this PR and the three siblings in the same set.
+
+*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+
 ## 2026-08-19 (11:05 PM PT) — A promise is not a queue (ADR-0117)
 
 **The payroll delivery lived in one process's memory, and nothing re-drove it.**

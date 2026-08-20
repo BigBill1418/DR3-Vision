@@ -32,6 +32,15 @@ floor is closed overnight.
   behaviour was unbounded and invisible, and shortening it is a schedule change
   (a more frequent sweep), not a code change. Revisit only if a real loss is ever
   observed to have cost a payroll day.
+- **R-3 — ACCEPTED RESIDUAL (ADR-0118): two read-side races are narrowed, not
+  closed.** `releaseHold` still recomputes the ADR-0072 swing classification
+  BEFORE its transaction, so an anchor landing in between is classified against
+  the older baseline; and `reconcilePhysicalCount`'s `onHand` read stays outside
+  any caller transaction for the reason documented at
+  `running-balance.ts:511-517`. Both are read-side and wider than ADR-0118's
+  subject — pulling a six-table aggregate into every caller's transaction changes
+  the lock footprint of every count on the floor, which deserves its own evidence
+  and its own PR.
 - **R-2 — ACCEPTED RESIDUAL (ADR-0117): a gate-blocked period re-pages daily.**
   A signed period that a refusal gate (reconciliation, suspected-wrong-$0,
   unconfigured R2) keeps blocking is re-driven by every sweep and pages each

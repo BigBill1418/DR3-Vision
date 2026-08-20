@@ -78,35 +78,58 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
-    const result = await reconcilePhysicalCount({
-      siteId: restoreFrom.site_id,
-      countedAt: pacificMidnightInstantOfDayISO(pacificDayISO(new Date())),
-      physical: {
-        units_indoor: restoreFrom.units_indoor,
-        units_total: restoreFrom.units_total,
-        units_in_processing: restoreFrom.units_in_processing,
-      },
-      programUnits: restoreFrom.program_units === null ? null : Number(restoreFrom.program_units),
-      nonProgramUnits:
-        restoreFrom.non_program_units === null ? null : Number(restoreFrom.non_program_units),
-      poolAttribution: restoreFrom.pool_attribution === 'legacy' ? 'legacy' : 'measured',
-      actorUserId: gate.ctx.userId,
-    });
-
-    await prisma.auditLog.create({
-      data: {
-        actor_user_id: gate.ctx.userId,
-        action: 'insert',
-        table_name: 'site_inventory_snapshots',
-        row_id: result.snapshotId,
-        after: {
-          anchor_reactivation: true,
-          restored_from_snapshot_id: restoreFrom.id,
-          reason: parsed.data.reason,
-          physical_total: result.physicalTotal,
-          reconciled_delta: result.reconciledDelta,
+    // ── ADR-0118 — the re-anchor and its anti-laundering audit row commit
+    // together, or neither does.
+    //
+    // This route is the one action in the app that moves the whole floor
+    // without counting anything: it copies a prior count's figures forward into
+    // a new live anchor. The `anchor_reactivation` audit row is not decoration
+    // — it is the ONLY record distinguishing that from a count somebody took.
+    // Written on the shared client after the snapshot had already committed, a
+    // failure between the two (a dropped connection, a container recreate mid-
+    // request) left a brand-new live anchor with no trace of where its numbers
+    // came from. That is indistinguishable, to every downstream reader and to
+    // any later audit, from a physical count that was never performed — which
+    // is precisely the laundering the ADR-0084 voided-source refusal above
+    // exists to prevent, arriving through the back door.
+    //
+    // `reconcilePhysicalCount` accepts an open transaction (ADR-0078); passing
+    // `tx` puts the snapshot, its own insert audit row, and this reactivation
+    // row in one commit.
+    const result = await prisma.$transaction(async (tx) => {
+      const r = await reconcilePhysicalCount({
+        siteId: restoreFrom.site_id,
+        countedAt: pacificMidnightInstantOfDayISO(pacificDayISO(new Date())),
+        physical: {
+          units_indoor: restoreFrom.units_indoor,
+          units_total: restoreFrom.units_total,
+          units_in_processing: restoreFrom.units_in_processing,
         },
-      },
+        programUnits: restoreFrom.program_units === null ? null : Number(restoreFrom.program_units),
+        nonProgramUnits:
+          restoreFrom.non_program_units === null ? null : Number(restoreFrom.non_program_units),
+        poolAttribution: restoreFrom.pool_attribution === 'legacy' ? 'legacy' : 'measured',
+        actorUserId: gate.ctx.userId,
+        tx,
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actor_user_id: gate.ctx.userId,
+          action: 'insert',
+          table_name: 'site_inventory_snapshots',
+          row_id: r.snapshotId,
+          after: {
+            anchor_reactivation: true,
+            restored_from_snapshot_id: restoreFrom.id,
+            reason: parsed.data.reason,
+            physical_total: r.physicalTotal,
+            reconciled_delta: r.reconciledDelta,
+          },
+        },
+      });
+
+      return r;
     });
 
     log.warn(

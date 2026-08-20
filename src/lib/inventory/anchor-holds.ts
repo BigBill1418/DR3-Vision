@@ -184,55 +184,105 @@ export async function releaseHold(
   const newTotal = (hold.units_total ?? hold.units_indoor ?? 0) + hold.units_in_processing;
   const classification = classifyAnchorWrite({ prior, newTotal, thresholdPct });
 
-  const result = await reconcilePhysicalCount({
-    siteId: hold.site_id,
-    countedAt: pacificMidnightInstantOfDayISO(pacificDayISO(new Date())),
-    physical: {
-      units_indoor: hold.units_indoor,
-      units_total: hold.units_total,
-      units_in_processing: hold.units_in_processing,
-    },
-    programUnits: hold.program_units === null ? null : Number(hold.program_units),
-    nonProgramUnits: hold.non_program_units === null ? null : Number(hold.non_program_units),
-    poolAttribution: hold.pool_attribution === 'legacy' ? 'legacy' : 'measured',
-    actorUserId: args.approverUserId,
-  });
-
-  const snapshotId = result.snapshotId;
-
-  await db.inventoryCountHold.update({
-    where: { id: hold.id },
-    data: {
-      status: 'approved',
-      approved_by: args.approverUserId,
-      approved_at: new Date(),
-      approval_path: args.path,
-      resulting_snapshot_id: snapshotId,
-    },
-  });
-
-  await db.auditLog.create({
-    data: {
-      actor_user_id: args.approverUserId,
-      action: 'update',
-      table_name: 'inventory_count_holds',
-      row_id: hold.id,
-      after: {
-        released: true,
+  // ── ADR-0118 — the release is ONE transaction, and the CAS runs first ───────
+  //
+  // What this replaces: four sequential writes on the shared client — write the
+  // anchor, stamp the hold `approved`, write the audit row — each able to
+  // commit while a later one failed, and none of them guarded by the `pending`
+  // check made twenty lines above on a row that could change underneath it.
+  //
+  // Two failures it made reachable, both silent:
+  //
+  //   1. TWO ANCHORS FROM ONE HOLD. Two managers releasing the same held count
+  //      — the on-device PIN path and the remote screen, which is exactly the
+  //      pair ADR-0072 built — both read `status === 'pending'`, both called
+  //      `reconcilePhysicalCount`, and both wrote a `physical` snapshot. The
+  //      second one becomes the anchor (`created_at DESC`, ADR-0078 D1). One
+  //      counted event, two anchors, and the hold recording only one of them.
+  //   2. AN ANCHOR WITH NO AUDIT ROW. The snapshot committed; a failure in the
+  //      stamp or the audit write left it standing, unattributable, with the
+  //      hold still `pending` — so the count could be released AGAIN.
+  //
+  // The order is deliberate and matches `correct-count.ts` `applyCorrection`:
+  // the guarded `updateMany` is FIRST and is the concurrency gate. If it matches
+  // nothing, somebody else released this hold between our read and here and we
+  // abort before writing anything at all — no snapshot, no audit row, no partial
+  // release. Only then is the anchor written, on this same transaction.
+  const now = new Date();
+  const snapshotId = await db.$transaction(async (tx) => {
+    const { count } = await tx.inventoryCountHold.updateMany({
+      where: { id: hold.id, status: 'pending' },
+      data: {
+        status: 'approved',
+        approved_by: args.approverUserId,
+        approved_at: now,
         approval_path: args.path,
-        approver_user_id: args.approverUserId,
-        operator_user_id: hold.created_by,
-        // The swing AS WRITTEN, which may differ from the one that caused the
-        // hold if the anchor moved in between.
-        prior_snapshot_id: classification.prior?.id ?? null,
-        prior_total: classification.prior?.total ?? null,
-        new_total: classification.newTotal,
-        swing_pct: classification.swingPct,
-        threshold_pct: classification.thresholdPct,
-        tier: classification.tier,
-        resulting_snapshot_id: snapshotId,
       },
-    },
+    });
+    if (count === 0) {
+      // Report the state that actually won, the way the pre-transaction check
+      // above does, rather than a bare "conflict" the route cannot translate.
+      const row = await tx.inventoryCountHold.findUniqueOrThrow({
+        where: { id: hold.id },
+        select: { status: true },
+      });
+      throw new HoldNotPendingError(`hold_${row.status}`);
+    }
+
+    // ADR-0078 — `reconcilePhysicalCount` takes an OPEN transaction and writes
+    // the snapshot and its audit row on it (`running-balance.ts`). Passing `tx`
+    // is what binds the anchor to the release: neither can now exist without
+    // the other.
+    const result = await reconcilePhysicalCount({
+      siteId: hold.site_id,
+      countedAt: pacificMidnightInstantOfDayISO(pacificDayISO(new Date())),
+      physical: {
+        units_indoor: hold.units_indoor,
+        units_total: hold.units_total,
+        units_in_processing: hold.units_in_processing,
+      },
+      programUnits: hold.program_units === null ? null : Number(hold.program_units),
+      nonProgramUnits: hold.non_program_units === null ? null : Number(hold.non_program_units),
+      poolAttribution: hold.pool_attribution === 'legacy' ? 'legacy' : 'measured',
+      actorUserId: args.approverUserId,
+      tx,
+    });
+
+    // Written second because the snapshot id does not exist until the line
+    // above. Same transaction, so a hold can never be `approved` while pointing
+    // at nothing.
+    await tx.inventoryCountHold.update({
+      where: { id: hold.id },
+      data: { resulting_snapshot_id: result.snapshotId },
+    });
+
+    // CLAUDE.md hard rule #6 — the audit row commits with the release it
+    // describes, or neither does.
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: args.approverUserId,
+        action: 'update',
+        table_name: 'inventory_count_holds',
+        row_id: hold.id,
+        after: {
+          released: true,
+          approval_path: args.path,
+          approver_user_id: args.approverUserId,
+          operator_user_id: hold.created_by,
+          // The swing AS WRITTEN, which may differ from the one that caused the
+          // hold if the anchor moved in between.
+          prior_snapshot_id: classification.prior?.id ?? null,
+          prior_total: classification.prior?.total ?? null,
+          new_total: classification.newTotal,
+          swing_pct: classification.swingPct,
+          threshold_pct: classification.thresholdPct,
+          tier: classification.tier,
+          resulting_snapshot_id: result.snapshotId,
+        },
+      },
+    });
+
+    return result.snapshotId;
   });
 
   return { snapshotId, classification };
