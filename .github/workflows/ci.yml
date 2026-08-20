@@ -72,6 +72,24 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      # ── Prisma write-payload keys (ADR-0115) ─────────────────────────────
+      # Placed immediately after `prisma generate` because it reads the model
+      # field sets out of the generated client, and BEFORE the typecheck
+      # because the typecheck cannot catch this class at all.
+      #
+      # The class it catches: `workbook-promotion.ts` passed `source: 'import'`
+      # to `inboundLoad.createMany`. `InboundLoad.source` is the `Source?`
+      # RELATION, not a `RecordSource` column, so it is not a member of
+      # `InboundLoadCreateManyInput`. Prisma rejects an unknown argument at
+      # VALIDATION time — before the query is sent — aborting the enclosing
+      # `$transaction`, so no promoted row of any kind landed. It survived from
+      # 2026-07-06 to 2026-08-19 because `tsc --noEmit` exits 0 on it (Prisma's
+      # `SelectSubset` drops excess-property checking on the nested `data`
+      # payload) and both promotion suites inject fake clients that accept any
+      # payload.
+      - name: Prisma write-payload key gate (hard gate)
+        run: node scripts/check-prisma-write-keys.mjs
+
       - name: Typecheck (tsc --noEmit) — the payroll Decimal type-lie gate
         run: npm run typecheck
 
