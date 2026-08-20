@@ -9,6 +9,68 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-20 (12:55 AM PT) — The bridge kept overwriting the office (ADR-0119)
+
+**A human correction to a processed-units day did not survive the next MyMRC
+scrape.** `processed_units_daily` has two authors — the office by hand, and the
+MyMRC bridge from the portal — and ADR-0058 D2 arbitrated between them with a
+precedence guard inside the bridge's own SQL:
+`… DO UPDATE … WHERE processed_units_daily.source = 'mymrc'`. That clause **is**
+the ownership mechanism, and it is correct.
+
+The correction path never set the column it keys on. `upsertProcessedUnits`
+passed `source: 'manual'` in its `create` payload only; the `update` payload
+omitted it. So: the bridge creates the day at 900 units; the office corrects it
+to 1,234; the row still says `source = 'mymrc'`; the next tick finds a row it
+believes it owns and puts 900 back. No error, no audit row — and
+`stripped_program` is the **billing basis** P2 invoices MRC on, so the office's
+correction vanished out of an invoice input with nothing to notice it but
+looking at the number again. `workbook-sync/upsert.ts:150` already set `source`
+on its update path for exactly this reason; this was drift from a rule the
+codebase had.
+
+**And the closed-day refusal was a read, not a guard.** A `findUnique` for
+`closed_at` on the shared client, outside the transaction, followed by an
+unguarded `upsert` that never re-checked. `closeProcessedUnitsDay` is a separate
+action on the same surface, and closing is what freezes the day as the billing
+and inventory basis — so a close landing in between let the write overwrite a
+closed day's figures and report success. That is the in-place post-close edit the
+refusal two lines above it forbids, arriving through the window between them.
+
+Both are fixed by putting the condition on the statement: the Prisma `upsert`
+becomes the bridge's own `ON CONFLICT … DO UPDATE … WHERE closed_at IS NULL`,
+copied rather than reinvented, with `(xmax = 0) AS inserted` distinguishing the
+insert path so the audit row is labelled correctly, and `source = 'manual'` in
+the SET list. Zero rows back means the day is closed; the typed 409 is raised
+inside the transaction so nothing else lands.
+
+Proven against a real Postgres, and the ownership test does not stop at "the
+column now says manual" — it **runs the real bridge afterwards** and asserts the
+human's number survived. Restoring the pre-fix shape:
+
+```
+→ the correction must claim the row: expected 'mymrc' to be 'manual'
+→ the human's correction must survive the next MyMRC tick: expected '900' to be '1234'
+→ a close committing mid-write must still refuse the correction:
+    promise resolved "{ …(15) }" instead of rejecting
+```
+
+The closed-day test forces the real interleaving rather than merely closing
+first (which the pre-fix code also refuses, and which would therefore prove
+nothing): a second client holds an uncommitted `UPDATE` on the row, the
+correction blocks on that lock, and the test waits on `pg_locks` /
+`pg_stat_activity` — not on a `setTimeout` — before releasing it.
+
+- `src/lib/loads/processed-units.ts` — guarded raw upsert, ownership handoff.
+- `src/lib/loads/processed-units.db.test.ts` — three real-Postgres cases.
+- `docs/adr/0119-a-correction-takes-ownership.md`
+
+**Intended consequence:** a corrected day no longer receives portal updates at
+all. If the portal later publishes a better number for one, a human must apply
+it — the right escalation for a billing input.
+
+*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+
 ## 2026-08-20 (12:20 AM PT) — Two managers, one load, two DR3 numbers (ADR-0118)
 
 **The comment said a DR3 number could never be double-assigned. Neither half of

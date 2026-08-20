@@ -15,6 +15,7 @@
 //
 // Every mutation writes its audit row in the SAME transaction (hard rule #6).
 
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { onHand } from '@/lib/inventory/running-balance';
@@ -168,53 +169,107 @@ export async function upsertProcessedUnits(args: {
   assertOptionalCount('pocketcoil_estimate', args.pocketcoilEstimate);
   const day = productionDateUTC(args.productionDate);
 
-  const existing = await prisma.processedUnitsDaily.findUnique({
-    where: { site_id_production_date: { site_id: args.siteId, production_date: day } },
-    select: { id: true, closed_at: true },
-  });
-  if (existing?.closed_at) {
-    throw new ProcessedUnitsError(
-      'closed',
-      `processed-units day ${day.toISOString().slice(0, 10)} is closed — corrections follow the amendment path, not in-place edits`,
-      409,
-    );
-  }
+  // ── ADR-0119 — the closed-day check is a GUARD, not a prior read ────────────
+  //
+  // This used to be a `findUnique` for `closed_at` on the shared client,
+  // followed — outside its transaction, and then inside a transaction that did
+  // not re-check — by an UNGUARDED `upsert`. Between the two, the office can
+  // close the day: `closeProcessedUnitsDay` is a separate action on the same
+  // surface, and closing is what freezes the day as the billing and inventory
+  // basis (its negative-balance guard exists precisely because closing locks
+  // numbers in). The upsert then overwrote a closed day's stripped figures
+  // silently and reported success, which is exactly the in-place post-close
+  // edit the refusal above exists to forbid, and which ADR-0028's amendment
+  // discipline says must never happen.
+  //
+  // The condition now rides ON the statement. Copied from the MyMRC bridge's
+  // `UPSERT_SQL` (`mymrc/processed-bridge.ts`) rather than reinvented — the
+  // same `ON CONFLICT … DO UPDATE … WHERE`, and the same `(xmax = 0)` trick to
+  // tell the INSERT path (xmax = 0) from the ON-CONFLICT-UPDATE path. Zero rows
+  // back means a row existed and the WHERE refused it, i.e. the day is closed.
+  //
+  // Prisma's fluent `upsert` cannot express this: its `where` selects the row to
+  // update, it is not a condition the update must satisfy, so there is no way to
+  // say "update only if still open" without the read this replaces.
+  //
+  // ── ADR-0119 — a manual correction TAKES OWNERSHIP of the row ───────────────
+  //
+  // `source = 'manual'` is set on the UPDATE path, not only on insert. The MyMRC
+  // bridge's own upsert is precedence-guarded by `WHERE … source = 'mymrc'`, so
+  // it declines to touch a manual row — that guard is the whole ownership
+  // mechanism, and it keys on a column the correction never used to set. A human
+  // correcting a day the bridge had created left `source = 'mymrc'` in place, so
+  // the very next scrape tick found a row it still believed it owned and
+  // overwrote the correction with the portal's figures. The human's number
+  // vanished with no error and no audit row, and the office had no way to tell
+  // except by looking again. `workbook-sync/upsert.ts:150` sets `source` on its
+  // update path for this reason; this is the same rule.
+  const id = randomUUID();
+  const upserted = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ id: string; inserted: boolean }[]>(Prisma.sql`
+      INSERT INTO "processed_units_daily"
+        ("id", "site_id", "production_date", "stripped_program", "stripped_non_program",
+         "saved_units", "material_ticket_number", "employees_count", "processors_count",
+         "pocketcoil_estimate", "entered_by", "notes", "source", "created_at", "updated_at")
+      VALUES
+        (${id}, ${args.siteId}, ${day}::date,
+         ${new Prisma.Decimal(args.strippedProgram)}::numeric,
+         ${new Prisma.Decimal(args.strippedNonProgram)}::numeric,
+         ${args.savedUnits != null ? new Prisma.Decimal(args.savedUnits) : null}::numeric,
+         ${args.materialTicketNumber ?? null}, ${args.employeesCount ?? null},
+         ${args.processorsCount ?? null}, ${args.pocketcoilEstimate ?? null},
+         ${args.actorUserId}, ${args.notes ?? null}, 'manual', now(), now())
+      ON CONFLICT ("site_id", "production_date") DO UPDATE
+        SET "stripped_program"       = EXCLUDED."stripped_program",
+            "stripped_non_program"   = EXCLUDED."stripped_non_program",
+            "saved_units"            = EXCLUDED."saved_units",
+            "material_ticket_number" = EXCLUDED."material_ticket_number",
+            "employees_count"        = EXCLUDED."employees_count",
+            "processors_count"       = EXCLUDED."processors_count",
+            "pocketcoil_estimate"    = EXCLUDED."pocketcoil_estimate",
+            "entered_by"             = EXCLUDED."entered_by",
+            "notes"                  = EXCLUDED."notes",
+            -- The ownership handoff. See the note above.
+            "source"                 = 'manual',
+            "updated_at"             = now()
+        WHERE "processed_units_daily"."closed_at" IS NULL
+      RETURNING "id", (xmax = 0) AS "inserted"
+    `);
 
-  const data = {
-    stripped_program: new Prisma.Decimal(args.strippedProgram),
-    stripped_non_program: new Prisma.Decimal(args.strippedNonProgram),
-    saved_units: args.savedUnits != null ? new Prisma.Decimal(args.savedUnits) : null,
-    material_ticket_number: args.materialTicketNumber ?? null,
-    employees_count: args.employeesCount ?? null,
-    processors_count: args.processorsCount ?? null,
-    pocketcoil_estimate: args.pocketcoilEstimate ?? null,
-    entered_by: args.actorUserId,
-    notes: args.notes ?? null,
-  };
+    const hit = rows[0];
+    if (!hit) {
+      throw new ProcessedUnitsError(
+        'closed',
+        `processed-units day ${day.toISOString().slice(0, 10)} is closed — corrections follow the amendment path, not in-place edits`,
+        409,
+      );
+    }
 
-  const row = await prisma.$transaction(async (tx) => {
-    const upserted = await tx.processedUnitsDaily.upsert({
-      where: { site_id_production_date: { site_id: args.siteId, production_date: day } },
-      create: { site_id: args.siteId, production_date: day, source: 'manual', ...data },
-      update: data,
-    });
     await tx.auditLog.create({
       data: {
         actor_user_id: args.actorUserId,
-        action: existing ? 'update' : 'insert',
+        action: hit.inserted ? 'insert' : 'update',
         table_name: 'processed_units_daily',
-        row_id: upserted.id,
+        row_id: hit.id,
         after: {
           production_date: day.toISOString().slice(0, 10),
           stripped_program: args.strippedProgram,
           stripped_non_program: args.strippedNonProgram,
+          // Recorded because it is a state change in its own right: this row is
+          // now human-owned and the MyMRC bridge will decline to touch it.
+          source: 'manual',
         },
       },
     });
-    return upserted;
+
+    // Re-read on the SAME transaction to build the view. The RETURNING clause
+    // deliberately carries only what the guard needs — every other column is
+    // read back from the row that actually landed, so the view can never
+    // describe a write that did not commit.
+    return tx.processedUnitsDaily.findUniqueOrThrow({ where: { id: hit.id } });
   });
   const derived = await deriveDailyOutflow(args.siteId, day);
-  return toView(row, derived);
+  return toView(upserted, derived);
 }
 
 /**
