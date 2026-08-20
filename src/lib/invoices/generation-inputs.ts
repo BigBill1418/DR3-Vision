@@ -282,6 +282,66 @@ export async function resolveTransportationInputs(args: {
     orderBy: { arrived_at: 'asc' },
   });
 
+  // ADR-0115 (F-4) — a ZERO-ROW result here is the one outcome this function
+  // cannot otherwise report. Every per-load problem below fails LOUD, but if
+  // `loads` is empty the loop simply never runs: no freight legs, no fuel legs,
+  // no error. The whole CA inbound freight + fuel-surcharge leg then generates
+  // as structurally empty and nothing says so.
+  //
+  // That is not hypothetical. `transport_charged` has no writer anywhere in the
+  // codebase — it is DDL-default `false` on all 743 prod rows, read at
+  // `:272` here and at `leg-fetchers.ts:105` and written nowhere — so this
+  // filter has always matched zero rows.
+  //
+  // The two zero-cases are NOT the same thing and must be told apart, or the
+  // warning is just noise on a genuinely quiet month:
+  //   - no billing-ready inbound at all in the window  → quiet month, info
+  //   - inbound EXISTS but none is flagged transport_charged → the classifier
+  //     never fired; the freight leg is silently missing money, warn
+  // The discriminating count is the same query minus the `transport_charged`
+  // predicate, so it costs one extra count and only when the leg came back empty.
+  //
+  // This is an OBSERVABILITY change only — no control flow, no amount, no
+  // status set changes. Whether `transport_charged` should be written (and by
+  // what surface) is a product decision, deliberately not made here.
+  if (loads.length === 0) {
+    const billingReadyInWindow = await prisma.inboundLoad.count({
+      where: {
+        site_id: siteId,
+        status: { in: [...INVOICE_STATUSES] },
+        arrived_at: { gte: instant.gte, lt: instant.lt },
+      },
+    });
+    if (billingReadyInWindow > 0) {
+      log.warn(
+        {
+          op: 'invoices.transportation-inputs',
+          site_id: siteId,
+          kind,
+          window_start: windowStartISO,
+          window_end: windowEndISO,
+          billing_ready_inbound_in_window: billingReadyInWindow,
+          transport_charged_inbound_in_window: 0,
+        },
+        '[invoices] transportation leg resolved ZERO transport-charged loads while ' +
+          'billing-ready inbound exists in the same window — every freight and fuel-surcharge ' +
+          'line for this invoice will be absent. `inbound_loads.transport_charged` has no ' +
+          'writer, so this is expected until one exists; the invoice is UNDER-BILLED until then.',
+      );
+    } else {
+      log.info(
+        {
+          op: 'invoices.transportation-inputs',
+          site_id: siteId,
+          kind,
+          window_start: windowStartISO,
+          window_end: windowEndISO,
+        },
+        '[invoices] transportation leg resolved zero loads — no billing-ready inbound in the window',
+      );
+    }
+  }
+
   const freightLoads: FreightLoadLeg[] = [];
   const fuelLoads: FuelLoadLeg[] = [];
   for (const load of loads) {
