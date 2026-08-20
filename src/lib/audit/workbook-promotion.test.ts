@@ -141,6 +141,13 @@ function makeDb(staging: StagingRowInput[], preload?: Partial<Stores>): { db: Pr
         return data;
       },
     },
+    // ADR-0120 — the workbook-promotion site lock. A fake cannot take a
+    // real advisory lock, so this accepts it and does nothing. What the lock
+    // actually does — block a concurrent floor write at the SAME site, and
+    // not block a different site — is a Postgres property, proven in
+    // `src/lib/audit/promotion-lock.db.test.ts`. No-op-ing it here keeps this
+    // suite measuring the behaviour it is actually about.
+    $executeRaw: async () => 0,
   } as unknown as PrismaClient & { $transaction: unknown };
 
   // $transaction runs the callback with the same client acting as tx.

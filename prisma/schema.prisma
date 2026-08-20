@@ -268,6 +268,18 @@ model SiteInventorySnapshot {
 
   @@index([site_id, snapshot_at])
   @@index([site_id, snapshot_kind, snapshot_at])
+  // ADR-0120 — a partial UNIQUE index on (site_id, snapshot_at) WHERE
+  // snapshot_kind = 'physical' AND voided_at IS NULL AND source = 'import'
+  // lives in migration 20260852. Prisma cannot express a partial index, so it
+  // is SQL-only and `migrate diff` will report it as drift (that check is
+  // advisory and non-blocking by design — see .github/workflows/ci.yml).
+  //
+  // It is scoped to source = 'import' DELIBERATELY. Two live `physical` counts
+  // at one site sharing an instant is a SUPPORTED state, not a defect: the floor
+  // anchors every count at Pacific midnight of its day, and ADR-0078 D1 added
+  // the created_at tiebreak precisely so same-day counts resolve deterministically.
+  // An unscoped unique index makes the second same-day count fail — verified
+  // against the ADR-0078 D1 suite, which goes red on it.
   @@map("site_inventory_snapshots")
 }
 

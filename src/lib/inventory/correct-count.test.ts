@@ -277,6 +277,12 @@ function rawDelegates(): Record<string, unknown> {
         }
         return 1;
       }
+      // ADR-0120 — the workbook-promotion site lock. Accepted explicitly
+      // rather than by loosening this fake's strictness: it still throws on
+      // anything it does not recognise, which is what makes it worth having.
+      // A fake cannot take a real advisory lock, and the lock's actual
+      // behaviour is proven in `src/lib/audit/promotion-lock.db.test.ts`.
+      if (sql.includes('pg_advisory_xact_lock')) return 0;
       throw new Error(`fake-prisma: unexpected $executeRaw: ${sql}`);
     },
     $queryRaw: async (strings: TemplateStringsArray, ...v: unknown[]) => {

@@ -53,6 +53,13 @@ const { state, prismaMock } = vi.hoisted(() => {
         return { id: 'audit-1' };
       },
     },
+    // ADR-0120 — the workbook-promotion site lock. A fake cannot take a
+    // real advisory lock, so this accepts it and does nothing. What the lock
+    // actually does — block a concurrent floor write at the SAME site, and
+    // not block a different site — is a Postgres property, proven in
+    // `src/lib/audit/promotion-lock.db.test.ts`. No-op-ing it here keeps this
+    // suite measuring the behaviour it is actually about.
+    $executeRaw: async () => 0,
   };
   const prismaMock = {
     $transaction: async (fn: (t: typeof tx) => unknown) => fn(tx),

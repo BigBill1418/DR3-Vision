@@ -40,6 +40,7 @@
 // other count is an Int) so there is zero float drift at any count boundary.
 
 import { Prisma, type LoadStatus, type ConsumerDropoffKind } from '@prisma/client';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { prisma } from '@/lib/prisma';
 import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
 import { NOT_VOIDED } from './snapshot-void';
@@ -547,6 +548,15 @@ export async function reconcilePhysicalCount(args: {
   // give you either a burned key with no count, or a count with no defence.
   // Callers that pass nothing keep the previous behaviour exactly.
   const write = async (tx: Prisma.TransactionClient) => {
+    // ADR-0120 — serialise against workbook promotion at this site. Taken inside
+    // `write` so it covers BOTH shapes: the caller-supplied transaction (the
+    // floor count, the held-count release) and the private one opened below.
+    //
+    // What it deliberately does NOT cover is the `onHand` read above, which runs
+    // on the shared client outside any transaction for the reason documented at
+    // the `tx` parameter. That read is a pre-existing, separately-recorded
+    // concern (ADR-0118 consequences); this lock's subject is the INSERT.
+    await lockSiteAgainstPromotion(tx, args.siteId);
     const created = await tx.siteInventorySnapshot.create({
       data: {
         site_id: args.siteId,

@@ -44,6 +44,7 @@ import {
 import { computeInventoryClose, type InventoryClosePools } from '@/lib/inventory/inventory-close';
 import { notVoidedSnapshotWhere } from '@/lib/inventory/snapshot-void';
 import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import type { SiteAliasResolver } from './types';
 
 const D = Prisma.Decimal;
@@ -1094,6 +1095,25 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
   const toDate = dayKeyUTCFromISO(scope.to);
 
   const result = await db.$transaction(async (tx) => {
+    // ── ADR-0120 — take the site lock BEFORE the conflict scan ────────────────
+    //
+    // `detectConflicts` is a READ, and this application runs at READ COMMITTED.
+    // A live floor write that commits after the scan and before the inserts
+    // below is invisible to the scan and lands in the window anyway — the
+    // promoted rows and the live rows both stand, `onHand` sums both, and this
+    // promotion's ledger row records a conflict-free promotion that was not one.
+    // A silent double count of a real day's volume, feeding MRC billing.
+    //
+    // The lock must be acquired BEFORE the scan, not merely before the inserts:
+    // taken after, it would serialise the writes while leaving the scan reading
+    // a snapshot that a concurrent writer could still invalidate — which is the
+    // defect with an extra step.
+    //
+    // Every writer of the five promoted tables takes the same key. See
+    // `promotion-lock.ts` for why the key is the site and for the lock-ordering
+    // rule.
+    await lockSiteAgainstPromotion(tx, scope.siteId);
+
     // 1. Conflict refusal — no silent merge over any live row in the window.
     const conflicts = await detectConflicts(tx, scope.siteId, fromDate, toDate);
     if (conflicts.length > 0) throw new PromotionConflictError(conflicts);

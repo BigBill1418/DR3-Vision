@@ -68,6 +68,7 @@
 // POSITIONAL parameters (injection-safe — the SQL text is a constant, every value bound).
 
 import { randomUUID } from 'node:crypto';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import type { PrismaClient } from '@prisma/client';
 
 export type BridgeLogger = (level: 'info' | 'warn' | 'error', message: string) => void;
@@ -425,6 +426,13 @@ export async function bridgeInboundHaulsToInventory(
 
     const total = agg.program + agg.nonProgram;
     await prisma.$transaction(async (tx) => {
+      // ADR-0120 — serialise against workbook promotion at this site. NB this
+      // transaction is opened once PER AGGREGATED DAY inside the loop, so the
+      // lock is taken and released once per day rather than once per run. That
+      // is deliberate: holding it across a whole backfill would block the floor
+      // for the length of the backfill, and each day's upsert is independently
+      // correct.
+      await lockSiteAgainstPromotion(tx, agg.siteId);
       const rows = (await tx.$queryRawUnsafe(
         UPSERT_SQL,
         randomUUID(),

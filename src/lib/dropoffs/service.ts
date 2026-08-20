@@ -15,6 +15,7 @@
 
 import { type ConsumerDropoffKind } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { log } from '@/lib/observability/logger';
 import { resolveProgramRule, NoActiveProgramRuleError } from '@/lib/program-rules/resolver';
 import { computeDropoffIncentive, paidUnitsFromIncentiveCents } from '@/lib/dropoffs/incentive';
@@ -370,6 +371,9 @@ export async function createDropoff(args: {
   );
 
   const row = await prisma.$transaction(async (tx) => {
+    // ADR-0120 — serialise against workbook promotion at this site, FIRST
+    // statement in the transaction so the hold is the write itself.
+    await lockSiteAgainstPromotion(tx, args.siteId);
     const created = await tx.consumerDropoff.create({
       data: {
         site_id: args.siteId,
