@@ -9,6 +9,66 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-19 (11:05 PM PT) — A promise is not a queue (ADR-0117)
+
+**The payroll delivery lived in one process's memory, and nothing re-drove it.**
+`triggerPayrollDelivery` fires the post-signature chain — render the bonus PDF,
+fetch it from R2, mail it to payroll via Graph — from a bare
+`void (async () => { … })()`. That non-blocking shape is correct and is kept: the
+signing manager must not wait on Chromium. What was never true is the assumption
+under it, that the promise would always get to run. It has no ledger row and no
+marker of any kind, so a container recreate (this stack auto-deploys from `main`
+on every push; three deploys rolled on 2026-08-19 alone), an OOM kill, a host
+reboot or an unhandled rejection between the sign latch committing and the chain
+finishing destroys it **silently**. The signature is real, the period is
+`signed`, the manager's screen said it worked — and payroll gets nothing. The
+only downstream check is the t4 escalation tier at 09:00 PT, which is the payroll
+deadline itself rather than a warning ahead of it, and which does not run at all
+on a non-payroll morning.
+
+**The obvious repair is worse than the defect.** "Re-drive anything `signed` with
+`payroll_sent_at IS NULL`" cannot work: that stamp is written only *after* Graph
+returns 202, so a process that died inside the post-to-Graph window is
+indistinguishable from one that never asked — and the sweep would send a real
+payroll document a second time. A duplicate payroll report is a real-money error
+the system cannot take back.
+
+So the delivery got a second marker rather than a retry loop. `payroll_attempt_at`
+is claimed immediately before the Graph send, giving three states that can be told
+apart: **no attempt** (nothing was asked of Graph — re-driven automatically),
+**attempt with no stamp** (AMBIGUOUS — paged `urgent`, never resent, Bill's call),
+and **stamped** (delivered). The claim is the house compare-and-swap
+(`correct-count.ts`, `void-count.ts`) rather than a read-then-write, and it is
+made LATE — below the reconciliation, wrong-$0, missing-key and R2 gates — so a
+period a gate refused stays cleanly re-drivable instead of frozen ambiguous.
+
+The sweep rides the existing 06:30 PT chain-health cron: no new container, forty
+minutes ahead of the t1 tier, and it runs on non-payroll mornings too. A
+30-minute grace window keeps it off deliveries still legitimately inside PDF
+generation.
+
+Proven against a real Postgres, in both directions. Reverting the CAS to the
+read-then-write it replaced turns "exactly one winner" into
+`expected exactly 1 winner, got 8`; deleting the attempt partition returns the
+ambiguous period as `expected 'redriven' to be 'ambiguous'`. Both red on the
+pre-fix shape, green after.
+
+Accepted residual: recovery latency is now up to ~24 hours (worst case, a
+delivery lost just after 06:30 PT waits for the next fire) — bounded and visible,
+where the previous behaviour was unbounded and invisible. Recorded in
+`docs/OPEN-ITEMS.md`.
+
+- `prisma/migrations/20260851_adr0117_payroll_delivery_attempt_marker/` — adds
+  `bonus_pay_periods.payroll_attempt_at`, nullable, no backfill (a backfill would
+  assert attempts that never happened and page on every one).
+- `src/lib/bonus/payroll-delivery.ts` — `claimDeliveryAttempt` CAS +
+  `redrivePayrollDeliveries` sweep.
+- `src/app/api/internal/bonus/chain-health/route.ts` — runs the sweep, in its own
+  `try/catch` so a broken re-drive cannot suppress the signature-chain report.
+- `src/lib/bonus/payroll-redrive.db.test.ts` — three real-Postgres cases.
+
+*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+
 ## 2026-08-19 (10:25 PM PT) — Reach is not power (ADR-0116)
 
 **Five surfaces asked whether you could reach the site, and never whether you

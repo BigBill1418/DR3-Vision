@@ -1,0 +1,55 @@
+-- ADR-0117 — the payroll delivery that no process was left holding.
+--
+-- `triggerPayrollDelivery` fires the post-signature chain from a bare
+-- `void (async () => { ... })()` — deliberately, so the signing manager's
+-- request returns in milliseconds rather than waiting on Chromium and Graph.
+-- What was never true is the assumption underneath it: that the promise would
+-- always get to run. It lives only in the memory of the Node process that
+-- created it. A container recreate (this stack redeploys on every push to
+-- `main`), an OOM kill, a host reboot, or an unhandled rejection anywhere in
+-- the chain drops it, and NOTHING re-drives it. The period stays `signed`, the
+-- PDF never ships, and the only thing that eventually notices is the t4 09:00
+-- PT deadline-miss page the following morning — after payroll has been missed,
+-- not before.
+--
+-- The fix is a durable marker, and the reason it is TWO states rather than one
+-- is the send itself. Between "we asked Graph to send" and "Graph told us it
+-- sent" there is a window in which the process can die, and a re-drive that
+-- cannot tell that window from "we never asked" will DOUBLE-SEND payroll. That
+-- is worse than the defect: a duplicate payroll report is a real-money,
+-- real-people error, and it is not undoable by the system that made it.
+--
+-- So:
+--
+--   payroll_attempt_at IS NULL, payroll_sent_at IS NULL
+--       Nothing was ever asked of Graph. Safe to re-drive automatically, and
+--       the sweep does exactly that.
+--
+--   payroll_attempt_at IS NOT NULL, payroll_sent_at IS NULL
+--       We asked, and we do not know the answer. AMBIGUOUS. The sweep pages a
+--       human (urgent) and NEVER auto-resends. Bill's call, 2026-08-19: an
+--       ambiguous send is a person's decision, not a retry loop's.
+--
+--   payroll_sent_at IS NOT NULL
+--       Graph returned 202 with a message id. Delivered; nothing to do.
+--
+-- The stamp side already existed — `sendPayrollPdf` writes `payroll_sent_at`
+-- and `payroll_message_id` on a confirmed 202 (ADR-0021). Only the ATTEMPT
+-- side was missing, which is why the two failure shapes were indistinguishable
+-- and why no sweep could have been written against the old columns.
+--
+-- Nullable with no default and no backfill, deliberately. Every period that is
+-- already `paid` has its `payroll_sent_at` set and is never examined by the
+-- sweep; every period still `signed` on the morning this lands is genuinely
+-- un-attempted as far as this system can prove, so NULL is the honest value
+-- and re-driving it is the correct behaviour. Stamping `now()` across the
+-- table would have asserted an attempt that never happened and converted every
+-- one of them into a page.
+--
+-- No index. The sweep's predicate is `state = 'signed' AND payroll_sent_at IS
+-- NULL`, which selects from a table holding 26 rows per site per year; the
+-- attempt column is read off rows that predicate already returned, never
+-- searched on.
+
+-- AlterTable
+ALTER TABLE "bonus_pay_periods" ADD COLUMN "payroll_attempt_at" TIMESTAMP(3);

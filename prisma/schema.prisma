@@ -2074,6 +2074,12 @@ model BonusPayPeriod {
   pdf_generated_at DateTime?
 
   // ─── Payroll delivery (M365 Graph mail-send per ADR-0021) ──────────
+  // ADR-0117 — `payroll_attempt_at` is claimed IMMEDIATELY BEFORE the Graph
+  // send; `payroll_sent_at` is stamped after a confirmed 202. The pair is what
+  // makes a lost in-flight delivery distinguishable from one that never
+  // started: attempt-and-no-stamp is AMBIGUOUS (page a human, never resend),
+  // no-attempt is safe to re-drive. Do not collapse them back into one column.
+  payroll_attempt_at  DateTime?
   payroll_sent_at     DateTime?
   payroll_message_id  String? // Graph request ID for audit correlation
   payroll_retry_count Int       @default(0)

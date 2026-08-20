@@ -72,8 +72,17 @@ interface MonthRow {
   site: { name: string };
 }
 let monthRow: MonthRow | null = null;
+// ADR-0117 — how many rows the delivery-attempt CAS matches. `1` is the normal
+// case (this run won the claim). Set to `0` to model "another run already
+// claimed it", which must stop the send dead.
+let claimCount = 1;
 vi.mock('@/lib/prisma', () => ({
-  prisma: { bonusPayPeriod: { findUnique: vi.fn(async () => monthRow) } },
+  prisma: {
+    bonusPayPeriod: {
+      findUnique: vi.fn(async () => monthRow),
+      updateMany: vi.fn(async () => ({ count: claimCount })),
+    },
+  },
 }));
 
 // ── R2 fetch stub ───────────────────────────────────────────────
@@ -104,6 +113,7 @@ function aMonth(over: Partial<MonthRow> = {}): MonthRow {
 beforeEach(() => {
   vi.clearAllMocks();
   monthRow = aMonth();
+  claimCount = 1;
   process.env['R2_ACCOUNT_ID'] = 'acct';
   process.env['R2_ACCESS_KEY_ID'] = 'ak';
   process.env['R2_SECRET_ACCESS_KEY'] = 'sk';
@@ -127,6 +137,37 @@ describe('triggerPayrollDelivery — happy path', () => {
     expect(assertPayoutReconciles).toHaveBeenCalledWith('m1');
     expect(assertNotSuspectedWrongZero).toHaveBeenCalled();
     expect(publishNtfy).not.toHaveBeenCalled();
+  });
+});
+
+describe('ADR-0117 — the delivery-attempt claim gates the send', () => {
+  it('does NOT mail when another run already claimed the attempt', async () => {
+    // `count === 0` is the CAS losing: some other process (a re-drive sweep, a
+    // manual re-trigger, a second cron fire) already burned the marker and may
+    // already have posted this report to Graph. Sending anyway is the
+    // duplicate-payroll defect ADR-0117 exists to prevent.
+    claimCount = 0;
+    triggerPayrollDelivery('m1');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sendPayrollPdf).not.toHaveBeenCalled();
+    // Losing a race is not a failure — it is the guard working. No page.
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('claims the attempt BELOW the refusal gates, so a refused period stays re-drivable', async () => {
+    // A reconciliation refusal must return WITHOUT burning the marker,
+    // otherwise the period is frozen ambiguous and the sweep pages forever
+    // instead of re-driving once the underlying disagreement is fixed.
+    assertPayoutReconciles.mockResolvedValueOnce({
+      pass: false,
+      verdict: { ok: false, reconciled: false },
+      period: { monthId: 'm1', state: 'signed', lockedTotalCents: 100, recomputedTotalCents: 7 },
+    });
+    const { prisma } = await import('@/lib/prisma');
+    triggerPayrollDelivery('m1');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sendPayrollPdf).not.toHaveBeenCalled();
+    expect(prisma.bonusPayPeriod.updateMany).not.toHaveBeenCalled();
   });
 });
 

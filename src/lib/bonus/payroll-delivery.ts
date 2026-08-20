@@ -11,6 +11,18 @@
 // PDF/mail failure never crashes the process), and sendPayrollPdf is fail-open.
 // Mail only runs if the PDF succeeded — there is nothing to attach otherwise.
 //
+// ADR-0117 — the background promise is not durable, so the DURABILITY lives in
+// two columns and a daily sweep, not in awaiting this function. `void (async
+// …)()` below is kept ON PURPOSE (the signing manager must not wait on Chromium
+// and Graph); what changed is that losing that promise is now recoverable:
+//
+//   - `payroll_attempt_at` is CLAIMED immediately before the Graph send, by a
+//     compare-and-swap that exactly one caller can win.
+//   - `payroll_sent_at` is stamped by `sendPayrollPdf` after a confirmed 202.
+//   - `redrivePayrollDeliveries` (run daily by the chain-health cron) re-drives
+//     any signed period with NO attempt, and PAGES on any period with an
+//     attempt and no stamp — the ambiguous case, which is never auto-resent.
+//
 // signed -> paid (T-211 step 5): on a CONFIRMED Graph delivery (sendPayrollPdf
 // returns `delivered: true` — a real 202 with a message id), this advances the
 // period `signed -> paid` through the state-machine (audited). The transition
@@ -180,6 +192,20 @@ export function triggerPayrollDelivery(monthId: string): void {
         return;
       }
 
+      // ADR-0117 — the LAST thing before the send. Every refusal above this
+      // line (reconciliation, wrong-$0, missing key, R2 unconfigured) returns
+      // without claiming, so a period blocked by a gate stays `attempt_at IS
+      // NULL` and remains eligible for a clean re-drive once the gate clears —
+      // rather than being frozen into the ambiguous state by a claim it never
+      // used. Everything below this line is "Graph may already have it".
+      if (!(await claimDeliveryAttempt(monthId))) {
+        log.warn(
+          { requestId, monthId },
+          '[payroll-delivery] delivery attempt already claimed by another run; not sending again',
+        );
+        return;
+      }
+
       const ym = `${month.period_start.getUTCFullYear()}-${String(
         month.period_start.getUTCMonth() + 1,
       ).padStart(2, '0')}`;
@@ -206,6 +232,142 @@ export function triggerPayrollDelivery(monthId: string): void {
       log.error({ requestId, monthId, err }, '[payroll-delivery] payroll mail-send failed');
     }
   })();
+}
+
+/**
+ * ADR-0117 — claim the one delivery attempt for this period. Returns `true` to
+ * exactly one caller, ever.
+ *
+ * The house compare-and-swap idiom (`correct-count.ts` `applyCorrection`,
+ * `void-count.ts` `voidWrite`): a guarded `updateMany` whose WHERE names the
+ * state we believe we are in, and a `count === 0` that means somebody else got
+ * there first. It is NOT a read-then-write — two runs of the sweep, or a sweep
+ * racing a manual re-trigger, both pass a read of `payroll_attempt_at === null`
+ * and both would send.
+ *
+ * `payroll_sent_at: null` is in the guard as well as `payroll_attempt_at: null`.
+ * They cannot disagree today (the stamp only ever follows a claim), but a future
+ * backfill or hand-repair that sets one without the other must not be able to
+ * unlock a second send of an already-delivered period.
+ *
+ * Exported ONLY so `payroll-redrive.db.test.ts` can race the real thing. A test
+ * that re-types this `updateMany` into its own body would pass against a
+ * read-then-write implementation — it would be measuring its own transcription,
+ * not the guard. Do not call it from anywhere but the send path below.
+ */
+export async function claimDeliveryAttempt(monthId: string): Promise<boolean> {
+  const { count } = await prisma.bonusPayPeriod.updateMany({
+    where: { id: monthId, payroll_attempt_at: null, payroll_sent_at: null },
+    data: { payroll_attempt_at: new Date() },
+  });
+  return count === 1;
+}
+
+/** One signed period the sweep found without a confirmed delivery. */
+export interface PayrollRedriveFinding {
+  periodId: string;
+  siteCode: string;
+  periodLabel: string;
+  /** `redriven` — no attempt existed, delivery re-fired. `ambiguous` — paged. */
+  outcome: 'redriven' | 'ambiguous';
+}
+
+export interface PayrollRedriveResult {
+  scanned: number;
+  redriven: number;
+  ambiguous: number;
+  findings: PayrollRedriveFinding[];
+}
+
+/**
+ * ADR-0117 — the durable half of post-signature payroll delivery.
+ *
+ * Finds every period that is `signed` with no confirmed delivery and splits it
+ * on the attempt marker:
+ *
+ *   - **no attempt** — the background promise never reached the send (the
+ *     process that owned it died, or never started). Nothing was asked of
+ *     Graph, so re-driving is safe and automatic.
+ *   - **attempt, no stamp** — we asked Graph and never learned the answer.
+ *     Payroll may already have the report. Re-sending could duplicate a real
+ *     payroll document, so this NEVER auto-resends: it pages, urgent, and a
+ *     human decides. (Bill's call, 2026-08-19.)
+ *
+ * `graceMinutes` keeps the sweep off deliveries that are legitimately still in
+ * flight. The claim is made late — after PDF generation, which drives Chromium
+ * and can take tens of seconds — so a period signed moments ago has an honest
+ * `attempt_at IS NULL` while its delivery is running normally. Without the
+ * grace window the sweep would read that as a lost promise and fire a second
+ * delivery alongside the first. Measured from the LATER of the two signature
+ * instants, which is when the chain was triggered.
+ */
+export async function redrivePayrollDeliveries(
+  opts: { graceMinutes?: number; now?: Date } = {},
+): Promise<PayrollRedriveResult> {
+  const graceMinutes = opts.graceMinutes ?? 30;
+  const now = opts.now ?? new Date();
+  const cutoff = new Date(now.getTime() - graceMinutes * 60_000);
+
+  const candidates = await prisma.bonusPayPeriod.findMany({
+    where: { state: 'signed', payroll_sent_at: null },
+    select: {
+      id: true,
+      period_number: true,
+      period_year: true,
+      payroll_attempt_at: true,
+      facility_signed_at: true,
+      ops_signed_at: true,
+      site: { select: { code: true } },
+    },
+  });
+
+  const findings: PayrollRedriveFinding[] = [];
+  for (const p of candidates) {
+    // The instant the post-signature chain was triggered: the SECOND signature.
+    const signedAt = [p.facility_signed_at, p.ops_signed_at]
+      .filter((d): d is Date => d != null)
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    // A period in `signed` with no signature instant is not a shape this
+    // system produces. Skip rather than guess at how long it has been waiting.
+    if (!signedAt || signedAt > cutoff) continue;
+
+    const periodLabel = `Period ${p.period_number} (${p.period_year})`;
+    if (p.payroll_attempt_at == null) {
+      log.warn(
+        { monthId: p.id, siteCode: p.site.code, signedAt },
+        '[payroll-delivery] signed period has no delivery attempt — re-driving (ADR-0117)',
+      );
+      triggerPayrollDelivery(p.id);
+      findings.push({ periodId: p.id, siteCode: p.site.code, periodLabel, outcome: 'redriven' });
+      continue;
+    }
+
+    log.error(
+      { monthId: p.id, siteCode: p.site.code, attemptAt: p.payroll_attempt_at },
+      '[payroll-delivery] AMBIGUOUS payroll send — attempted, never confirmed; not resending (ADR-0117)',
+    );
+    await pagePayrollFailure({
+      monthId: p.id,
+      title: `Payroll delivery is AMBIGUOUS — ${p.site.code} ${periodLabel}`,
+      body:
+        `${p.site.code} ${periodLabel} claimed a payroll delivery attempt at ` +
+        `${p.payroll_attempt_at.toISOString()} and never recorded a confirmed send. ` +
+        `Payroll MAY already hold this report. Vision will not resend it — a duplicate ` +
+        `payroll document is not something this system can undo. Check the payroll ` +
+        `mailbox: if the report did not arrive, re-trigger delivery from the manager ` +
+        `portal; if it did, mark the period paid.`,
+      fingerprint: `payroll-ambiguous-send:${p.id}`,
+      priority: 'urgent',
+    });
+    findings.push({ periodId: p.id, siteCode: p.site.code, periodLabel, outcome: 'ambiguous' });
+  }
+
+  return {
+    scanned: candidates.length,
+    redriven: findings.filter((f) => f.outcome === 'redriven').length,
+    ambiguous: findings.filter((f) => f.outcome === 'ambiguous').length,
+    findings,
+  };
 }
 
 /**
