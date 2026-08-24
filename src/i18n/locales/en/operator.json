@@ -520,6 +520,7 @@
       "intro": "Pick the type, count the mattresses, take one photo, then send.",
       "kind_label": "Type of drop-off",
       "kind_floor_public": "Public drop-off",
+      "kind_floor_illegal": "Illegal drop-off",
       "kind_floor_incentive": "Incentive drop-off",
       "units_label": "Total units",
       "photo_label": "Photo",

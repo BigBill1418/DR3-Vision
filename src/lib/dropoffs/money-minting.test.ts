@@ -20,7 +20,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ConsumerDropoffKind } from '@prisma/client';
-import { __mintsCheckMoneyByDefaultForTest as mints, UNPAID_DROPOFF_CENTS_PER_UNIT } from './service';
+import {
+  __mintsCheckMoneyByDefaultForTest as mints,
+  UNPAID_DROPOFF_CENTS_PER_UNIT,
+} from './service';
 
 describe('ADR-0085 — which drop-off kinds mint check money', () => {
   it('the two Bye-Bye-Mattress kinds still mint — this ADR changed no existing behaviour', () => {
@@ -39,6 +42,9 @@ describe('ADR-0085 — which drop-off kinds mint check money', () => {
   it('the label-only floor kinds mint nothing', () => {
     expect(mints('floor_public'), 'a Public walk-up minted check money').toBe(false);
     expect(mints('floor_incentive'), 'an Incentive walk-up minted check money').toBe(false);
+    // ADR-0085 Am.1 — the Bye-Bye-Mattress claim on illegally dumped units stays
+    // a manager-entered `illegal` row; the floor label carries no money.
+    expect(mints('floor_illegal'), 'an Illegal walk-up minted check money').toBe(false);
   });
 
   it('FALSIFICATION — a kind this file has never heard of mints NOTHING', () => {

@@ -9,6 +9,26 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-24 — Illegal Dropoff on the iPad, between Public and Incentive (ADR-0085 Amendment 1)
+
+The floor team's ask, verbatim placement included. `floor_illegal` is the third
+label-only walk-up kind with exactly its siblings' contract: no money, no PII,
+photo required, program pool, "other" bucket on the EOD summary. Deliberately
+NOT a reuse of the manager `illegal` kind — that one requires a payee name and
+mints units × 300¢ of Bye-Bye-Mattress check money by default; the claim on
+illegally dumped units stays a manager-entered row, exactly as Incentive's $3
+stays off `floor_incentive`.
+
+- Two migrations (`20260856` / `20260856a`), split for the same
+  enum-value-in-one-transaction reason as the original ADR-0085 pair; the three
+  floor CHECK constraints re-created with the new label. Verified on a fresh
+  Postgres 16 — constraints render three-label, full db suite green.
+- `FLOOR_DROPOFF_KINDS` widens to three; route zod, offline-queue replay,
+  `DROPOFF_KIND_POOL`, `poolForChannel` and `mintsCheckMoneyByDefault` all took
+  their compile-forced updates. Button shipped in en/es/ur.
+- The workbench `INBOUND_SOURCE_LABELS` nicety stated in ADR-0085's close-out is
+  now fixed for all three floor kinds ("… drop-offs (iPad)").
+
 ## 2026-08-24 (1:50 AM PT) — the day is closed by a person (ADR-0125)
 
 The end-of-day manager surface that retires the Woodland daily log. One screen
@@ -128,6 +148,7 @@ editable checkbox plus a per-row correction for the rows already in production.
 Born **pilot** on its own `eod_review` surface (ADR-0047 #3 / hard rule #12) —
 its own code rather than riding `loads_inventory`, because this is the one place
 a manager can close a business day and it must ramp per site independently.
+
 ## 2026-08-24 (1:10 AM PT) — the markers get a test
 
 Drive-by while rebasing #289. Conflict markers have been committed to this repo
@@ -226,15 +247,15 @@ the server was finished:
   `arrived`), and `recordBolCapture`'s entire body is `await assertOwn(args)` —
   it writes **nothing**. Any reload or takeover returned to stage 1.
 - `weightSkipped`. `recordWeightSkip` also wrote nothing, under a comment stating
-  the design out loud: *"no DB change needed; the weight stage gates only on the
-  user's choice."* The choice died with the tab.
+  the design out loud: _"no DB change needed; the weight stage gates only on the
+  user's choice."_ The choice died with the tab.
 
 The first put three operators in turn onto a BOL screen for a load whose photo
 was already in Postgres. The second has trapped nobody — "None" is always live —
 but retiring one latch and leaving the other keeps half the defect alive.
 
 **The stage is now a pure function of server facts**, with no room for a client
-hint: BOL done ⟺ `photo_counts.bol > 0` (the photo row *is* the completion, and
+hint: BOL done ⟺ `photo_counts.bol > 0` (the photo row _is_ the completion, and
 it was already plumbed for ADR-0109 — no column added), and the weight skip gets
 `inbound_loads.weight_skipped_at`, stamped idempotently so a takeover's second
 "None" tap cannot re-attribute an earlier operator's decision.
