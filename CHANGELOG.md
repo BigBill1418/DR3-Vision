@@ -9,6 +9,28 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-24 (1:10 AM PT) — the markers get a test
+
+Drive-by while rebasing #289. Conflict markers have been committed to this repo
+TWICE in one week, and nothing catches them: in Markdown and SQL they are just
+text, so every docs gate stays green, and in TypeScript `tsc` reports a syntax
+error at a line number rather than "you committed a merge conflict".
+
+**New guard:** `src/lib/repo-hygiene.conflict-markers.test.ts` fails the suite on
+any tracked file carrying an opening (`<` x7) or closing (`>` x7) marker.
+Deliberately does NOT match the bare `=` x7 divider — seven `=` on a line is a
+legitimate Markdown setext heading underline, and this repo is mostly Markdown;
+every conflict writes the opener and the closer, so the pair is enough without
+that false-positive surface.
+
+The file builds its marker strings with `repeat()` instead of writing them out,
+so its own source holds no marker and it scans itself honestly — a detector that
+has to be excluded from its own sweep is one edit away from being excluded from a
+real one. Falsified before shipping in both directions: planted a real conflict
+in `CHANGELOG.md` and watched it go red naming the file and line, and asserted it
+stays quiet on a setext underline, a table row, a left-shift operator and a
+marker that is not at line start.
+
 ## 2026-08-20 (3:30 PM PT) — the third author (ADR-0123)
 
 `processed_units_daily` holds the number MRC is invoiced on and has **three**
