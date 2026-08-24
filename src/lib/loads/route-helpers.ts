@@ -40,6 +40,37 @@ export async function requireActivatedManager(siteCode: string): Promise<Manager
 }
 
 /**
+ * ADR-0125 — the NAMED-surface analogue of {@link requireActivatedManager}.
+ *
+ * `requireActivatedManager` is hard-wired to `loads_inventory`, the master gate
+ * that fronts every manager loads/inventory tab and every loads write. A manager
+ * surface that must be rampable on its own — the EOD review + close screen is
+ * the first — names its own surface here instead.
+ *
+ * `surfaceCode` is REQUIRED, for the same reason it is on the operator twin: a
+ * default would silently re-couple the new surface to the master gate, and the
+ * whole point of naming one is that Bill can ramp it (or pull it back) without
+ * touching the tabs managers are already working from.
+ */
+export async function requireActivatedManagerSurface(
+  siteCode: string,
+  surfaceCode: UiSurfaceCode,
+): Promise<ManagerSiteContext> {
+  const ctx = await requireManagerForSite(siteCode);
+  try {
+    await assertUiSurfaceActivated(ctx.role, surfaceCode, ctx.siteId);
+  } catch (e) {
+    if (e instanceof LoadsInventoryNotActivatedError)
+      // The reason rides in `statusText`: `loadsErrorResponse` reads it when
+      // mapping a thrown Response, and a body-only Response surfaces as a bare
+      // "error" with the reason dropped (see `assertCurrentPacificDay` below).
+      throw new Response(null, { status: e.status, statusText: 'not_activated' });
+    throw e;
+  }
+  return ctx;
+}
+
+/**
  * ADR-0060 / ADR-0065 — the FLOOR (operator) analogue of {@link requireActivatedManager}.
  * Resolves the operator/site context AND enforces the ADR-0047 per-site rollout gate for
  * the NAMED surface. Throws a `Response` on any failure (unauth/forbidden/not-activated).

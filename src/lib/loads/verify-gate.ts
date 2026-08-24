@@ -134,7 +134,7 @@ export async function verifyLoad(args: {
       status: true,
       total_units: true,
       dr3_number: true,
-      source: { select: { is_non_program: true, state: true } },
+      source: { select: { is_non_program: true, state: true, is_trans_charge: true } },
       site: { select: { jurisdiction: true } },
     },
   });
@@ -247,6 +247,31 @@ export async function verifyLoad(args: {
   const issuesDr3 =
     load.site != null && siteGetsVisionDr3Number(load.site.jurisdiction) && load.dr3_number == null;
 
+  // ── ADR-0125 (Phase 0 gap G-2) — the freight / no-freight split gets a writer ──
+  //
+  // `inbound_loads.transport_charged` had NONE. A repo-wide grep found only
+  // reads (`generation-inputs.ts:272`, `leg-fetchers.ts:105`) plus the DDL, and
+  // the column read `false` on all 743 production rows. It is the ONLY thing
+  // separating the workbook's two inbound tabs, and downstream
+  // `resolveTransportationInputs` selects `where transport_charged = true` — so
+  // the entire CA inbound freight + fuel-surcharge invoice leg iterated an empty
+  // set and raised nothing. A billing leg that is structurally empty and silent
+  // is worse than one that errors.
+  //
+  // The classifier already existed and already means exactly this:
+  // `sources.is_trans_charge` "splits the two Inbound tabs" (ADR-0037 Addendum
+  // B7). The verify gate is where a load becomes a confirmed record, so it is
+  // where the classification is stamped onto the row — the same reasoning that
+  // put DR3 issuance here rather than at operator-start.
+  //
+  // Only when the load HAS a source. A sourceless load gets no flag rather than
+  // a defaulted `false` that would be indistinguishable from a real "this haul
+  // carries no freight" — the same refuse-to-guess rule as
+  // `no_source_for_default` above, applied to the other billing dimension. The
+  // correction path afterwards is the EOD screen's checkbox
+  // (`setInboundTransportCharged`).
+  const transportCharged = load.source ? load.source.is_trans_charge : null;
+
   await prisma.$transaction(async (tx) => {
     const dr3Number = issuesDr3
       ? String(await issueDocumentNumber(load.site_id, DR3_NUMBER_SEQUENCE, tx))
@@ -262,6 +287,7 @@ export async function verifyLoad(args: {
         program_unit_count: programUnits,
         non_program_unit_count: nonProgramUnits,
         ...(dr3Number != null ? { dr3_number: dr3Number } : {}),
+        ...(transportCharged != null ? { transport_charged: transportCharged } : {}),
       },
     });
     if (count === 0) {
@@ -283,6 +309,7 @@ export async function verifyLoad(args: {
           program_unit_count: programUnits,
           non_program_unit_count: nonProgramUnits,
           ...(dr3Number != null ? { dr3_number: dr3Number } : {}),
+          ...(transportCharged != null ? { transport_charged: transportCharged } : {}),
         },
       },
     });

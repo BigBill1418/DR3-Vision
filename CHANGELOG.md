@@ -9,6 +9,125 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-24 (1:50 AM PT) — the day is closed by a person (ADR-0125)
+
+The end-of-day manager surface that retires the Woodland daily log. One screen
+per site per day at `/dashboard/[site]/eod`: the day's captured data, a gap flag
+per section, the add-lines to fill the holes, the honest on-hand figure, the
+month-to-date rollup, and a Close Day that a person performs.
+
+**What was missing, and it was not a form.** A day with nothing recorded and a
+day a manager reviewed and found genuinely empty were byte-identical on every
+surface. `eod_day_close` is the difference — one row per (site, Pacific day),
+**clean** or **with a named exception**, reopenable with an audited reason, and
+**locking nothing**: every amendment path keeps working on a closed day. That is
+the opposite of `processed_units_daily.closed_at`, which locks the one billing
+figure Bill signs off. Conflating them would make "I have looked at this" a
+destructive act.
+
+### Sheet tabs this retires
+
+- `inb no trans charge` and `inb trans charges` — the Inbound section, with a
+  real add-line carrying BOL/Check #, DR3 #, Haul #, Slip #, the split, the
+  weight and the freight flag.
+- `NonProgram` — derived from the inbound split and flagged; measured at 12-18
+  rows a month, which is near-DAILY, not the "0 rows, essentially unused" the
+  handoff assumed.
+- `incentive_unpaid` — unpaid is flagged and uncollapsed (11-21 distinct rows a
+  month); incentive stays a collapsed add-line (0-1 a month).
+- `Renovation` — a collapsed add-line (2-4 a month).
+- `Commodities` — ONE outbound add-line with a commodity selector reproduces all
+  nine of the sheet's per-commodity tables. Measured at ~107 rows a month across
+  9 blocks — the second-heaviest channel, **not** the "8 rows, light" the handoff
+  sized it as.
+- `Processed` review — the day's close, its author, its M-number and the ADR-0110
+  banner-aware on-hand, plus the sheet's `inventory check` cell.
+- `Summary` / `Trans Summary` — via the month-to-date rollup on the same screen.
+
+### Explicitly NOT retired
+
+- **`Events`** — a distinct billing channel (driver/labour hours, per diem, stop
+  charges by collection zone) that feeds the Summary's `Event Misc` and
+  `Event Trans` lines. Bill's Phase-3 decision; **until it lands the workbook
+  cannot go fully dark.**
+- **`Fuel`** and **`Container Rentals`** — monthly/auto, with existing homes and
+  existing admin surfaces. Neither belongs in a daily screen. Both are still
+  waiting on data loading, not building.
+
+### The Phase-2 acceptance criterion was WITHDRAWN
+
+The handoff asked that the rollup "reproduce the Summary / Trans Summary tabs".
+Phase 0 measured those tabs: they sum over DUPLICATED rows — `inb no trans
+charge` and the unpaid drop-off block carry every row exactly twice in both July
+and August, and the sheet's `Transportation Total` and `Fuel Surcharge` equal the
+doubled sums (July 112,150 raw / 56,075 distinct — exactly 2.000x). **Matching
+the sheet would reproduce a defect.**
+
+Replaced with: the rollup equals the sum of the sections it displays, computed
+once (one row loader, one summarizer, one fold), and divergence from the sheet is
+a **reported reconciliation line** on the screen — which says in as many words
+that a ~2x gap is expected and is not an error in Vision's numbers.
+
+### The freight leg stops being blind
+
+`inbound_loads.transport_charged` had **no writer** — reads and DDL only, and
+`false` on all 743 production rows. It is the only thing separating the two
+inbound tabs, and `resolveTransportationInputs` selects
+`where transport_charged = true`, so the whole CA freight + fuel-surcharge
+invoice leg iterated an empty set and raised nothing.
+
+It now has two writers: the **verify gate** stamps it from
+`sources.is_trans_charge` (only when the load has a source — a sourceless load
+gets no flag rather than a defaulted `false`), and the EOD add-line carries an
+editable checkbox plus a per-row correction for the rows already in production.
+
+### Added
+
+- **`/admin/sources`** — `is_trans_charge`, `is_non_program`, `canonical_mileage`
+  and the new `haul_assignment` were all seed-only; `canonical_mileage` had no
+  create/update call anywhere in `src/` or `scripts/`, which is why the
+  fuel-surcharge leg was uncomputable from birth. Admin-role only: these are
+  admin POWERS, not site reach.
+- **`sources.haul_assignment`** — the workbook's `variables!Mileage_Table`
+  Assignment column had NO home anywhere. Enum (the live table holds exactly
+  three values), nullable, and **never backfilled**: writing `primary` onto 61
+  rows would turn a documented transitional assumption into 61 fabricated
+  measurements.
+- **The gap flag has THREE states.** `not_applicable` is what stops this surface
+  lying about Eugene: no Terex there, so a two-state flag would put a permanent
+  warning on a site that is behaving correctly.
+- **The sheet's `inventory check (should be zero)`**, graded against the ANCHOR.
+  The naive port — `total - (program + non_program)` off the running balance — is
+  a detector that can never fire: `computeRunningBalance` DEFINES
+  `total = program + nonProgram`. A test asserts that property so nobody
+  re-implements it that way believing it does something.
+
+### Open, and Bill's
+
+- **DR3 numbering.** Nothing on this screen issues a number. The counter reads
+  `next_value = 5000` while the sheet is at 4,755 and climbing ~11/day — they
+  collide around late October, and the research audit puts the true reseed floor
+  at 4,925 (not 4,755), with an unconfirmed April outlier at 5,853. Reseed above
+  the true ceiling, or take over at a named cutover date.
+- **Events (G-12)** — Phase 3, or not.
+- **G-15** — Vision holds 113 inbound rows for Aug 1-19 against the sheet's 144.
+  Named, out of scope, and the reason the rollup reports rather than claims
+  agreement.
+
+### Changed
+
+- `close-authority.test.ts`'s manager-namespace filename proxy was **narrowed,
+  not relaxed**: a manager route whose name contains "close" is now allowed only
+  if it is on a named list AND is proven never to reach `closeProcessedUnitsDay`,
+  `processedUnitsDaily` or `processed-units`. Stricter for the one route it
+  admits; unchanged for everything else.
+- `loadPriorAnchor` additively returns `pool_attribution`, so the inventory check
+  grades the SAME anchor row the balance computes forward from rather than
+  opening a third anchor selector.
+
+Born **pilot** on its own `eod_review` surface (ADR-0047 #3 / hard rule #12) —
+its own code rather than riding `loads_inventory`, because this is the one place
+a manager can close a business day and it must ramp per site independently.
 ## 2026-08-24 (1:10 AM PT) — the markers get a test
 
 Drive-by while rebasing #289. Conflict markers have been committed to this repo
@@ -80,7 +199,7 @@ carry their old titles and their recorded red.
 
 **The brief's causal premise was falsified, and that is recorded rather than
 repeated.** Bill's M-186301 correction (2026-08-19 Woodland, 970→960 program /
-100→110 non-program) is indeed absent from prod — but the row carries a *single*
+100→110 non-program) is indeed absent from prod — but the row carries a _single_
 audit entry, an **insert** by workbook-sync at 09:39 AM PT, so no row existed
 before it and no manual row was overwritten. There is no manual write to the
 table in four days, the MyMRC mirror also reads 970/100, and the sync has been
@@ -145,7 +264,7 @@ happens. Mounted on stage 1 it would have fired at 12:36:35; the floor discovere
 the defect at 12:52, and the discovery mechanism was Bill's phone.
 
 **Added** — a zero-live-controls detector across all seven stages. Each control
-registers its own liveness next to where it renders, with the *same* expression
+registers its own liveness next to where it renders, with the _same_ expression
 feeding the button's `disabled` prop, and the boundary fires when every registered
 control is dark. It DETECTS rather than DECLARES: every existing beacon sits
 inside an `if` a human decided was a dead end, which cannot work for a stage,
@@ -191,8 +310,8 @@ unverifiable from the server. **Until Bill subscribes his phone to
 ## 2026-08-20 (1:30 PM PT) — EMERGENCY: a re-entered load stage had no live control
 
 **The Woodland floor was trapped one step into the dock workflow for ~90 minutes
-during floor hours.** Reported as *"no response, totally locked up, totally
-unusable"*; a full iPad refresh did not help, because the trapping state was a
+during floor hours.** Reported as _"no response, totally locked up, totally
+unusable"_; a full iPad refresh did not help, because the trapping state was a
 `load_photos` row in Postgres.
 
 `abaf1aae` (H-137810) was checked in at 12:36:25 PT, its BOL photo landed at
@@ -201,7 +320,7 @@ it over in turn. Every other load that day left `arrived` in 43 s – 2 m 19 s.
 
 The server was fine throughout, which is what made it hard to read: healthz
 0.13 s, Postgres idle (zero advisory locks over ~600 samples, zero waiters),
-check-ins still succeeding — `cfc91dbe` was created at 1:00:56 PM PT, *during*
+check-ins still succeeding — `cfc91dbe` was created at 1:00:56 PM PT, _during_
 the outage — and photos 12 captured / 12 uploaded.
 
 Three correct decisions compose into a dead screen on any RE-ENTRY to a stage
@@ -275,7 +394,7 @@ Three fixes:
    `rootDir`.
 2. **The key is not duplicated on trust.** `promotionLockKey` is exported from
    the shared helper, and `promotion-lock-key-parity.test.ts` imports the REAL
-   lock function from *both* modules and asserts they emit a byte-identical
+   lock function from _both_ modules and asserts they emit a byte-identical
    statement and key. A drifted key is worse than no lock: the two sides would
    take DIFFERENT advisory locks, serialise against nothing, and look correct.
    The test also pins `pg_advisory_xact_lock` specifically — a copy that said
@@ -284,6 +403,7 @@ Three fixes:
    `→ expected [ 'dr3:promo:site-woodland' ] to deeply equal [ 'dr3:promotion:site-woodland' ]`
 3. **CI now runs `npm run build:mymrc`** — the same command the Dockerfile runs
    — so this class breaks on the PR instead of in the deploy.
+
 ## 2026-08-20 (2:15 AM PT) — Eight places where the record could go missing (ADR-0118)
 
 The batch of high-severity siblings from the 2026-08-19 audit — one rule
@@ -353,7 +473,7 @@ Falsifying both guards back to the pre-fix shape gives all six assertions red:
   `src/lib/doc-ingest/absorb.ts` (×5).
 - `src/lib/loads/tx-discipline.db.test.ts` — two real-Postgres cases.
 
-*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+_Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT._
 
 ## 2026-08-20 (1:35 AM PT) — The scan that could not see the write (ADR-0120)
 
@@ -388,10 +508,10 @@ ordering already satisfied it. **The verification falsified the premise.**
 Two live physical counts at one site on one day, sharing a byte-identical
 `snapshot_at`, are a supported and production-observed state. The floor anchors
 every count at Pacific midnight of its day (ADR-0060 D-3), so two counts on one
-day are stored at the same instant *by construction* — and **ADR-0078 D1 exists
+day are stored at the same instant _by construction_ — and **ADR-0078 D1 exists
 because of that**, adding the `created_at DESC` tiebreak so the latest anchor is
-a fact rather than a planner preference. Its suite header records: *"verified in
-production, where both existing physical snapshots sit exactly on 07:00:00 UTC."*
+a fact rather than a planner preference. Its suite header records: _"verified in
+production, where both existing physical snapshots sit exactly on 07:00:00 UTC."_
 
 Applied to a scratch database with the full migration chain, the unscoped index
 took ADR-0078 D1's own suite red:
@@ -407,7 +527,7 @@ made the **second same-day physical count at a site** fail with a raw Postgres
 unique violation, on the operator floor, on an overnight deploy.
 
 So the index is scoped to `source = 'import'`. It catches the
-promotion-vs-promotion half (two *different* imports anchoring one site-instant;
+promotion-vs-promotion half (two _different_ imports anchoring one site-instant;
 same-import collisions already hit the UNIQUE on `workbook_promotions.import_id`)
 and is silent on the manual counts ADR-0078 D1 governs. Production was checked
 first: 4 snapshot rows, 3 live physical, zero duplicate groups under either
@@ -425,6 +545,7 @@ queue, against hard rule #2. Removing the lock from a writer:
 - `prisma/migrations/20260852_adr0120_import_anchor_unique/`
 - `src/lib/audit/promotion-lock.db.test.ts` — four real-Postgres cases.
 - Eleven writers + the promotion transaction.
+
 ## 2026-08-20 (12:55 AM PT) — The bridge kept overwriting the office (ADR-0119)
 
 **A human correction to a processed-units day did not survive the next MyMRC
@@ -485,7 +606,7 @@ correction blocks on that lock, and the test waits on `pg_locks` /
 all. If the portal later publishes a better number for one, a human must apply
 it — the right escalation for a billing input.
 
-*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+_Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT._
 
 ## 2026-08-20 (12:20 AM PT) — Two managers, one load, two DR3 numbers (ADR-0118)
 
@@ -498,7 +619,7 @@ it was true.** `verify-gate.ts` carried this, above the verify transaction:
 `verified` was reached exactly once per load only because nothing enforced it —
 the write was an unguarded `update({ where: { id } })`, which succeeds whatever
 the row's state. And "we only issue when `dr3_number` is still null" was decided
-from a read taken on the shared client *outside* the transaction, before the
+from a read taken on the shared client _outside_ the transaction, before the
 split arithmetic and the source lookups that follow it.
 
 So two managers verifying the same submitted load — the office desktop and a
@@ -507,15 +628,15 @@ second tab, or a double-submit on a slow save — both read
 `document_sequences`, and both wrote. Two numbers burned off the sequence that
 documents MRC loads, one of them attached to nothing, and the load silently
 carrying whichever write landed second. `document_sequences` guarantees the two
-issuers get *different* numbers (`sequences.ts` — one `UPDATE … RETURNING`,
+issuers get _different_ numbers (`sequences.ts` — one `UPDATE … RETURNING`,
 row-locked); it cannot guarantee that only one of them was asked.
 
 The issue decision is now conditional on the state it was made from: a guarded
 `updateMany` restating **both** fields `issuesDr3` depends on. If either moved,
 it matches zero rows and the transaction throws `concurrent_verify` (409) —
 and the throw is the point. `sequences.ts:11-14` already said what a rollback
-means: *"if that transaction rolls back, the counter increment rolls back with
-it — a rejected/failed verify never burns a DR3 number."* The loser's number
+means: _"if that transaction rolls back, the counter increment rolls back with
+it — a rejected/failed verify never burns a DR3 number."_ The loser's number
 goes back into the sequence.
 
 `dr3_number: null` is in the guard **only when issuing**, so a load that arrived
@@ -535,8 +656,9 @@ arithmetic is still evaluated):
 - `src/lib/loads/verify-gate.ts` — guarded `updateMany`, `concurrent_verify` reason.
 - `src/lib/loads/verify-gate.db.test.ts` — two real-Postgres cases.
 
-*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT
-— this is the operator-dock path.*
+_Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT
+— this is the operator-dock path._
+
 ## 2026-08-19 (11:40 PM PT) — Releasing a held count is one transaction (ADR-0118)
 
 **One counted event could produce two anchors.** ADR-0072 deliberately built two
@@ -563,7 +685,7 @@ snapshot link and the audit row, all in the same commit.
 `POST /api/admin/inventory/anchors/reactivate` is the one action in the app that
 moves the whole floor without counting anything: it copies a prior count's
 figures forward into a new live anchor. Its `anchor_reactivation` audit row is
-the *only* thing distinguishing that from a count somebody took, and it was
+the _only_ thing distinguishing that from a count somebody took, and it was
 written on the shared client after the snapshot had already committed. A failure
 between the two left a brand-new live anchor with no trace of where its numbers
 came from — indistinguishable from a physical count that never happened, which
@@ -582,7 +704,7 @@ after its enclosing transaction throws: `expected 1 to be +0`.
 - `docs/adr/0118-a-decision-and-its-record-commit-together.md` — the rule, covering
   this PR and the three siblings in the same set.
 
-*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+_Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT._
 
 ## 2026-08-19 (11:05 PM PT) — A promise is not a queue (ADR-0117)
 
@@ -602,7 +724,7 @@ deadline itself rather than a warning ahead of it, and which does not run at all
 on a non-payroll morning.
 
 **The obvious repair is worse than the defect.** "Re-drive anything `signed` with
-`payroll_sent_at IS NULL`" cannot work: that stamp is written only *after* Graph
+`payroll_sent_at IS NULL`" cannot work: that stamp is written only _after_ Graph
 returns 202, so a process that died inside the post-to-Graph window is
 indistinguishable from one that never asked — and the sweep would send a real
 payroll document a second time. A duplicate payroll report is a real-money error
@@ -642,7 +764,7 @@ where the previous behaviour was unbounded and invisible. Recorded in
   `try/catch` so a broken re-drive cannot suppress the signature-chain report.
 - `src/lib/bonus/payroll-redrive.db.test.ts` — three real-Postgres cases.
 
-*Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT.*
+_Operator-window override explicitly approved by Bill, 2026-08-19 ~10:30 PM PT._
 
 ## 2026-08-19 (10:25 PM PT) — Reach is not power (ADR-0116)
 
@@ -673,6 +795,7 @@ reachable since they were written. No `/operator` surface links into
 `/dashboard` (swept), so the evidence says nobody is meant to be there — but
 "no link" is not "nobody navigates there", and that is Bill's call, not the
 audit's. Held for Bill as a people-question, not a code-question; Bill approved 2026-08-19 ~10:25 PM PT and it merged.
+
 ## 2026-08-19 (8:15 PM PT) — Inbound workbook promotion has never landed a row (ADR-0115)
 
 **The argument that was refused before the query was sent.** Every inbound

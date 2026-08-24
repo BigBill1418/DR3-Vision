@@ -43,10 +43,37 @@ describe('close authority — structural boundary', () => {
     expect(src).toContain('closeProcessedUnitsDay');
   });
 
-  it('exposes a manager ENTRY route with no close sibling', () => {
+  it('exposes a manager ENTRY route, and no manager route can close the BILLING day', () => {
     const managerFiles = walk(MANAGER_API);
     expect(managerFiles).toContain(join(MANAGER_API, 'processed-units', 'route.ts'));
-    expect(managerFiles.filter((f) => f.includes('close'))).toEqual([]);
+
+    // ── ADR-0125 — the filename proxy was narrowed, deliberately ────────────
+    //
+    // This read `filter((f) => f.includes('close')).toEqual([])`. That was a
+    // PROXY for the rule this file's header states: no close handler under the
+    // manager namespace, where "close" means closing and LOCKING the billing day
+    // (`processed_units_daily.closed_at`) — the thing only Bill may do.
+    //
+    // ADR-0125 added a manager route whose filename contains "close" and which
+    // closes something else entirely: `eod_day_close`, the record that a manager
+    // REVIEWED a day. Its D2 is explicit that it locks nothing — every amendment
+    // path, `upsertProcessedUnits` included, keeps working on a closed day,
+    // which is the exact opposite of `processed_units_daily.closed_at`.
+    //
+    // So the proxy is replaced by the rule it stood in for, and the replacement
+    // is STRICTER for the route it admits: a manager "close" route is allowed
+    // only if it is named here AND it demonstrably never reaches the billing
+    // close. Every other file still fails the same way it did before, and adding
+    // a name to this list is as deliberate an act as deleting the assertion was.
+    const ALLOWED_MANAGER_CLOSE_ROUTES = [join(MANAGER_API, 'eod', 'close', 'route.ts')];
+    const closeRoutes = managerFiles.filter((f) => f.includes('close')).sort();
+    expect(closeRoutes).toEqual(ALLOWED_MANAGER_CLOSE_ROUTES.sort());
+    for (const f of closeRoutes) {
+      const src = readFileSync(f, 'utf8');
+      expect(src, f).not.toContain('closeProcessedUnitsDay');
+      expect(src, f).not.toContain('processedUnitsDaily');
+      expect(src, f).not.toContain('processed-units');
+    }
   });
 
   it('never imports the close service into a manager route or page', () => {
@@ -92,7 +119,8 @@ vi.mock('@/lib/prisma', () => {
     }) => {
       const k = where.site_id_production_date!;
       const hit = store.rows.find(
-        (r) => r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
+        (r) =>
+          r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
       );
       return hit ? { ...hit } : null;
     },
@@ -107,7 +135,8 @@ vi.mock('@/lib/prisma', () => {
     }) => {
       const k = where.site_id_production_date;
       const found = store.rows.find(
-        (r) => r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
+        (r) =>
+          r.site_id === k.site_id && r.production_date.getTime() === k.production_date.getTime(),
       );
       if (found) return Object.assign(found, update);
       const row = { id: `p${store.rows.length + 1}`, closed_at: null, ...create } as Row;

@@ -17,6 +17,8 @@ const anchor = (total: number): PriorAnchor => ({
   programUnits: null,
   nonProgramUnits: null,
   snapshotAt: new Date('2026-07-22T07:00:00.000Z'),
+  // ADR-0125 — additive; the guardrail itself never reads it.
+  poolAttribution: null,
 });
 
 /** Woodland's real anchor as of 2026-07-22. */

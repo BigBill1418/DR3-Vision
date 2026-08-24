@@ -1042,6 +1042,10 @@ async function seedRolloutSurfaces(siteIds) {
     // dark, admin-only, until Bill flips it at /admin/rollout. Matches migration
     // 20260829_adr0077_terex_ledger_surface.
     'equipment_terex_ledger',
+    // ADR-0125 — the end-of-day manager review + close screen. Born pilot
+    // (ADR-0047 #3 / CLAUDE.md #12). Matches migration
+    // 20260855_adr0125_eod_day_close.
+    'eod_review',
   ];
   // ADR-0065 — retrofitted gates over surfaces that are ALREADY live to operators.
   // Born-pilot protects new exposure; seeding these `pilot` would take working

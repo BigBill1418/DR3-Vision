@@ -115,6 +115,9 @@ model Site {
   // Reporting-only production adjustments (ADR-0032)
   bonus_reporting_adjustments BonusReportingAdjustment[]
 
+  // End-of-day manager review + close (ADR-0125)
+  eod_day_closes EodDayClose[]
+
   // Loads & inventory foundations (ADR-0037)
   state_program_rules   StateProgramRule[]
   consumer_dropoffs     ConsumerDropoff[]
@@ -505,6 +508,14 @@ enum SourceSiteType {
   svdp_internal_store
 }
 
+/// ADR-0125 — the three Assignment values the live `variables!Mileage_Table`
+/// carries. Not a rate: it selects WHICH haul-rate leg a source bills on.
+enum SourceHaulAssignment {
+  primary
+  secondary
+  tertiary
+}
+
 model Source {
   id                String          @id @default(uuid())
   site_id           String
@@ -525,6 +536,14 @@ model Source {
   is_non_program    Boolean         @default(false)
   is_trans_charge   Boolean         @default(false)
   canonical_mileage Int?
+  // ADR-0125 (Phase 0 gap G-9) — the workbook's `variables!Mileage_Table.Assignment`
+  // column, which had NO home anywhere in the schema. `woodland-freight.ts:11` says
+  // so outright ("no Assignment table exists yet") and pins ALL Woodland freight to
+  // Primary as an admitted transitional rule. The live sheet holds exactly three
+  // values, so this is an enum, not free text. NULLABLE and never backfilled: an
+  // invented assignment is indistinguishable from a real one and would silently
+  // pick a freight leg.
+  haul_assignment   SourceHaulAssignment?
   // ADR-0037 amendment (rollup §3.2) — billing routing. `site_type` picks the invoice-line
   // set (see SourceSiteType); nullable (legacy seeds predate the taxonomy).
   // `active_billing=false` suppresses ALL invoice lines (Roseburg: non-program, seed
@@ -6680,4 +6699,63 @@ model DocFacilityExpenseRow {
   @@index([doc_source_id, status], map: "doc_facility_expense_rows_source_status_idx")
   @@index([site_id, invoice_date], map: "doc_facility_expense_rows_site_date_idx")
   @@map("doc_facility_expense_rows")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// End-of-day manager review + close (ADR-0125)
+// ────────────────────────────────────────────────────────────────────────
+//
+// The Woodland daily-log workbook is closed at the end of the day by a person
+// who looks at the day and decides it is finished. Vision had no equivalent:
+// a day with nothing recorded and a day a manager reviewed and found genuinely
+// empty were byte-identical, so "not recorded" and "zero" could not be told
+// apart on any surface. This table is the difference.
+//
+// One row per (site, Pacific calendar day). It exists only because somebody
+// closed that day at least once.
+
+/// The manager's verdict at close. `exception` REQUIRES a note naming what is
+/// still outstanding — a close that swallows open gaps silently is the defect
+/// this outcome exists to prevent.
+enum EodCloseOutcome {
+  clean
+  exception
+}
+
+model EodDayClose {
+  id         String   @id @default(uuid())
+  site_id    String
+  site       Site     @relation(fields: [site_id], references: [id])
+  /// The Pacific calendar day, as a @db.Date day key (src/lib/time.ts). NEVER an
+  /// instant: "the day" is what the manager reviewed, not a moment inside it.
+  close_date DateTime @db.Date
+
+  outcome        EodCloseOutcome
+  /// Required (≥ 4 chars) when `outcome = exception`; enforced by CHECK as well
+  /// as by the service, per the ADR-0107 D2 reasoning that a CHECK guards the
+  /// table against a write path nobody has written yet.
+  exception_note String?
+
+  /// CURRENT close. Both NULL exactly when the day stands REOPENED — the state
+  /// is a fact on the row, never a comparison between two timestamps.
+  /// Bare audit-actor user ids with NO FK, matching `audit_log.actor_user_id`
+  /// and the AP/file-drop actor columns.
+  closed_by String?
+  closed_at DateTime?
+
+  /// The LAST reopen. Retained across a re-close so the row still says the day
+  /// was reopened; every individual reopen keeps its own append-only audit row.
+  reopened_by   String?
+  reopened_at   DateTime?
+  reopen_reason String?
+  /// How many times this day has been reopened. A guard whose only trace is a
+  /// cleared column cannot be told apart from a day that was never reopened.
+  reopen_count  Int       @default(0)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([site_id, close_date])
+  @@index([site_id, close_date])
+  @@map("eod_day_close")
 }
