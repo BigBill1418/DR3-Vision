@@ -19,6 +19,30 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BM — 2026-08-24 pre-floor wrap: everything landed, verified, and confirmed good (3:05 AM PT)
+
+The full overnight sequence is COMPLETE. Verified against prod, not memory:
+
+- **ADR-0124 LIVE** (1:42 AM, smoke passed) — stage selection is a server fact.
+- **ADR-0113 LIVE** (2:32 AM, smoke passed) — the bed-bug late-reject path;
+  ADR-0121/0124 suites green with the reject stage added.
+- **ADR-0125 LIVE** (2:58 AM, smoke passed) — the EOD review-and-complete
+  surface + /admin/sources + eod_day_close. Routes serve (307 auth, not 404).
+- **Close-day acceptance exercised ON PROD** under Bill's id: 2026-08-23
+  closed CLEAN (stands — the floor was closed Sunday); 2026-08-22 closed
+  WITH-EXCEPTION then audited-REOPENED (reason recorded, reopen_count 1, day
+  back open) — the full cycle proven live.
+- **Balances agree exactly on both sites** (Woodland 21/903/924 healthy;
+  Eugene 0/0/0 zero — still awaiting first anchor + feeds).
+- Docs consistent: audits on main, ADR-0124 entry corrected, ledger IDs
+  de-collided (0.BK×2 → 0.BL; third ID collision this week — the ledger's own
+  concurrency problem, worth a numbering convention).
+
+**NEXT (Bill's standing instruction, in flight): the maintenance pass** —
+clear all Claude sessions, update the CLI (2.1.237 → 2.1.241), restart the
+TitanForge stack optimized for the morning; Terry pre-flight runbook then
+Aegis execution; final confirmation to Bill's phone via titanforge-health.
+
 ## 0.BK — 2026-08-24 pre-floor window: ADR-0113 (late reject) rebased onto post-0124 main
 
 - **#275 (ADR-0113) is merge-clean and CI-green on the rebased head, NOT merged.**
