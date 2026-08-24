@@ -106,6 +106,7 @@ current.status }`, refuse on `count === 0`) with `submitted_by_id` as a scalar;
   `weight_skipped_at` and the shared `node_modules` client predates it. Note the
   client is SHARED across every worktree on this box, so the regeneration is
   fleet-wide; it moves forward to main's schema, which is the safe direction.
+
 ## 0.BL — 2026-08-24 the EOD manager surface (ADR-0125) — two Bill decisions, one ramp, three data-loading items
 
 The screen at `/dashboard/[site]/eod` retires the Woodland daily log's functional
@@ -1346,12 +1347,14 @@ processed-units.ts` writes `source: 'manual'` in the `create` branch only, so a
   documents the OPPOSITE hazard at its line 30 (writing `source='import'` on a
   headcount-only disagreement permanently locks the bridge out), so the fix is a
   judgement about which way that trade should fall, not a one-liner.
-- **RESIDUAL — the audit workbench will label the new kinds with their raw enum
-  names.** `workbench-providers.ts` emits `dropoff_<kind>` rows and falls through
-  `INBOUND_SOURCE_LABELS[sourceType] ?? sourceType`, so `dropoff_floor_public` /
-  `dropoff_floor_incentive` render un-prettified until someone adds labels. Display
-  only; no figure is affected. Left open rather than guessed at — the wording is
-  Kelsey's/the office's call and this session had no basis for inventing it.
+- ~~RESIDUAL — the audit workbench will label the new kinds with their raw enum
+  names.~~ **DONE 2026-08-24 (#291, ADR-0085 Amendment 1)** — all three floor
+  kinds now carry `INBOUND_SOURCE_LABELS` entries (`Public/Illegal/Incentive
+drop-offs (iPad)`). Wording is a placeholder Kelsey can redline; the raw-enum
+  fallback no longer renders. Original text: `workbench-providers.ts` emits
+  `dropoff_<kind>` rows and falls through `INBOUND_SOURCE_LABELS[sourceType] ??
+sourceType`, so `dropoff_floor_public` / `dropoff_floor_incentive` render
+  un-prettified until someone adds labels. Display only; no figure is affected.
 - **RESIDUAL — no same-day correction for drop-offs.** ADR-0083/Phase 4 gives the
   iPad a same-day void for COUNTS. A mistyped drop-off is a manager job through
   the existing CRUD-lite path (`/api/manager/[site]/dropoffs/[id]`). Named so it
