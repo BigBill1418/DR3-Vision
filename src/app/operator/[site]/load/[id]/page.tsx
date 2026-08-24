@@ -84,6 +84,9 @@ export default async function LoadPage({ params }: Props) {
       arrived_at: true,
       unload_started_at: true,
       unload_finished_at: true,
+      // ADR-0124 — the "no weight ticket" decision, which used to live only in
+      // the browser. The stage dispatch reads it instead of a `useState`.
+      weight_skipped_at: true,
       total_units: true,
       // ADR-0090 Am.1 B — the review panel reads both. JT asked to "go back to
       // fix or CHECK what you entered", and neither the weight nor which photos
@@ -201,6 +204,11 @@ export default async function LoadPage({ params }: Props) {
             unload_started_at: load.unload_started_at?.toISOString() ?? null,
             total_units: load.total_units,
             weight_lbs: load.weight_lbs,
+            // ADR-0124 — a BOOLEAN, not the instant. The dispatch asks "was the
+            // decision made", and shipping the timestamp would invite a future
+            // reader to compute something from it in the browser; the instant is
+            // the audit trail's business, not the stage selector's.
+            weight_skipped: load.weight_skipped_at !== null,
             // ADR-0109 — counts, not a deduped kind list. The review panel's
             // "was the BOL captured" is `count > 0` and is projected inside the
             // workflow; the stages need the number itself.

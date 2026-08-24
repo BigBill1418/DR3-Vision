@@ -13,15 +13,14 @@ import { useLiveControl, type StageDisableReason } from './stage-liveness';
 export function StageBol({
   siteCode,
   loadId,
-  onCaptured,
-  // ADR-0109 — BOL photos already on the server. Load-bearing on THIS stage in
-  // particular: the BOL step is gated by the client latch `bolDone`, so a
-  // reload returns the operator here with photos already written.
+  // ADR-0109 / ADR-0124 — BOL photos already on the server. Load-bearing twice
+  // over on THIS stage: it arms Continue on a re-entry (ADR-0121), and it is now
+  // the fact that decides whether this stage renders AT ALL. The `onCaptured`
+  // callback is gone with the `bolDone` latch it used to set.
   photoCount = 0,
 }: {
   siteCode: string;
   loadId: string;
-  onCaptured: () => void;
   photoCount?: number;
 }) {
   const t = useT();
@@ -69,10 +68,15 @@ export function StageBol({
       <button
         type="button"
         disabled={continueReason !== null}
+        // ADR-0124 — no client callback. The action revalidates this route, the
+        // page re-reads `photo_counts.bol`, and `selectStage` moves the operator
+        // on. If that revalidation is ever missed, the failure mode is a LIVE
+        // Continue button they can tap again — not a dead screen. That asymmetry
+        // is the whole reason to prefer the server fact: the worst case is a
+        // retry, and ADR-0122's detector would page if it ever were not.
         onClick={() =>
           startTransition(async () => {
             await bolCapturedAction(siteCode, loadId);
-            onCaptured();
           })
         }
         className="rounded-lg bg-dr3-chartreuse px-6 py-4 text-lg font-semibold text-dr3-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40"

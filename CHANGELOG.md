@@ -9,6 +9,28 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-24 (1:10 AM PT) — the markers get a test
+
+Drive-by while rebasing #289. Conflict markers have been committed to this repo
+TWICE in one week, and nothing catches them: in Markdown and SQL they are just
+text, so every docs gate stays green, and in TypeScript `tsc` reports a syntax
+error at a line number rather than "you committed a merge conflict".
+
+**New guard:** `src/lib/repo-hygiene.conflict-markers.test.ts` fails the suite on
+any tracked file carrying an opening (`<` x7) or closing (`>` x7) marker.
+Deliberately does NOT match the bare `=` x7 divider — seven `=` on a line is a
+legitimate Markdown setext heading underline, and this repo is mostly Markdown;
+every conflict writes the opener and the closer, so the pair is enough without
+that false-positive surface.
+
+The file builds its marker strings with `repeat()` instead of writing them out,
+so its own source holds no marker and it scans itself honestly — a detector that
+has to be excluded from its own sweep is one edit away from being excluded from a
+real one. Falsified before shipping in both directions: planted a real conflict
+in `CHANGELOG.md` and watched it go red naming the file and line, and asserted it
+stays quiet on a setext underline, a table row, a left-shift operator and a
+marker that is not at line start.
+
 ## 2026-08-20 (3:30 PM PT) — the third author (ADR-0123)
 
 `processed_units_daily` holds the number MRC is invoiced on and has **three**
@@ -69,6 +91,45 @@ reason **re-entering it would not have helped**.
 **Bill must re-enter the 960/110 correction after this deploys.** The current
 prod value is the uncorrected import figure; it was not written on his behalf.
 Once entered, it will now stand.
+
+## 2026-08-20 — PROPOSED, NOT MERGED: the stage is a fact, not a memory (ADR-0124)
+
+**Held for a before-noon operator window.** ADR-0121 made a dead control live and
+ADR-0122 changes nothing an operator can see; this changes **which screen an
+operator lands on**, and that is not a change to make with trucks on the dock.
+ADR-0121 said so when it deferred it.
+
+`load-workflow.tsx` selected the stage from `load.status` plus **two client
+`useState` latches**, and both recorded — in one browser tab — that a step done on
+the server was finished:
+
+- `bolDone`. Taking the BOL photo does not move `load.status` (it stays
+  `arrived`), and `recordBolCapture`'s entire body is `await assertOwn(args)` —
+  it writes **nothing**. Any reload or takeover returned to stage 1.
+- `weightSkipped`. `recordWeightSkip` also wrote nothing, under a comment stating
+  the design out loud: *"no DB change needed; the weight stage gates only on the
+  user's choice."* The choice died with the tab.
+
+The first put three operators in turn onto a BOL screen for a load whose photo
+was already in Postgres. The second has trapped nobody — "None" is always live —
+but retiring one latch and leaving the other keeps half the defect alive.
+
+**The stage is now a pure function of server facts**, with no room for a client
+hint: BOL done ⟺ `photo_counts.bol > 0` (the photo row *is* the completion, and
+it was already plumbed for ADR-0109 — no column added), and the weight skip gets
+`inbound_loads.weight_skipped_at`, stamped idempotently so a takeover's second
+"None" tap cannot re-attribute an earlier operator's decision.
+
+**The floor behaviour that changes:** a load at `arrived` **with a BOL photo
+already on the server** now opens on stage 2 (weight) instead of stage 1. First
+visits are unchanged.
+
+Falsified by reverting the dispatch to the pre-change fresh-mount behaviour — all
+six re-entry cases go red, every composition failure with the BOL heading on
+screen. That is the incident, reproduced in a test.
+
+Merge checklist for the window is in the ADR's last section.
+
 ## 2026-08-20 (2:45 PM PT) — the floor tells us it is stuck (ADR-0122)
 
 Fast-follow to the emergency below. **The uncomfortable measurement from that

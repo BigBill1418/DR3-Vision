@@ -468,11 +468,50 @@ export async function recordWeightSkip(args: {
   operatorUserId: string;
   siteId: string;
 }): Promise<void> {
-  // Operator chose "no weight ticket" — no DB change needed; the
-  // weight stage gates only on the user's choice, not on a status
-  // transition. The next door-open transition jumps straight from
-  // `arrived` → `unload_started`.
+  // ADR-0124 — this function's entire body used to be `await assertOwn(args)`,
+  // under the comment "no DB change needed; the weight stage gates only on the
+  // user's choice, not on a status transition."
+  //
+  // The user's choice lived in a `useState` in one browser tab. It died on every
+  // reload and every takeover, and the next operator was asked about the same
+  // truck again. It is the `bolDone` defect with a softer landing — "None" is
+  // always live, so nobody was trapped — but a step whose completion is recorded
+  // only on the device that completed it is exactly the class ADR-0121 is about.
+  //
+  // NOT a status transition: "there is no weight ticket" and "the weight was
+  // captured" are different claims, and `weight_captured` with a NULL
+  // `weight_lbs` would assert the second while meaning the first. A dedicated
+  // nullable instant says what happened.
+  //
+  // IDEMPOTENT on the stamp. A second "None" tap — the shape a takeover or a
+  // double-tap produces — must not move the recorded instant, because that
+  // instant is the operator's decision and re-stamping it would attribute an
+  // earlier operator's call to a later one. `updateMany` with the NULL condition
+  // ON the statement rather than a read-then-write (ADR-0118 D1), so two taps
+  // racing cannot both pass a check taken before the write.
   await assertOwn(args);
+  await prisma.$transaction(async (tx) => {
+    const stamped = await tx.inboundLoad.updateMany({
+      where: { id: args.loadId, weight_skipped_at: null },
+      data: { weight_skipped_at: new Date() },
+    });
+    // Already stamped: the decision stands and there is nothing new to record.
+    // An audit row here would claim a state change that did not happen.
+    if (stamped.count === 0) return;
+    // Hard rule #6 — the audit row rides the same transaction as the change it
+    // describes (ADR-0118 D3).
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        before: { weight_skipped_at: null },
+        after: { weight_skipped_at: 'set', reason: 'operator declared no weight ticket' },
+      },
+      { tx },
+    );
+  });
 }
 
 export async function recordWeightCapture(args: {

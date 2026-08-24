@@ -93,6 +93,11 @@ function renderAt(status: LoadStatus) {
         // ADR-0109 — counts replaced the deduped `photo_kinds` array. One BOL
         // photo held, which is what `['bol']` meant here.
         photo_counts: { bol: 1 },
+        // ADR-0124 — the stage dispatch reads server facts, and this fixture's
+        // `arrived` case is the one that changes meaning: with a BOL photo held
+        // and no recorded skip it is the WEIGHT stage, where it used to be BOL
+        // until a client latch flipped.
+        weight_skipped: false,
         stacks: [],
       }}
       operatorName="Marisol"

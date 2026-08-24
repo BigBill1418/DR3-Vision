@@ -111,14 +111,7 @@ afterEach(() => cleanup());
 describe('stage 1 (BOL) re-entry', () => {
   for (const photoCount of [0, 1, 2, 3]) {
     it(`photoCount=${photoCount} leaves at least one live control`, () => {
-      render(
-        <StageBol
-          siteCode="woodland"
-          loadId="load-1"
-          onCaptured={vi.fn()}
-          photoCount={photoCount}
-        />,
-      );
+      render(<StageBol siteCode="woodland" loadId="load-1" photoCount={photoCount} />);
       expect(
         liveControls().length,
         'a re-entered stage offered the operator NOTHING to tap',
@@ -144,11 +137,15 @@ describe('stage 3 (door-open) re-entry', () => {
 // rather than merely offered something to press.
 describe('the operator can actually advance', () => {
   it('BOL Continue commits on re-entry with a server photo', async () => {
-    const onCaptured = vi.fn();
-    render(<StageBol siteCode="woodland" loadId="load-1" onCaptured={onCaptured} photoCount={1} />);
+    // ADR-0124 — the `onCaptured` half of this assertion is GONE with the
+    // `bolDone` latch it fed. Advancing is now the server's job: the action
+    // revalidates the route and `selectStage` reads `photo_counts.bol`. What is
+    // still asserted here — that Continue actually COMMITS on a re-entry — is
+    // the half that proves the floor is unblocked rather than merely offered
+    // something to press, and it is unchanged.
+    render(<StageBol siteCode="woodland" loadId="load-1" photoCount={1} />);
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
     await waitFor(() => expect(bolCapturedAction).toHaveBeenCalledWith('woodland', 'load-1'));
-    await waitFor(() => expect(onCaptured).toHaveBeenCalled());
   });
 
   it('door-open Continue commits on re-entry', async () => {
@@ -163,7 +160,7 @@ describe('the operator can actually advance', () => {
 // rule is gone and a load can reach the dock timer with no paperwork.
 describe('the forced-photo rule survives the fix', () => {
   it('BOL Continue stays refused on a first visit with no photo anywhere', () => {
-    render(<StageBol siteCode="woodland" loadId="load-1" onCaptured={vi.fn()} photoCount={0} />);
+    render(<StageBol siteCode="woodland" loadId="load-1" photoCount={0} />);
     expect((screen.getByRole('button', { name: /continue/i }) as HTMLButtonElement).disabled).toBe(
       true,
     );
