@@ -54,13 +54,13 @@ vi.mock('@/lib/prisma', () => ({
     landfilledUnit: { aggregate: async (): Promise<Agg> => ({ _sum: store.landfilled }) },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
       const tx = {
-      // ADR-0120 — the workbook-promotion site lock. A fake cannot take a
-      // real advisory lock, so this accepts it and does nothing. What the lock
-      // actually does — block a concurrent floor write at the SAME site, and
-      // not block a different site — is a Postgres property, proven in
-      // `src/lib/audit/promotion-lock.db.test.ts`. No-op-ing it here keeps this
-      // suite measuring the behaviour it is actually about.
-      $executeRaw: async () => 0,
+        // ADR-0120 — the workbook-promotion site lock. A fake cannot take a
+        // real advisory lock, so this accepts it and does nothing. What the lock
+        // actually does — block a concurrent floor write at the SAME site, and
+        // not block a different site — is a Postgres property, proven in
+        // `src/lib/audit/promotion-lock.db.test.ts`. No-op-ing it here keeps this
+        // suite measuring the behaviour it is actually about.
+        $executeRaw: async () => 0,
         siteInventorySnapshot: {
           create: async ({ data }: { data: unknown }) => {
             store.createdSnapshots.push(data);
@@ -319,11 +319,12 @@ describe('onHand — DB adapter', () => {
   });
 
   it('still composes normally when every kind present is taught', async () => {
-    // Same total drop-off units as the base case (10), split across three taught
+    // Same total drop-off units as the base case (10), split across four taught
     // kinds — so the grouping itself moves no number.
     store.dropoffs = [
       { kind: 'unpaid', _sum: { units: 4 } },
-      { kind: 'floor_public', _sum: { units: 5 } },
+      { kind: 'floor_public', _sum: { units: 4 } },
+      { kind: 'floor_illegal', _sum: { units: 1 } },
       { kind: 'floor_incentive', _sum: { units: 1 } },
     ];
     const r = await onHand('site-woodland', new Date('2026-07-03T00:00:00Z'));

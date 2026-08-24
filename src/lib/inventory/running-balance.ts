@@ -90,6 +90,10 @@ export const DROPOFF_KIND_POOL: Readonly<Record<ConsumerDropoffKind, 'program'>>
   // drop-offs at the floor; the label carries no pool meaning.
   floor_public: 'program',
   floor_incentive: 'program',
+  // ADR-0085 Am.1 — the third label-only floor kind. Illegally dumped units are
+  // still CIP program units once they're on the floor; the label carries no
+  // pool meaning, same as its two siblings.
+  floor_illegal: 'program',
 };
 
 /**

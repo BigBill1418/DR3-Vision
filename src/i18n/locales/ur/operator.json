@@ -534,6 +534,7 @@
       "intro": "قسم منتخب کریں، گدے گنیں، ایک تصویر لیں، پھر بھیجیں۔",
       "kind_label": "ڈراپ آف کی قسم",
       "kind_floor_public": "عوامی ڈراپ آف",
+      "kind_floor_illegal": "غیر قانونی ڈراپ آف",
       "kind_floor_incentive": "ترغیبی ڈراپ آف",
       "units_label": "کل یونٹس",
       "photo_label": "تصویر",

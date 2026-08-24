@@ -2499,6 +2499,13 @@ enum ConsumerDropoffKind {
   /// CHECK constraint, which is in the migration and not expressible here.
   floor_public
   floor_incentive
+
+  /// ADR-0085 Amendment 1 — the third label-only iPad kind, requested by the
+  /// floor team 2026-08-24. Same contract as its two siblings: no money, no
+  /// PII, photo required. The $3/unit Bye-Bye-Mattress claim on illegally
+  /// dumped units stays a manager-entered `illegal` row, exactly as the
+  /// Incentive programme's $3 stays off `floor_incentive`.
+  floor_illegal
 }
 
 /// ADR-0037 D4 — landfilled whole-unit disposal reasons (workbook block).

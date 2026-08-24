@@ -98,8 +98,8 @@ suite('ADR-0085 — floor drop-off (real Postgres)', () => {
   // Money + PII
   // ───────────────────────────────────────────────────────────────────────
 
-  it('writes NULL money and NULL name for both label-only kinds', async () => {
-    for (const kind of ['floor_public', 'floor_incentive'] as const) {
+  it('writes NULL money and NULL name for every label-only kind', async () => {
+    for (const kind of ['floor_public', 'floor_illegal', 'floor_incentive'] as const) {
       await db.$transaction((tx: any) =>
         createFloorDropoff({
           tx,
@@ -114,7 +114,7 @@ suite('ADR-0085 — floor drop-off (real Postgres)', () => {
     }
 
     const rows = await db.consumerDropoff.findMany({ where: { site_id: SITE } });
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     for (const r of rows) {
       // The whole point of the feature, asserted field by field rather than as a
       // single "no money" spot-check — `incentive_cents` and
@@ -293,7 +293,11 @@ suite('ADR-0085 — floor drop-off (real Postgres)', () => {
       }),
     );
     const priors = await db.consumerDropoff.findMany({
-      where: { site_id: SITE, person_name: 'Real Collector', dropoff_date: new Date(`${DAY}T00:00:00Z`) },
+      where: {
+        site_id: SITE,
+        person_name: 'Real Collector',
+        dropoff_date: new Date(`${DAY}T00:00:00Z`),
+      },
       select: { incentive_cents: true },
     });
     expect(priors, '40 anonymous units leaked into a named collector’s cap').toEqual([]);
@@ -321,7 +325,10 @@ suite('ADR-0085 — floor drop-off (real Postgres)', () => {
     );
     const agg = await db.consumerDropoff.aggregate({
       _sum: { units: true },
-      where: { site_id: SITE, dropoff_date: { gt: new Date('2026-08-01'), lte: new Date('2026-08-31') } },
+      where: {
+        site_id: SITE,
+        dropoff_date: { gt: new Date('2026-08-01'), lte: new Date('2026-08-31') },
+      },
     });
     expect(agg._sum.units).toBe(7);
   });

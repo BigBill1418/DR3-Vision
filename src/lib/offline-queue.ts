@@ -238,7 +238,7 @@ export type DropoffQueuePayload = {
   site_code: string;
   /** Pacific day (YYYY-MM-DD) the drop-off was FOR. Pinned on replay. */
   dropoff_date: string;
-  kind: 'floor_public' | 'floor_incentive';
+  kind: 'floor_public' | 'floor_illegal' | 'floor_incentive';
   units: number;
 };
 
@@ -553,7 +553,7 @@ function notifyEnqueued(): void {
 export type EnqueueDropoffInput = {
   site_code: string;
   dropoff_date: string;
-  kind: 'floor_public' | 'floor_incentive';
+  kind: 'floor_public' | 'floor_illegal' | 'floor_incentive';
   units: number;
   blob: Blob;
   content_type: string;

@@ -534,6 +534,7 @@
       "intro": "Elige el tipo, cuenta los colchones, toma una foto y envía.",
       "kind_label": "Tipo de entrega",
       "kind_floor_public": "Entrega pública",
+      "kind_floor_illegal": "Entrega ilegal",
       "kind_floor_incentive": "Entrega de incentivo",
       "units_label": "Unidades totales",
       "photo_label": "Foto",

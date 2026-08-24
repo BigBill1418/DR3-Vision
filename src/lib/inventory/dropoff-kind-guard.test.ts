@@ -38,8 +38,9 @@ const g = (kind: string, units: number | null): DropoffKindGroup => ({ kind, _su
 describe('DROPOFF_KIND_POOL — the taught set', () => {
   // Pins the CURRENT enum. If someone adds a kind, this is the second thing that
   // goes red (tsc is the first), and the message names what to do about it.
-  it('teaches exactly the five kinds the schema defines today', () => {
+  it('teaches exactly the six kinds the schema defines today', () => {
     expect(Object.keys(DROPOFF_KIND_POOL).sort()).toEqual([
+      'floor_illegal',
       'floor_incentive',
       'floor_public',
       'illegal',
@@ -125,8 +126,8 @@ describe('sumTaughtDropoffKinds — taught kinds are summed exactly as before', 
     const all = (Object.keys(DROPOFF_KIND_POOL) as ConsumerDropoffKind[]).map((k, i) =>
       g(k, (i + 1) * 10),
     );
-    // 10 + 20 + 30 + 40 + 50
-    expect(sumTaughtDropoffKinds(all, 's').equals(new Prisma.Decimal(150))).toBe(true);
+    // 10 + 20 + 30 + 40 + 50 + 60
+    expect(sumTaughtDropoffKinds(all, 's').equals(new Prisma.Decimal(210))).toBe(true);
   });
 
   it('treats a NULL sum on a taught kind as zero (an empty group, not an error)', () => {

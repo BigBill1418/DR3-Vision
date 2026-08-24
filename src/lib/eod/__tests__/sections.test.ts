@@ -216,12 +216,20 @@ describe('bucketing', () => {
       slipNumber: null,
     });
     const rows = emptyWindow({
-      dropoffs: [mk('unpaid', 3), mk('incentive', 5), mk('illegal', 7), mk('floor_public', 11)],
+      dropoffs: [
+        mk('unpaid', 3),
+        mk('incentive', 5),
+        mk('illegal', 7),
+        mk('floor_public', 11),
+        // ADR-0085 Am.1 — the iPad Illegal label lands in "other", same as its
+        // floor siblings, NOT in the manager `illegal` bucket.
+        mk('floor_illegal', 13),
+      ],
     });
     const totals = summarizeDay(bucketRowsByDay(rows, keys)[1] as DaySectionRows);
     expect(totals.unpaidDropoff.units).toBe(3);
     expect(totals.incentiveDropoff.units).toBe(5);
-    expect(totals.otherDropoff.units).toBe(18);
+    expect(totals.otherDropoff.units).toBe(31);
   });
 
   it('derives NonProgram from the inbound split, not from a separate table (G-4/D9)', () => {

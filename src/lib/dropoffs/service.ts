@@ -128,6 +128,9 @@ function mintsCheckMoneyByDefault(kind: ConsumerDropoffKind): boolean {
     // routed around this function still cannot write a cents value.
     case 'floor_public':
     case 'floor_incentive':
+    // ADR-0085 Amendment 1 — same contract: the $3/unit Bye-Bye-Mattress claim
+    // on illegally dumped units stays a manager-entered `illegal` row.
+    case 'floor_illegal':
       return false;
   }
 
@@ -444,7 +447,7 @@ export async function updateDropoff(args: {
   // a 500 with a constraint name in it, which tells the office nothing. Refused
   // here, in the language of the thing the manager was trying to do.
   const isFloor = (k: ConsumerDropoffKind): boolean =>
-    k === 'floor_public' || k === 'floor_incentive';
+    k === 'floor_public' || k === 'floor_incentive' || k === 'floor_illegal';
   if (isFloor(kind) !== isFloor(existing.kind)) {
     throw new RecordValidationError(
       'an iPad drop-off cannot be converted to a manager drop-off (or back): the two carry ' +

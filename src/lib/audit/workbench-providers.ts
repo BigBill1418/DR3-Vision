@@ -86,6 +86,11 @@ const INBOUND_SOURCE_LABELS: Record<string, string> = {
   dropoff_incentive: 'Incentive drop-offs',
   dropoff_unpaid: 'Unpaid drop-offs',
   dropoff_illegal: 'Illegal drop-offs',
+  // ADR-0085 (+ Am.1) — the label-only iPad walk-up kinds. Without these three
+  // the fallback renders the raw `dropoff_floor_*` key in the workbench.
+  dropoff_floor_public: 'Public drop-offs (iPad)',
+  dropoff_floor_illegal: 'Illegal drop-offs (iPad)',
+  dropoff_floor_incentive: 'Incentive drop-offs (iPad)',
 };
 
 /**
@@ -101,16 +106,27 @@ export function dbWorkbenchProvider(db: PrismaClient): WorkbenchProvider {
     async rollups(siteId, windowStartISO, windowEndISO): Promise<WorkbenchRollups> {
       const gte = new Date(`${windowStartISO}T00:00:00.000Z`);
       const lt = new Date(`${windowEndISO}T00:00:00.000Z`);
-      const drill = (frag: string) => `/dashboard/SITE/loads-inventory?${frag}`.replace('SITE', siteId);
+      const drill = (frag: string) =>
+        `/dashboard/SITE/loads-inventory?${frag}`.replace('SITE', siteId);
 
       const [haulAgg, eventAgg, dropoffs, outboundGroups, inventoryDays] = await Promise.all([
         db.inboundLoad.aggregate({
           _sum: { program_unit_count: true, non_program_unit_count: true },
-          where: { site_id: siteId, load_source_type: 'b2b_haul', status: { in: ['verified', 'submitted_to_mymrc', 'processed'] }, arrived_at: { gte, lt } },
+          where: {
+            site_id: siteId,
+            load_source_type: 'b2b_haul',
+            status: { in: ['verified', 'submitted_to_mymrc', 'processed'] },
+            arrived_at: { gte, lt },
+          },
         }),
         db.inboundLoad.aggregate({
           _sum: { total_units: true },
-          where: { site_id: siteId, load_source_type: 'event', status: { in: ['verified', 'submitted_to_mymrc', 'processed'] }, arrived_at: { gte, lt } },
+          where: {
+            site_id: siteId,
+            load_source_type: 'event',
+            status: { in: ['verified', 'submitted_to_mymrc', 'processed'] },
+            arrived_at: { gte, lt },
+          },
         }),
         db.consumerDropoff.groupBy({
           by: ['kind'],
@@ -126,7 +142,12 @@ export function dbWorkbenchProvider(db: PrismaClient): WorkbenchProvider {
       ]);
 
       const inboundBySourceType: InboundSourceTypeRow[] = [];
-      const pushInbound = (sourceType: string, units: number, isNonProgram: boolean, frag: string) => {
+      const pushInbound = (
+        sourceType: string,
+        units: number,
+        isNonProgram: boolean,
+        frag: string,
+      ) => {
         if (units > 0) {
           inboundBySourceType.push({
             sourceType,
@@ -137,8 +158,18 @@ export function dbWorkbenchProvider(db: PrismaClient): WorkbenchProvider {
           });
         }
       };
-      pushInbound('standard_haul', num(haulAgg._sum.program_unit_count), false, 'tab=inbound&source=b2b_haul&pool=program');
-      pushInbound('standard_haul_np', num(haulAgg._sum.non_program_unit_count), true, 'tab=inbound&source=b2b_haul&pool=non_program');
+      pushInbound(
+        'standard_haul',
+        num(haulAgg._sum.program_unit_count),
+        false,
+        'tab=inbound&source=b2b_haul&pool=program',
+      );
+      pushInbound(
+        'standard_haul_np',
+        num(haulAgg._sum.non_program_unit_count),
+        true,
+        'tab=inbound&source=b2b_haul&pool=non_program',
+      );
       pushInbound('event', num(eventAgg._sum.total_units), false, 'tab=inbound&source=event');
       for (const d of dropoffs) {
         pushInbound(`dropoff_${d.kind}`, num(d._sum.units), false, `tab=dropoffs&kind=${d.kind}`);
@@ -152,7 +183,11 @@ export function dbWorkbenchProvider(db: PrismaClient): WorkbenchProvider {
           wholeUnits: g._sum.whole_units == null ? null : num(g._sum.whole_units),
           drillHref: drill(`tab=outbound&commodity=${g.commodity}&subCategory=${g.sub_category}`),
         }))
-        .sort((a, b) => a.commodity.localeCompare(b.commodity) || (a.subCategory ?? '').localeCompare(b.subCategory ?? ''));
+        .sort(
+          (a, b) =>
+            a.commodity.localeCompare(b.commodity) ||
+            (a.subCategory ?? '').localeCompare(b.subCategory ?? ''),
+        );
 
       const inventoryLedger: InventoryDayRollup[] = inventoryDays.map((d) => {
         const computedEnd = (d.recordedEnd ?? 0) + (d.npRecordedEnd ?? 0);

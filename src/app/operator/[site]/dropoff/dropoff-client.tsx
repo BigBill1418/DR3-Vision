@@ -42,7 +42,7 @@ type Props = {
   dropoffDate: string;
 };
 
-type Kind = 'floor_public' | 'floor_incentive';
+type Kind = 'floor_public' | 'floor_illegal' | 'floor_incentive';
 type Status = 'entry' | 'sending' | 'sent' | 'queued' | 'error';
 
 export function DropoffClient({ siteCode, dropoffDate }: Props) {
@@ -227,7 +227,9 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
       <div className="flex flex-col gap-2">
         <p className="text-base font-semibold text-dr3-cream/90">{t('floor.dropoff.kind_label')}</p>
         <div className="flex gap-3">
-          {(['floor_public', 'floor_incentive'] as Kind[]).map(kindBtn)}
+          {/* ADR-0085 Am.1 — Illegal sits BETWEEN Public and Incentive, the
+              floor team's requested order (2026-08-24). */}
+          {(['floor_public', 'floor_illegal', 'floor_incentive'] as Kind[]).map(kindBtn)}
         </div>
       </div>
 
@@ -289,12 +291,14 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
         <p className="text-lg text-dr3-chartreuse">{t('floor.common.queued')}</p>
       )}
       {error && <p className="text-lg text-red-300">{error}</p>}
-      {refusal && <WriteRefusalNotice
+      {refusal && (
+        <WriteRefusalNotice
           refusal={refusal}
           onRefresh={refreshToToday}
           siteCode={siteCode}
           surface="dropoff"
-        />}
+        />
+      )}
     </div>
   );
 }

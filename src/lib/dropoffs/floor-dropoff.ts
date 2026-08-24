@@ -54,13 +54,16 @@ import { RecordValidationError } from '@/lib/loads/record-guards';
 const TABLE = 'consumer_dropoffs';
 
 /**
- * The two label-only kinds, narrowed from `ConsumerDropoffKind`.
+ * The label-only kinds, narrowed from `ConsumerDropoffKind`.
  *
  * Narrowed rather than reusing the full enum so the compiler refuses a caller
  * that hands this path `incentive` — which would resolve a payout rule and a
- * per-person cap on a flow that captures no person.
+ * per-person cap on a flow that captures no person. Same for `illegal`: the
+ * manager kind requires a payee name and mints check money by default;
+ * `floor_illegal` (ADR-0085 Amendment 1) is the label-only sibling this path
+ * accepts instead.
  */
-export const FLOOR_DROPOFF_KINDS = ['floor_public', 'floor_incentive'] as const;
+export const FLOOR_DROPOFF_KINDS = ['floor_public', 'floor_illegal', 'floor_incentive'] as const;
 export type FloorDropoffKind = (typeof FLOOR_DROPOFF_KINDS)[number];
 
 export function isFloorDropoffKind(value: unknown): value is FloorDropoffKind {
@@ -106,7 +109,9 @@ export interface CreateFloorDropoffArgs {
  * This check exists so the refusal is a 422 with a reason rather than a
  * constraint violation with a stack trace.
  */
-function assertPhoto(photo: FloorDropoffPhoto | undefined | null): asserts photo is FloorDropoffPhoto {
+function assertPhoto(
+  photo: FloorDropoffPhoto | undefined | null,
+): asserts photo is FloorDropoffPhoto {
   if (!photo || typeof photo.storageKey !== 'string' || photo.storageKey.trim() === '') {
     throw new RecordValidationError('a photo is required for every drop-off');
   }
@@ -127,7 +132,9 @@ export interface FloorDropoffResult {
  * renders — no money fields to echo back, and nothing a later reader could
  * mistake for a payout record.
  */
-export async function createFloorDropoff(args: CreateFloorDropoffArgs): Promise<FloorDropoffResult> {
+export async function createFloorDropoff(
+  args: CreateFloorDropoffArgs,
+): Promise<FloorDropoffResult> {
   assertWholeUnits(args.units);
   assertPhoto(args.photo);
   if (!isFloorDropoffKind(args.kind)) {

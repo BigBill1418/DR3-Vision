@@ -10,7 +10,7 @@
 
 JT, via Bill (handoff `2026-08-07-floor-and-ipad-bulletproof-reliability-plus-four-o.md`, Phase 5):
 
-> *"a tile or static button on the iPad; hitting it prompts Public Drop Off or Incentive Drop, then asks for total units and a photo; contributes to daily inbound and inventory."*
+> _"a tile or static button on the iPad; hitting it prompts Public Drop Off or Incentive Drop, then asks for total units and a photo; contributes to daily inbound and inventory."_
 
 People walk mattresses up to the gate. Some are ordinary public drop-offs; some
 come through the Incentive programme. Today neither is captured at the door at
@@ -32,11 +32,11 @@ already has a manager API. Reusing it was obviously right. But
 
 ```ts
 if (kind === 'incentive') return null;
-return units * UNPAID_DROPOFF_CENTS_PER_UNIT;   // 300¢/unit
+return units * UNPAID_DROPOFF_CENTS_PER_UNIT; // 300¢/unit
 ```
 
-Read as policy: *every drop-off kind mints $3/unit of Bye-Bye-Mattress check
-money except the one named exception.* An allowlist of one, on the wrong side of
+Read as policy: _every drop-off kind mints $3/unit of Bye-Bye-Mattress check
+money except the one named exception._ An allowlist of one, on the wrong side of
 the decision. **Any** new `ConsumerDropoffKind` fell straight through to
 `units × 300`.
 
@@ -55,6 +55,7 @@ column is load-bearing for the `@@index([site_id, person_name, dropoff_date])`
 that serves the per-person daily incentive cap.
 
 ### Hazard 3 — the photo has to be required, and the last time photos were
+
 ### involved they silently did not work at all
 
 `load_photos` held **zero rows** from the day the feature shipped until
@@ -173,8 +174,8 @@ another table is not a CHECK. "No drop-off without a photo" becomes a storage
 fact rather than a convention.
 
 `photo_uploaded_by` is written on row one. ADR-0078 Am.1's lesson, applied
-early: `load_photos` enforced who *may* upload and then kept no record of who
-*did*, so all 85 pre-flip rows carry `uploaded_by IS NULL` and backfilling them
+early: `load_photos` enforced who _may_ upload and then kept no record of who
+_did_, so all 85 pre-flip rows carry `uploaded_by IS NULL` and backfilling them
 would be inventing a name.
 
 Explicitly NOT done: bolting drop-off photos onto `load_photos` with a synthetic
@@ -202,7 +203,7 @@ entry that cannot drain. ADR-0078 Am.1's rule — mint and confirm move together
 
 **The returned key is re-checked on submit** (`isValidDropoffStorageKey`). It
 arrives from an iPad's IndexedDB, possibly days later; the CHECK constraint only
-requires it to be non-null and has no opinion about *which* object it names.
+requires it to be non-null and has no opinion about _which_ object it names.
 Without the check, a drop-off could cite another site's object — or a vendor
 invoice under `ap/` — as its evidence.
 
@@ -371,3 +372,50 @@ form.
   silently overwritten by the next bridge run. Untouched by this ADR — it is a
   live defect in someone else's path and folding a fix into a drop-off PR would
   hide it. Filed in `docs/OPEN-ITEMS.md`.
+
+---
+
+## Amendment 1 (2026-08-24) — a third label: Illegal, between Public and Incentive
+
+**Status:** Accepted. Additive: adds `floor_illegal` to the label set; no write
+guard is relaxed and no existing kind changes meaning.
+
+The floor team asked for an "Illegal Dropoff" choice on the capture screen,
+sitting **between Public and Incentive** — their stated order, preserved
+verbatim in the button row. Illegally dumped units were previously either
+captured under the wrong label or not captured at the door at all.
+
+### The decision, and the one thing it deliberately does NOT do
+
+`floor_illegal` is the third **label-only** kind, with exactly the contract of
+its two siblings: no money, no PII, photo required, program pool, "other"
+bucket in the EOD summary. It is a new enum member rather than a reuse of the
+manager `illegal` kind for the same reason `floor_public` was not a reuse of
+`unpaid`: the manager kind requires a `person_name`
+(`non_floor_requires_person`) and mints units × 300¢ of Bye-Bye-Mattress check
+money by default (`mintsCheckMoneyByDefault`). An illegal dump has no payee
+standing at the door, and the floor flow records no money — **the $3/unit
+Bye-Bye-Mattress claim on illegally dumped units remains a manager-entered
+`illegal` row**, exactly as the Incentive programme's $3 remains off
+`floor_incentive`. If the office needs the claim, they enter it where money is
+recorded, as they do today.
+
+### Mechanics
+
+- Two migrations, same split as the original pair and for the same
+  one-transaction reason: `20260856_adr0085am1_floor_illegal_kind` adds the
+  enum value; `20260856a_adr0085am1_floor_illegal_constraints` re-creates the
+  three CHECK constraints with the new label in each kind list. Verified
+  against a fresh Postgres 16: all three constraints render with the
+  three-label lists, and the db suite's money/PII loop now covers all three.
+- `FLOOR_DROPOFF_KINDS` widens to three (route zod, replay path and
+  `createFloorDropoff` all follow from it); the offline-queue kind unions,
+  `DROPOFF_KIND_POOL` (program), `poolForChannel` (`floor_dropoff`) and
+  `mintsCheckMoneyByDefault` (false, compile-gated) each took their forced
+  update.
+- Translations shipped in all three locales (`kind_floor_illegal`).
+- The workbench display nicety stated in this ADR's close-out ("inherit the
+  raw-enum label until someone adds one to `INBOUND_SOURCE_LABELS`") is now
+  fixed for all three floor kinds — `Public/Illegal/Incentive drop-offs
+(iPad)`. Wording is a placeholder Kelsey can redline; the mechanism is the
+  point.
