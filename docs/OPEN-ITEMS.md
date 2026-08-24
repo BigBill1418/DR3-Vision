@@ -19,6 +19,39 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BI — 2026-08-24 early AM: orchestrator resume — the h276 audits land on main, the parked pair gets rebased, Phase 1 launches
+
+The 8/19 orchestrator session ended mid-flight; the 8/19–20 sessions shipped
+ADRs 0115–0124 (see §0.BF–0.BH) but three h276 threads were left dangling.
+Reconciled and resumed ~1:15 AM PT:
+
+- **Both h276 audit docs are now ON MAIN** (they sat unmerged on branches for
+  five days): the Phase-0 parity audit (F-1..F-6, G-1..G-15) and the full-repo
+  audit with **THE INVOICE VERDICT: July transportation invoiced off totals the
+  sheet DOUBLES — corrected figure 74,254.90 vs the sheet's 135,209.81, a
+  $60,954.90 overstatement (mechanism proven to the cent on May; July PDF
+  itself unfiled — pulling it from SVdP accounting settles credit-memo vs
+  sheet-only); August running +$27,840.24 overstated and NOT YET INVOICED —
+  the stoppable one.** Duplication began July (Apr–Jun clean), exactly 2.000×.
+- **#289 (ADR-0124)** — rebase onto post-0121 main in flight overnight; merges
+  first in the Monday before-noon window. **#275 (ADR-0113 late reject,
+  4 days past its window)** — rebases on top after #289 lands, merges same
+  window.
+- **h276 Phase 1+2 BUILD LAUNCHED** (EOD review-and-complete surface +
+  /admin/sources + eod_day_close + rollup), spec = handoff amended by the
+  audit (G-1 rollup criterion replaced with sum-of-sections + reconciliation
+  line; G-6 outbound resized; G-7 NP/unpaid uncollapsed; G-8 identifiers
+  manual-only pending Bill's sequencing decision).
+
+**BILL'S OPEN ACTIONS (consolidated):** (1) pull the July transportation
+invoice from SVdP accounting — 56,075 on its freight line = sheet-only defect;
+~112,150 = MRC over-billed, credit memo owed; (2) make sure August's invoice
+is NOT prepared from the sheet as it stands; (3) subscribe the phone to
+`dr3-vision-floor` (§0.BG O-1 — the trapped-operator pager is a black hole
+until then); (4) re-enter the M-186301 correction 960/110 (§0.BH O-1);
+(5) decisions: DR3-number sequencing (G-8), Events channel Phase 3 (G-12),
+container-rental $10,800/$10,500 (Rick, G-10).
+
 ## 0.BH — 2026-08-20 workbook-import ownership (ADR-0123) — one Bill action, one open question, one residual
 
 - **O-1 — BILL'S DATA ENTRY (ADR-0123): re-enter the M-186301 correction.**
@@ -43,6 +76,7 @@ item below that names Kelsey as a dependency in that light.
   `create` raises a unique violation that fails the tick. Pre-existing, retried
   ten minutes later, and out of scope for an ownership ADR — but it is the one
   remaining read-then-write in this writer.
+
 ## 0.BG — 2026-08-20 floor dead-end pager (ADR-0122) — ONE blocking operator action
 
 Fast-follow to the ADR-0121 emergency. The detector and the page are live; one
