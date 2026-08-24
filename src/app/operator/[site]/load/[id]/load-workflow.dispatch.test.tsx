@@ -48,6 +48,13 @@ vi.mock('@/lib/offline-queue', () => ({
   isOfflineError,
   newIdempotencyKey,
   enqueueAction: vi.fn(async () => ({})),
+  // ADR-0113 — this suite mounts the REAL composition, and the footer now
+  // carries `LateRejectPanel`, which reads the queue depth for this load to
+  // decide whether the reject may be offered at all. Without the export the
+  // panel's mount throws and the `stacks` / `finish` cases fail on a missing
+  // mock rather than on anything they assert. 0 = nothing in flight, which is
+  // this suite's premise everywhere else.
+  pendingActionsForLoad: vi.fn(async () => 0),
 }));
 
 const { bolCapturedAction, weightSkipAction, doorOpenCapturedAction } = vi.hoisted(() => ({

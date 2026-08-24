@@ -32,7 +32,7 @@
 // component that merely *decided* to navigate is what shipped.
 
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { LoadStatus } from '@prisma/client';
 import en from '@/i18n/locales/en/operator.json';
@@ -63,6 +63,15 @@ vi.mock('./review-panel', () => ({
       { 'data-testid': 'review-panel' },
       React.createElement('button', { 'data-testid': 'review-close', onClick: onClose }, 'close'),
     ),
+}));
+// ADR-0113 — same reason a third time: the late-reject panel reaches for
+// `../../actions` (next-auth) and `@/lib/offline-queue` (IndexedDB) at module
+// load. Its own behaviour — the two-tap open, the consequence line, the
+// unsent-writes withholding, the required category and photo — is pinned in
+// `late-reject-panel.test.tsx`. This suite asserts only WHERE it is mounted,
+// which is the half that was wrong.
+vi.mock('./late-reject-panel', () => ({
+  LateRejectPanel: () => React.createElement('div', { 'data-testid': 'late-reject-panel' }),
 }));
 
 vi.mock('@/i18n/provider', async () => {
@@ -300,5 +309,119 @@ describe('ADR-0090 Am.1 — every stage offers a way to check what was entered',
     // is two controls that have to agree about what "back" means.
     renderAt('unload_started');
     expect(screen.getByTestId('review-open')).toBeTruthy();
+  });
+});
+
+// ADR-0113 — the dead end Bill hit on 2026-08-19, pinned as a dispatch property.
+//
+// H-137759 was accepted, the unload began, and the floor found massive bed bugs.
+// There was no way back. The reject stage was mounted on exactly one status:
+//
+//     if (load.status === 'unload_started' && showReject) return <StageReject … />
+//
+// so the affordance vanished the instant the first stack landed — which is
+// roughly the instant an operator starts handling mattresses, and therefore the
+// instant they can first SEE what is in them. The load was closed by hand-audited
+// DB rectification.
+//
+// These tests assert the RENDERED affordance on the surfaces that lacked it, not
+// a capability flag. A state machine that permits the transition while no screen
+// offers it is the same dead end with a longer changelog.
+describe('ADR-0113 — a load being counted can be refused', () => {
+  /** The two stages past the inspection fork — the ones with no exit before now. */
+  const LATE_STAGES = ['in_progress', 'finished'] as const satisfies readonly LoadStatus[];
+
+  it.each(LATE_STAGES)('THE DEAD END: `%s` now offers a reject affordance', (status) => {
+    renderAt(status);
+    expect(screen.getByTestId('late-reject-panel')).toBeTruthy();
+  });
+
+  it.each(['arrived', 'weight_captured', 'unload_started'] as const)(
+    'does NOT double up the offer on `%s`, which reaches StageDecision',
+    (status) => {
+      // Those three flow to the inspection stage, where "Begin unload" and
+      // "Reject load" already sit side by side as equal-weight choices. A second
+      // entrance to the same decision on the same screen is two controls that
+      // have to agree about what rejecting means.
+      renderAt(status);
+      expect(screen.queryByTestId('late-reject-panel')).toBeNull();
+    },
+  );
+
+  it.each(['submitted', 'rejected', 'voided', 'verified'] as const)(
+    'does not offer it on the terminal screen `%s`',
+    (status) => {
+      renderAt(status);
+      expect(screen.queryByTestId('late-reject-panel')).toBeNull();
+    },
+  );
+
+  it('keeps the reject BELOW the review and ABOVE the void', () => {
+    // Order is the safety property, not decoration. Going back to look is the
+    // common correction and must come first; the two controls that END a load
+    // sit under it. Between those two, the reject is the one an operator is
+    // actually looking for with a bad truck at the dock — the void answers a
+    // different question ("this load record is wrong") and is the rarer act.
+    renderAt('in_progress');
+    const order = ['review-open', 'late-reject-panel', 'void-panel'].map((id) =>
+      screen.getByTestId(id),
+    );
+    expect(order[0]!.compareDocumentPosition(order[1]!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(order[1]!.compareDocumentPosition(order[2]!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('withdraws the reject while the review is open', () => {
+    // Same rule the void already follows: the review is the one view where the
+    // operator is reading rather than deciding.
+    renderAt('in_progress');
+    fireEvent.click(screen.getByTestId('review-open'));
+    expect(screen.queryByTestId('late-reject-panel')).toBeNull();
+  });
+});
+
+// ADR-0113 D8 — the terminal reject screen had no beacon at all.
+//
+// ADR-0100 §P0 wired `load_closed` onto the `!STAGE_STATUSES` branch and left
+// the `submitted` / `rejected` branch beside it unmeasured. The omission was
+// invisible because the two branches look alike. They are not alike, and the
+// distinction is the whole of why only ONE of them gets the beacon.
+describe('ADR-0113 — the rejected terminal screen is now counted', () => {
+  const post = vi.fn();
+
+  beforeEach(async () => {
+    post.mockReset();
+    post.mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', post);
+    // Module-scoped dedupe Set — without this the second render in a file is
+    // silently a no-op and every assertion below would be measuring the first.
+    const { __resetDeadEndBeacon } = await import('../../../_components/dead-end-beacon');
+    __resetDeadEndBeacon();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('a `rejected` load reports a dead end', async () => {
+    renderAt('rejected');
+    await vi.waitFor(() => expect(post).toHaveBeenCalled());
+    const [url, init] = post.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`/api/operator/${SITE}/dead-end`);
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      surface: 'load',
+      state: 'load_closed',
+      objectId: 'load-1',
+    });
+  });
+
+  it('a `submitted` load reports NOTHING — it is the happy path ending', async () => {
+    // The load-bearing half. `submitted` is the designed end of the workflow:
+    // the floor lands here having done everything right, and it is the single
+    // most common terminal render on the screen. Counting it as a dead end would
+    // bury every real one under it and make the metric useless in the same
+    // motion that made it look thorough.
+    renderAt('submitted');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(post).not.toHaveBeenCalled();
   });
 });

@@ -211,7 +211,7 @@ reason **re-entering it would not have helped**.
 prod value is the uncorrected import figure; it was not written on his behalf.
 Once entered, it will now stand.
 
-## 2026-08-20 — PROPOSED, NOT MERGED: the stage is a fact, not a memory (ADR-0124)
+## 2026-08-20 — the stage is a fact, not a memory (ADR-0124; authored 08-20, merged + deployed 2026-08-24 1:42 AM PT in the pre-floor window)
 
 **Held for a before-noon operator window.** ADR-0121 made a dead control live and
 ADR-0122 changes nothing an operator can see; this changes **which screen an
@@ -908,6 +908,62 @@ draft — was never built.
   contract — and now assert the measurement instead. Falsified four ways
   (see ADR-0114 §Falsification). No schema change, no migration; `Mail.ReadWrite`
   was already granted 2026-07-09, so no operator action.
+
+## 2026-08-19 (11:49 AM PT) — a load can be refused after the counting has started (ADR-0113)
+
+H-137759 (Ron Lawrence & Son) was accepted, the unload began, and the floor then
+found massive bed bugs. There was no path back. `ALLOWED_PRIOR.rejected` stopped
+at `unload_started`, and the reject stage was mounted on that one status behind
+it, so the affordance disappeared the instant the first stack landed — which is
+roughly the instant an operator starts handling mattresses, and therefore the
+instant they can first see what is in them. The load was closed by audited manual
+rectification, which is the DBA-shaped remedy ADR-0090 exists to retire.
+
+The floor can now refuse a load from `in_progress` and `finished` as well, in two
+taps behind a form that states the consequence in units before it asks for
+anything ("This voids the 2 stacks you have counted (21 units)…"). `rejectLoad`
+is rebuilt on the `voidLoad` pattern: one transaction, the evidence photo
+enforced SERVER-side for the first time, every live stack soft-voided alongside
+the status flip with prior values retained, and the category, note and stack
+manifest written to the append-only audit log — which no rejection's reason had
+ever reached, because `transition()` records only `{ status: 'rejected' }`.
+
+The expected-load slot is RETAINED, deliberately inverting the void: a void says
+the slot was never legitimately consumed, a reject says the opposite — the truck
+came, against this haul, and we refused it. Both check-in surfaces already render
+that as "Rejected at the dock", and severing would offer the refused haul for a
+second check-in. A fumigated redelivery is a new haul, not a re-entry.
+
+Holder-only, per ADR-0090 D2.3 — a floor that has to find a manager with the
+truck at the dock is the same dead end with a person in it. The panel is withheld
+while the load has unsent queued writes (fail-closed, and it says why), because
+stacks are replayable and a rejection is not. The photo and note-on-`other`
+requirements tighten the existing pre-acceptance reject too: one function serves
+both, and a rule that depended on WHEN the bugs were spotted is the same
+incoherence the slot decision refuses.
+
+No schema change and no migration — every column already existed. The rejected
+terminal screen also gains the ADR-0100 beacon it never had (`submitted`
+deliberately does not: it is the happy path ending, and counting it would bury
+every real dead end underneath it), so the `load_closed` series steps up on this
+deploy and is not comparable across it.
+
+Reasoning, alternatives, the slot argument and the falsification transcript:
+`docs/adr/0113-a-load-can-be-refused-after-the-counting-has-started.md`.
+
+**Rebased onto ADR-0124 on 2026-08-24** (§D13 of the ADR). Twelve merges landed
+under this branch while it was held for a window, and three changed the code
+rather than the context. ADR-0118 had made `transition()` transactional, so one
+of this change's stated reasons for not using it was **false by the time it
+would have shipped** — corrected, and the status flip now adopts ADR-0118's
+guarded `updateMany` (`where: { id, status: current.status }`, refuse on
+`count === 0`), which makes the reject stricter than the void; `voidLoad` is
+still unguarded and that asymmetry is logged, not widened here. ADR-0124 deleted
+`STAGE_STATUSES`, so the mount gate is now a `StageId` list
+(`['stacks', 'finish']`) asked in the vocabulary the dispatch answers in. ADR-0122's
+closed disable-reason vocabulary gains `no_note`, because the note-on-`other`
+rule has to be the same answer that disables the button and that the detector
+reports. ADR-0121's re-entry suite is green and its file untouched.
 
 ## 2026-08-19 (11:30 AM PT) — ops: the count lands measured, the photos ship, a bed-bug load is rejected without a path, and a blind watchdog is caught
 

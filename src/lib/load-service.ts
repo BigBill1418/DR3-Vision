@@ -9,7 +9,7 @@ import {
 } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
-import { writeAudit } from '@/lib/audit';
+import { writeAudit, writeAuditMany } from '@/lib/audit';
 import { pacificDayISO } from '@/lib/time';
 import { withIdempotency } from '@/lib/idempotency';
 
@@ -44,7 +44,29 @@ const ALLOWED_PRIOR: Record<LoadStatus, LoadStatus[]> = {
   finished: ['in_progress'],
   submitted: ['finished'],
   verified: ['submitted'],
-  rejected: ['arrived', 'weight_captured', 'unload_started'],
+  // ADR-0113 — `in_progress` and `finished` added 2026-08-19.
+  //
+  // This list used to stop at `unload_started`, which put the whole of the
+  // refusal decision inside the ONE stage between opening the door and the first
+  // stack landing. On 2026-08-19 H-137759 (Ron Lawrence & Son) was accepted, the
+  // unload started, and the floor then found massive bed bugs — past the only
+  // door out. The load was closed by audited manual DB rectification, which is
+  // exactly the DBA-shaped remedy ADR-0090 was written to retire.
+  //
+  // The bugs are not in the trailer doorway; they are in the mattresses, and you
+  // find them by handling the mattresses. Making the refusal legal only BEFORE
+  // anyone has touched the load asks the floor to decide with the evidence still
+  // in the truck.
+  //
+  // This set is now IDENTICAL to `voided`'s, and to `OPEN_DOCK_STATUSES`: the
+  // floor may take either exit from exactly the states where the load is still
+  // the floor's work, and no further. Past `submitted` the load may already sit
+  // on an MRC invoice — ADR-0073's territory for both exits, unchanged. The
+  // three-way equality is pinned in `load-service.reject.test.ts` rather than
+  // expressed by sharing one constant, so a future deliberate divergence has to
+  // edit the pin and say why, and cannot arrive as a silent widening from an
+  // edit to a list two modules away.
+  rejected: ['arrived', 'weight_captured', 'unload_started', 'in_progress', 'finished'],
   submitted_to_mymrc: ['verified'],
   processed: ['submitted_to_mymrc'],
   // ADR-0090 C — voidable from every state the FLOOR can be stuck in, and no
@@ -1193,6 +1215,83 @@ export async function submitLoad(args: {
   });
 }
 
+/**
+ * ADR-0113 — refuse the physical load, at any stage the floor still holds it.
+ *
+ * ## Why this stopped going through `transition()`
+ *
+ * It used to be a four-line `transition({ to: 'rejected' })`, and every one of
+ * the following was missing rather than decided:
+ *
+ * - **The audit row said nothing.** `transition` writes
+ *   `after: { status: 'rejected' }`, so in the entire history of this table no
+ *   rejection's REASON has ever reached the append-only log. The category and
+ *   note landed on the mutable `inbound_loads` row and nowhere else — which is
+ *   the one place a later correction can overwrite them.
+ * - **The evidence photo was a disabled button.** `stage-reject.tsx` gates on
+ *   `!hasPhoto` client-side and the server never looked, so a hand-crafted POST
+ *   could refuse a truck with no evidence at all. A rejection is a contractual
+ *   assertion to the carrier and to MRC; the photo is the whole of the proof.
+ * - **It cannot carry the stack sweep.** This bullet used to read "it was not
+ *   transactional". That is **no longer true** — ADR-0118 gave `transition` a
+ *   guarded `updateMany` and an in-transaction audit, closing that window on its
+ *   own. Re-checked against the file on the 2026-08-24 rebase rather than
+ *   carried over from the draft. What `transition` still cannot do is soft-void
+ *   the load's stacks and audit each one in that SAME transaction, which is the
+ *   whole of D4: a reject that flipped the status in one transaction and swept
+ *   the stacks in another can leave a refused load whose stacks still count.
+ * - **A second tap was a 409.** The screen is reachable from a stale tab, and
+ *   ADR-0118's rewrite kept that shape — `count === 0` re-reads and re-throws
+ *   `TransitionError`. There is still no replay branch.
+ *
+ * So this follows `voidLoad`'s shape, for the reasons ADR-0090 D2 gives, and the
+ * two floor exits stay legible as siblings — with one deliberate divergence:
+ * the status flip below is guarded the ADR-0118 way, which `voidLoad` is not.
+ *
+ * ## The stacks
+ *
+ * Every live stack is soft-voided in the SAME transaction (D4). Not deleted, and
+ * their `unit_count` / `stack_index` / `count_mode` are untouched — ADR-0090
+ * Am.1's rule, and the reason it matters here is that "we counted 47 before we
+ * found the bugs" is evidence about the load, not a mistake to erase. Voiding
+ * them is what stops `finishUnload`'s two sum sites from ever seeing them, and
+ * `NOT_VOIDED_STACK` is the filter both already use.
+ *
+ * Doing it here rather than leaving the stacks live is not belt-and-braces:
+ * `rejected` is outside every money allow-list, so the LOAD is already excluded,
+ * but the stacks would remain the only rows in the database asserting that this
+ * refused truck delivered units.
+ *
+ * ## The slot is RETAINED — the deliberate inversion of the void
+ *
+ * `voidLoad` NULLs `expected_load_id` because a void asserts the slot was never
+ * legitimately consumed (wrong haul, or no truck), so the real haul must stay
+ * checkable-in. A reject asserts the OPPOSITE: the truck came, against this
+ * haul, and we refused it. That is a true and final fact about the slot, and
+ * severing it would offer the refused haul for a second check-in — minting a
+ * second child for one physical delivery, which is the collision
+ * `expected_load_id`'s UNIQUE index exists to prevent.
+ *
+ * Both check-in surfaces already render this correctly and have since ADR-0091:
+ * `toConsumedLoad` returns a non-null ref for a `rejected` child, `open` is
+ * false (it is not in `OPEN_DOCK_STATUSES`), `describeConsumedSlot` answers
+ * `worked`, and the card falls to `already_worked_status` — which reads
+ * "Rejected at the dock" through `floorStatusKey`. That path was built for the
+ * early reject and needs no change for the late one; the test pins it so a
+ * future edit cannot sever the slot by analogy with the void.
+ *
+ * A fumigated redelivery days later is a NEW haul with a new appointment and a
+ * new MyMRC row — not a re-entry into the slot of the delivery we refused.
+ * Filing it there would date the redelivery to the day we turned it away.
+ *
+ * ## Authorization
+ *
+ * The holder, full stop — ADR-0090 D2.3, and the same rule the early reject
+ * already had. The floor found the bugs mid-unload with the truck at the dock; a
+ * path that requires finding a manager first IS the dead end, relocated. A
+ * manager rejects by taking over (ADR-0082), which is audited and names both
+ * parties.
+ */
 export async function rejectLoad(args: {
   loadId: string;
   operatorUserId: string;
@@ -1200,15 +1299,147 @@ export async function rejectLoad(args: {
   category: RejectionCategory;
   note: string | null;
 }): Promise<void> {
-  await transition({
-    ...args,
-    to: 'rejected',
-    data: {
-      rejection_category: args.category,
-      rejection_note: args.note,
-      submitted_at: new Date(),
-      submitted_by_id: args.operatorUserId,
-    },
+  const note = args.note?.trim() || null;
+  // Checked BEFORE the ownership read, like `voidLoad`'s, so a malformed request
+  // cannot be used to probe which loads exist at a site.
+  //
+  // ADR-0113 D5 — this tightens the EXISTING pre-acceptance reject too, which
+  // enforced neither this nor the photo. Deliberate: one function serves both
+  // entry points, and a note rule that depended on WHEN the problem was spotted
+  // would be the same incoherence the slot decision refuses. `other` is the only
+  // category that says nothing on its own; `bedbugs` describes itself.
+  if (args.category === 'other' && !note) {
+    throw new LoadAccessError(422, 'rejection_note_required');
+  }
+
+  const current = await assertOwn({
+    loadId: args.loadId,
+    operatorUserId: args.operatorUserId,
+    siteId: args.siteId,
   });
-  // rejection photo row already written by the client.
+
+  // Replay, not an error — the FIRST rejection is the one that happened, and a
+  // second tap must not overwrite its category, note, actor or instant. Same
+  // shape as `voidLoad` and `finishUnload`'s ADR-0078 D7 branch. This replaces a
+  // `TransitionError` 409 that an operator on a stale tab could reach by doing
+  // nothing wrong.
+  if (current.status === 'rejected') return;
+
+  if (!ALLOWED_PRIOR.rejected.includes(current.status)) {
+    throw new TransitionError(current.status, 'rejected');
+  }
+
+  // ADR-0113 D3 — the evidence photo, enforced where it can actually be
+  // enforced. Read inside the same transaction as the write below so the check
+  // and the decision cannot be separated by a photo purge.
+  //
+  // Counted, never trusted from the client: the `LoadPhoto` row is written by
+  // `/api/photos/confirm` before this action fires (the reject is online-only —
+  // it is not in `FLOOR_SCOPES`, so it is never replayed from the queue), which
+  // means by the time we are here the row either exists or the operator has no
+  // evidence.
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    const photos = await tx.loadPhoto.count({
+      where: { load_id: args.loadId, kind: 'rejection', purged_at: null },
+    });
+    if (photos === 0) throw new LoadAccessError(422, 'rejection_photo_required');
+
+    // Selected before the update so the audit rows carry what was true.
+    const liveStacks = await tx.loadStack.findMany({
+      where: { load_id: args.loadId, ...NOT_VOIDED_STACK },
+      select: { id: true, stack_index: true, unit_count: true },
+      orderBy: { stack_index: 'asc' },
+    });
+    const unitsVoided = liveStacks.reduce((n, s) => n + s.unit_count, 0);
+
+    const { count } = await tx.inboundLoad.updateMany({
+      // ADR-0118 — the status the transition was authorised FROM is restated
+      // here, so a concurrent finish, void or takeover landing between
+      // `assertOwn` and this write LOSES instead of being silently overwritten.
+      // `updateMany` is also scalar-only, which is why `submitted_by_id` is set
+      // directly: a nested `connect` is refused at argument validation.
+      //
+      // `voidLoad` has not been given this guard (its write is still
+      // `update({ where: { id } })`); that is recorded as a residual rather than
+      // widened into a floor-facing PR.
+      where: { id: args.loadId, status: current.status },
+      data: {
+        status: 'rejected',
+        rejection_category: args.category,
+        rejection_note: note,
+        submitted_at: now,
+        submitted_by_id: args.operatorUserId,
+      },
+    });
+    if (count === 0) {
+      const observed = await tx.inboundLoad.findUniqueOrThrow({
+        where: { id: args.loadId },
+        select: { status: true },
+      });
+      throw new TransitionError(observed.status, 'rejected');
+    }
+
+    await writeAudit(
+      {
+        actor_user_id: args.operatorUserId,
+        action: 'update',
+        table_name: 'inbound_loads',
+        row_id: args.loadId,
+        // `before` carries what the load was and what it was carrying, so the
+        // rejection is RECONSTRUCTIBLE from the append-only log rather than
+        // merely asserted by it. `expected_load_id` is recorded unchanged, which
+        // is the readable difference from a void's `before`.
+        before: {
+          status: current.status,
+          expected_load_id: current.expected_load_id,
+          live_stacks: liveStacks.length,
+          live_units: unitsVoided,
+        },
+        after: {
+          status: 'rejected',
+          rejection_category: args.category,
+          rejection_note: note,
+          rejected_at: now,
+          expected_load_id: current.expected_load_id,
+          stacks_voided: liveStacks.length,
+          units_voided: unitsVoided,
+          reason: 'rejected_after_unload_start',
+        },
+      },
+      { tx },
+    );
+
+    // The stack sweep and its audit, together, and only when there is something
+    // to sweep. A load refused before anyone counted is the ordinary case, not
+    // an edge one, and it should touch neither table.
+    if (liveStacks.length > 0) {
+      await tx.loadStack.updateMany({
+        where: { load_id: args.loadId, ...NOT_VOIDED_STACK },
+        data: { voided_at: now, voided_by: args.operatorUserId },
+      });
+      // One row per stack, so "what happened to stack 7" is answerable through
+      // the `([table_name, row_id])` index — the same shape `voidStack` writes
+      // by hand. Batched because ledger mode writes one stack per mattress (D4).
+      await writeAuditMany(
+        liveStacks.map((s) => ({
+          actor_user_id: args.operatorUserId,
+          action: 'update' as const,
+          table_name: 'load_stacks',
+          row_id: s.id,
+          before: {
+            load_id: args.loadId,
+            stack_index: s.stack_index,
+            unit_count: s.unit_count,
+          },
+          after: {
+            voided_at: now,
+            voided_by: args.operatorUserId,
+            reason: 'load_rejected',
+          },
+        })),
+        { tx },
+      );
+    }
+  });
 }

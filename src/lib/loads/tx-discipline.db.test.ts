@@ -130,36 +130,38 @@ describe.skipIf(!REAL_DB)('ADR-0118 — guarded state changes, audited in the sa
   });
 
   it('two racing transitions: one wins, one is refused, ONE audit row', async () => {
-    // A load the operator holds, on the dock. `arrived -> rejected` is a legal
-    // edge; what must not happen is BOTH requests taking it.
+    // A load the operator holds, counted and ready to file. `finished ->
+    // submitted` is a legal edge; what must not happen is BOTH requests taking
+    // it.
+    //
+    // ── VEHICLE CHANGED 2026-08-24 (ADR-0113) ────────────────────────────────
+    //
+    // This raced `rejectLoad` from `arrived`, because that was a `transition()`
+    // caller. ADR-0113 rewrote `rejectLoad` onto `voidLoad`'s shape, so it no
+    // longer goes through `transition()` at all — this test would have gone on
+    // passing (once its fixture grew a rejection photo) while covering a
+    // different function than this file's header describes and than its recorded
+    // hand-falsification refers to. `submitLoad` is a `transition()` caller and
+    // keeps ADR-0118's subject, its assertions and its falsification intact.
+    //
+    // `rejectLoad`'s own guard is raced in the sibling test below; the contract
+    // it must meet is identical, which is the point.
     await db.inboundLoad.create({
       data: {
         id: LOAD,
         site_id: SITE,
         source_id: SOURCE,
-        status: 'arrived',
+        status: 'finished',
         arrived_at: new Date('2026-08-07T15:00:00.000Z'),
         assigned_operator_id: OPERATOR,
       },
     });
 
-    const { rejectLoad } = await import('@/lib/load-service');
+    const { submitLoad } = await import('@/lib/load-service');
 
     const settled = await Promise.allSettled([
-      rejectLoad({
-        loadId: LOAD,
-        operatorUserId: OPERATOR,
-        siteId: SITE,
-        category: 'bedbugs',
-        note: null,
-      }),
-      rejectLoad({
-        loadId: LOAD,
-        operatorUserId: OPERATOR,
-        siteId: SITE,
-        category: 'bedbugs',
-        note: null,
-      }),
+      submitLoad({ loadId: LOAD, operatorUserId: OPERATOR, siteId: SITE }),
+      submitLoad({ loadId: LOAD, operatorUserId: OPERATOR, siteId: SITE }),
     ]);
 
     const fulfilled = settled.filter((r) => r.status === 'fulfilled');
@@ -180,7 +182,7 @@ describe.skipIf(!REAL_DB)('ADR-0118 — guarded state changes, audited in the sa
     }
 
     const row = await db.inboundLoad.findUniqueOrThrow({ where: { id: LOAD } });
-    expect(row.status).toBe('rejected');
+    expect(row.status).toBe('submitted');
 
     // Hard rule #6, and the reason the guard has to be inside the transaction:
     // a refused transition must leave NO audit row. Two rows would mean the log
@@ -189,6 +191,87 @@ describe.skipIf(!REAL_DB)('ADR-0118 — guarded state changes, audited in the sa
       where: { table_name: 'inbound_loads', row_id: LOAD, action: 'update' },
     });
     expect.soft(audits, 'a refused transition must leave no audit row').toHaveLength(1);
+  });
+
+  it('ADR-0113 — two racing REJECTIONS: one wins, one is refused, ONE load audit row', async () => {
+    // `rejectLoad` no longer goes through `transition()` (ADR-0113 D2), so the
+    // guard above does not cover it. It carries its own, adopted from ADR-0118
+    // at the 2026-08-24 rebase (D13.2), and it must meet the same contract: one
+    // winner, one 409 `illegal_transition`, one audit row on `inbound_loads`.
+    //
+    // Raced against a REAL Postgres for the reason this file's header gives: the
+    // verdict is a `count` computed under a row lock, and a fake `updateMany`
+    // returns whatever it was told to and cannot be raced.
+    await db.inboundLoad.create({
+      data: {
+        id: LOAD,
+        site_id: SITE,
+        source_id: SOURCE,
+        status: 'in_progress',
+        arrived_at: new Date('2026-08-07T15:00:00.000Z'),
+        unload_started_at: new Date('2026-08-07T15:12:00.000Z'),
+        assigned_operator_id: OPERATOR,
+      },
+    });
+    // ADR-0113 D3 — the rejection is refused server-side without evidence, so
+    // the fixture has to carry the photo the floor would have taken. Its absence
+    // is what made this file's first test go red on the rebase, and that was the
+    // requirement working, not a fixture bug.
+    await db.loadPhoto.create({
+      data: {
+        load_id: LOAD,
+        kind: 'rejection',
+        storage_key: `${NS}/rejection.jpg`,
+        captured_at: new Date('2026-08-07T15:20:00.000Z'),
+      },
+    });
+    // One counted stack, so the same-transaction sweep (D4) has something to do.
+    await db.loadStack.create({
+      data: { load_id: LOAD, stack_index: 1, unit_count: 12, count_mode: 'multiplier' },
+    });
+
+    const { rejectLoad } = await import('@/lib/load-service');
+    const call = () =>
+      rejectLoad({
+        loadId: LOAD,
+        operatorUserId: OPERATOR,
+        siteId: SITE,
+        category: 'bedbugs',
+        note: null,
+      });
+
+    const settled = await Promise.allSettled([call(), call()]);
+    const fulfilled = settled.filter((r) => r.status === 'fulfilled');
+    const refused = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+
+    expect.soft(fulfilled, 'exactly one rejection may commit').toHaveLength(1);
+    expect.soft(refused, 'the loser must be refused').toHaveLength(1);
+    if (refused.length === 1) {
+      const err = refused[0]!.reason as { status?: number; reason?: string };
+      expect(err.status, 'the loser must surface as a 409, not a 500').toBe(409);
+      expect(err.reason).toBe('illegal_transition');
+    }
+
+    const row = await db.inboundLoad.findUniqueOrThrow({ where: { id: LOAD } });
+    expect(row.status).toBe('rejected');
+    expect(row.rejection_category).toBe('bedbugs');
+    // D5 — the slot is RETAINED, never severed. This fixture has no parent slot,
+    // so the assertion that carries weight here is that the void's columns were
+    // NOT written: a reject must not look like a void in the record.
+    expect(row.voided_from_expected_load_id).toBeNull();
+
+    // D4 — the counted stack is soft-voided by the winner, in the same commit.
+    const stacks = await db.loadStack.findMany({ where: { load_id: LOAD } });
+    expect(stacks).toHaveLength(1);
+    expect(stacks[0]!.voided_at).not.toBeNull();
+    expect(stacks[0]!.unit_count, 'a SOFT void keeps what was counted').toBe(12);
+
+    // The refused racer must leave NO audit row: two would mean the log records
+    // a rejection that never happened.
+    const audits = await db.auditLog.findMany({
+      where: { table_name: 'inbound_loads', row_id: LOAD, action: 'update' },
+    });
+    expect.soft(audits, 'a refused rejection must leave no audit row').toHaveLength(1);
   });
 
   it('two managers flipping one commodity load to paid: one wins, ONE audit row', async () => {
