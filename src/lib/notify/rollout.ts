@@ -122,6 +122,16 @@ export const UI_SURFACE = {
   // what the UI chose to render.
   IPAD_DROPOFF: 'ipad_dropoff',
 
+  // ADR-0125 — the end-of-day manager review + close screen at
+  // /dashboard/[site]/eod. Its OWN surface rather than riding
+  // `loads_inventory`: that gate is the master switch for every manager
+  // loads/inventory tab and every loads write, so ramping EOD on it would
+  // either expose the new screen the moment the existing tabs go live at a
+  // site, or force Bill to take the working tabs down to pull EOD back. The
+  // screen is also the one place a manager can CLOSE a business day, which is a
+  // new authority — it must be rampable per site on its own.
+  EOD_REVIEW: 'eod_review',
+
   // ADR-0068 — the Employee Reimbursement tile on the site dashboard. Gated per
   // site because spec §6.4 leaves open whether Eugene's reimbursement process
   // runs the same way as Woodland's today; Bill can ramp one without the other

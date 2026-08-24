@@ -82,6 +82,75 @@ current.status }`, refuse on `count === 0`) with `submitted_by_id` as a scalar;
   `weight_skipped_at` and the shared `node_modules` client predates it. Note the
   client is SHARED across every worktree on this box, so the regeneration is
   fleet-wide; it moves forward to main's schema, which is the safe direction.
+## 0.BL — 2026-08-24 the EOD manager surface (ADR-0125) — two Bill decisions, one ramp, three data-loading items
+
+The screen at `/dashboard/[site]/eod` retires the Woodland daily log's functional
+tabs. What it deliberately did not close is listed here.
+
+### BILL'S DECISIONS — nothing on the screen touches either
+
+- **O-1 — DR3 NUMBERING TAKEOVER, and the reseed floor.** Vision issues NO DR3
+  number on the EOD line; the manager types what the paperwork says.
+  `document_sequences` reads `next_value = 5000`, untouched since 2026-07-04,
+  while the sheet is at **4,755 and climbing ~11/day** — they collide around late
+  October. The floor is **NOT** "above 4,755": the 2026-08-19 research audit
+  found the highest number ever issued is **4,925** (with an unconfirmed April
+  outlier at **5,853**). Either reseed above the true ceiling, or have Vision take
+  over numbering at a named cutover date. Until then the field stays manual.
+- **O-2 — EVENTS (Phase 0 gap G-12): Phase 3, or not?** The `Events` tab is a
+  distinct billing channel — driver/labour hours, per diem, stop charges by
+  collection zone — and it feeds the Summary's `Event Misc` and `Event Trans`
+  lines ($2,500 in August). It was never in Phase 0 scope and is deliberately NOT
+  bolted onto the EOD screen. **Until it has a home the workbook cannot go fully
+  dark**, even with every tab above retired.
+
+### RAMP — operator action
+
+- **O-3 — flip `eod_review` live at Woodland** from `/admin/rollout` when the
+  screen has been walked through. Born pilot per ADR-0047 #3, so today it is
+  admin-only at both sites. **Eugene stays pilot until Bill says otherwise** —
+  the screen is Eugene-ready (Terex grades `n/a` there, nothing is hardcoded),
+  but ramping it is a decision, not a default.
+- **O-4 — the add-lines need `loads_inventory` live too.** The outbound,
+  drop-off and processed add-lines POST to the EXISTING manager endpoints rather
+  than re-plumbing capture (ADR-0125 D14), and those are gated on
+  `loads_inventory`. An admin passes both gates; a non-admin manager needs BOTH
+  live at the site. The client says so explicitly rather than failing silently,
+  but it is a ramp-ordering fact worth knowing before the walkthrough.
+
+### DATA LOADING — not building (Phase 0 gap G-10)
+
+- **O-5 — `fuel_prices` holds 0 rows.** The CA fuel-surcharge formula raises
+  `MissingFuelPriceError` on every computation until weekly prices exist. Load
+  from the sheet's `Fuel` tab (24 weekly rows) via
+  `/admin/billing-rates/fuel-prices` before the next invoice run.
+- **O-6 — `sources.canonical_mileage` is NULL everywhere**, and
+  `haul_assignment` is NULL by construction (never backfilled — a fabricated
+  assignment is indistinguishable from a real one). Both are now editable at
+  **`/admin/sources`**; the source data is `variables!Mileage_Table` (61 rows).
+  Until they are loaded the freight leg has a writer but no miles.
+- **O-7 — `account_haul_rates` and `container_rental_sites` hold 0 rows.**
+  Unchanged by this work; `container_rental_sites` is still blocked on Rick's
+  $10,800-vs-$10,500 answer.
+
+### ACCEPTED RESIDUALS
+
+- **O-8 — G-15, the 31-row inbound reconciliation, is NOT closed.** Vision holds
+  113 inbound rows for Aug 1-19; the sheet holds 144. Neither number can be
+  trusted as the month rollup's basis until the delta is explained. The screen
+  therefore REPORTS its figures against the sheet rather than claiming agreement,
+  and carries a standing reconciliation note saying the sheet's own Jul/Aug
+  totals are known-doubled.
+- **O-9 — the freight flag on the 743 existing production rows is still
+  `false`.** `transport_charged` now has two writers, but neither back-fills:
+  the verify gate stamps it on future verifies, and the EOD screen offers a
+  per-row correction. Classifying the historical rows is a separate pass and
+  needs `/admin/sources` populated first.
+- **O-10 — F-1 / the invoice question is untouched by this work.** Whether MRC
+  was over-billed $60,954.90 in July is B-1 in the research audit and waits on
+  the July transportation invoice. Nothing here changes an invoice.
+
+---
 
 ## 0.BJ — 2026-08-20 server-derived stage selection (ADR-0124) — PARKED, awaiting a window
 

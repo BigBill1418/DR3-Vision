@@ -50,6 +50,17 @@ export interface PriorAnchor {
   programUnits: number | null;
   nonProgramUnits: number | null;
   snapshotAt: Date;
+  /**
+   * ADR-0125 — `measured` when the count was entered WITH a program/non-program
+   * split, `legacy` (or null on old rows) when it was not.
+   *
+   * Additive: no existing caller reads it. It is here rather than in a second
+   * anchor query because `resolveAnchorPair` grades an anchor on this column AND
+   * the two pool columns together, and the EOD screen's inventory check must ask
+   * that question of the SAME row this selector names. A third anchor selector
+   * is the defect the ADR-0078 D1 note above spends fifteen lines warning about.
+   */
+  poolAttribution: string | null;
 }
 
 export interface AnchorClassification {
@@ -106,6 +117,7 @@ export async function loadPriorAnchor(db: Db, siteId: string): Promise<PriorAnch
       units_in_processing: true,
       program_units: true,
       non_program_units: true,
+      pool_attribution: true,
     },
   });
   if (!row) return null;
@@ -118,6 +130,7 @@ export async function loadPriorAnchor(db: Db, siteId: string): Promise<PriorAnch
     programUnits: row.program_units === null ? null : Number(row.program_units),
     nonProgramUnits: row.non_program_units === null ? null : Number(row.non_program_units),
     snapshotAt: row.snapshot_at,
+    poolAttribution: row.pool_attribution,
   };
 }
 

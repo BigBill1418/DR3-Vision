@@ -81,6 +81,11 @@ export default async function SiteDashboardPage({ params }: Props) {
   // Unregistered/pilot ⇒ hidden, which is the fail-safe direction for a
   // visibility gate.
   const reimbursementTileLive = await isUiSurfaceLive(UI_SURFACE.REIMBURSEMENT_TILE, site.id);
+  // ADR-0125 — the end-of-day review + close screen. Its own gate, born pilot:
+  // it is the only place a manager can CLOSE a business day, so it ramps per
+  // site independently of the loads/inventory master switch. Admins always see
+  // the link; unregistered/pilot ⇒ hidden for everyone else (fail-safe).
+  const eodLive = isAdmin || (await isUiSurfaceLive(UI_SURFACE.EOD_REVIEW, site.id));
   // ADR-0077 Am.1 — the nav names the machine where one exists (Woodland reads
   // "Terex"), and stays generic where it does not. Derived, never hardcoded.
   const machineLabel = await siteMachineLabel(site.id);
@@ -152,6 +157,13 @@ export default async function SiteDashboardPage({ params }: Props) {
                 Vision knows who ORIGINATED the request as a fact rather than as
                 ink inside a scanned PDF, which is what makes "the submitter
                 cannot approve" a constraint instead of a detection problem. */}
+            {eodLive && (
+              <NavLink
+                href={`/dashboard/${site.code}/eod`}
+                label="End of day"
+                testId="dashboard-eod-link"
+              />
+            )}
             {reimbursementTileLive && (
               <NavLink
                 href={`/dashboard/${site.code}/reimbursements`}
