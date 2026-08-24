@@ -92,7 +92,7 @@ reason **re-entering it would not have helped**.
 prod value is the uncorrected import figure; it was not written on his behalf.
 Once entered, it will now stand.
 
-## 2026-08-20 — PROPOSED, NOT MERGED: the stage is a fact, not a memory (ADR-0124)
+## 2026-08-20 — the stage is a fact, not a memory (ADR-0124; authored 08-20, merged + deployed 2026-08-24 1:42 AM PT in the pre-floor window)
 
 **Held for a before-noon operator window.** ADR-0121 made a dead control live and
 ADR-0122 changes nothing an operator can see; this changes **which screen an
