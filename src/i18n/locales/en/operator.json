@@ -157,10 +157,25 @@
     "category_other": "Other",
     "capture_evidence": "Capture rejection evidence",
     "note_label": "Note (optional)",
+    "note_label_required": "Note (required)",
+    "note_required": "Tell us what happened — a few words is enough.",
     "note_placeholder": "Anything else worth recording. Voice-to-text is OK.",
     "rejecting": "Rejecting…",
     "submit": "Reject load",
     "reject_failed": "Reject failed"
+  },
+  "load_reject": {
+    "open": "Found a problem with this load?",
+    "heading": "Reject this load",
+    "subheading": "Use this when the load itself is bad — bed bugs, contamination, damage — and you are not taking it. The truck is turned away and this stops being a delivery.",
+    "consequence_counted": "This voids the {{stacks}} stacks you have counted ({{units}} units) and records the load as rejected. It cannot be undone.",
+    "consequence_uncounted": "This records the load as rejected. Nothing has been counted yet. It cannot be undone.",
+    "photo_required": "A photo of the problem is required.",
+    "unsent": "Some of your taps have not reached the server yet. Wait a moment — this unlocks as soon as they land.",
+    "cancel": "Never mind",
+    "confirm": "Yes, reject it",
+    "rejecting": "Rejecting…",
+    "failed": "Could not reject this load. Try again."
   },
   "load_void": {
     "open": "Can't finish this load?",

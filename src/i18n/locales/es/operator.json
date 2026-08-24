@@ -171,10 +171,25 @@
     "category_other": "Otro",
     "capture_evidence": "Capturar evidencia del rechazo",
     "note_label": "Nota (opcional)",
+    "note_label_required": "Nota (obligatoria)",
+    "note_required": "Cuéntanos qué pasó — con unas palabras basta.",
     "note_placeholder": "Cualquier otra cosa que valga la pena registrar. El dictado por voz funciona.",
     "rejecting": "Rechazando…",
     "submit": "Rechazar carga",
     "reject_failed": "Error al rechazar"
+  },
+  "load_reject": {
+    "open": "¿Encontraste un problema con esta carga?",
+    "heading": "Rechazar esta carga",
+    "subheading": "Usa esto cuando la carga misma está mal — chinches, contaminación, daño — y no la vas a aceptar. El camión se regresa y esto deja de contar como entrega.",
+    "consequence_counted": "Esto anula las {{stacks}} pilas que has contado ({{units}} unidades) y registra la carga como rechazada. No se puede deshacer.",
+    "consequence_uncounted": "Esto registra la carga como rechazada. Todavía no has contado nada. No se puede deshacer.",
+    "photo_required": "Se requiere una foto del problema.",
+    "unsent": "Algunos de tus toques aún no llegan al servidor. Espera un momento — esto se desbloquea en cuanto lleguen.",
+    "cancel": "Mejor no",
+    "confirm": "Sí, rechazarla",
+    "rejecting": "Rechazando…",
+    "failed": "No se pudo rechazar esta carga. Inténtalo de nuevo."
   },
   "load_void": {
     "open": "¿No puedes terminar esta carga?",

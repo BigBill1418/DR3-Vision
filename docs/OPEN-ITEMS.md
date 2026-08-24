@@ -19,6 +19,70 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BK — 2026-08-24 pre-floor window: ADR-0113 (late reject) rebased onto post-0124 main
+
+- **#275 (ADR-0113) is merge-clean and CI-green on the rebased head, NOT merged.**
+  Floor-facing; merges after #289 in the Monday before-noon PT window. The
+  orchestrator merges — this branch stops at green.
+- **Collision inventory — 7 files, 4 with real conflicts.** `load-workflow.tsx`
+  (ADR-0124 deleted `STAGE_STATUSES`, the constant the reject's mount gate was
+  defined against), `stage-reject.tsx` (ADR-0122 added `useLiveControl` +
+  `submitReason` to the same button ADR-0113 re-gates), `load-service.ts`
+  (ADR-0118 rewrote `transition()`), `docs/adr/README.md` (index table).
+  `CHANGELOG.md` and `docs/OPEN-ITEMS.md` auto-merged; both verified by hand.
+- **One inherited claim died on measurement.** ADR-0113's rationale for not using
+  `transition()` included "it was not transactional" — **ADR-0118 made it
+  transactional**, so that reason was false before it shipped. Corrected in the
+  docblock and in the ADR (§D13.1). The remaining three reasons were re-checked
+  against the file and hold. This is the ADR-0181 posture working: the draft was
+  fluent and wrong, and only reading the file caught it.
+- **Two behaviour changes adopted FROM the merges, not merely merged around:**
+  the reject's status flip is now guarded the ADR-0118 way (`where: { id, status:
+current.status }`, refuse on `count === 0`) with `submitted_by_id` as a scalar;
+  and the mount gate is a `StageId` list in ADR-0124's vocabulary, so a renamed
+  stage is a compile error rather than a silently-vanishing affordance — which is
+  the exact shape of the 2026-08-19 defect.
+- **`no_note` added to ADR-0122's closed disable-reason vocabulary.** The
+  note-on-`other` rule must be the same answer that disables the button and that
+  the detector reports; an extra `||` would have made the snapshot describe a
+  different screen. `stage-controls.test.ts` green with the addition.
+- **Two residuals opened.** **P-61** — `voidLoad` is still unguarded, so the two
+  floor exits are now asymmetric (a reject loses a concurrent race, a void wins
+  it); four-line fix, deliberately not made in a pre-floor window. **P-62** —
+  ADR-0122 can report `no_live_controls` on a `stacks` screen whose reject exit
+  is in the footer, because `useLiveControl` no-ops outside the boundary and the
+  footer is outside it. Already true of the void and the review; not worsened.
+- **One thing I changed in another ADR's test, named so it is not a surprise:**
+  `load-workflow.dispatch.test.tsx` (ADR-0124) mounts the real composition, and
+  the footer now carries `LateRejectPanel`, which reads the offline queue on
+  mount. Its `@/lib/offline-queue` mock gained a `pendingActionsForLoad` export.
+  **No assertion in that suite was changed.** ADR-0121's `stage-reentry.test.tsx`
+  is untouched and green.
+- **Observed, not fixed:** the ADR-0124 CHANGELOG entry on main still reads
+  "**PROPOSED, NOT MERGED**" though #289 has merged. Left for #289's author —
+  editing another PR's entry invites a conflict for whoever corrects it.
+- **CI went red where the local suite structurally cannot look.** The local
+  "full suite" skips 18 `*.db.test.ts` files (no `DR3_TEST_DATABASE_URL` in the
+  sandbox), and the first push after the rebase failed the DB lane:
+  `expected 'arrived' to be 'rejected'`. **ADR-0118's race test used
+  `rejectLoad` as its vehicle** for proving `transition()`'s guard, and its
+  fixture has no rejection photo — ADR-0113 D3's new server-side requirement
+  refused both racers. The requirement was working; the fixture predated it.
+  Seeding a photo alone would have made it green **and left it lying**, since
+  ADR-0113 moved `rejectLoad` off `transition()` — the test would have covered a
+  different function than its header and its own falsification note describe. So
+  ADR-0118's test keeps its subject (vehicle switched to `submitLoad`, a real
+  `transition()` caller, assertions unchanged) and a **sibling test races
+  `rejectLoad`'s own guard**. Verified against a throwaway `postgres:16-alpine`
+  with all 111 migrations applied — whole DB lane 21 files / 109 tests green, and
+  the new test falsified by unguarding the write (two winners, two audit rows).
+  **Standing lesson: a green local run on this repo is not evidence about the DB
+  lane.**
+- **`prisma generate` was required** before any gate: ADR-0124 added
+  `weight_skipped_at` and the shared `node_modules` client predates it. Note the
+  client is SHARED across every worktree on this box, so the regeneration is
+  fleet-wide; it moves forward to main's schema, which is the safe direction.
+
 ## 0.BJ — 2026-08-20 server-derived stage selection (ADR-0124) — PARKED, awaiting a window
 
 - **W-1 — WINDOW GATE (ADR-0124): PR is open and NOT merged.** It changes which
@@ -218,10 +282,21 @@ Status ledger for the day, written ~11:30 AM PT; in-flight items say so.
   `system:h137759-bedbug-rejection`). Inventory/pay never touched (non-verified
   statuses feed nothing). **Bill's action: reject the haul MRC-side too** — the
   mirror still shows it `Confirmed` and Vision cannot write to MRC.
-  **IN BUILD — ADR-0113:** the product path for reject-after-unload-start
-  (operator affordance on the in_progress screen, required category + evidence
-  photo, same-transaction stack void + audit, slot semantics per
-  ADR-0090/0091). Floor-facing → deploys in the 2026-08-20 before-noon window.
+  **ADR-0113 BUILT** (PR on `feat/reject-after-unload-start`, CI green, NOT
+  merged — floor-facing, so it merges and deploys in the **2026-08-20
+  before-noon PT** window unless Bill overrides). The product path now produces
+  that exact end state: reject legal from `in_progress` and `finished`, holder
+  only, required category + server-enforced evidence photo, every live stack
+  soft-voided in the same transaction with the category/note/manifest written to
+  the audit log (which no rejection's reason had ever reached), and the
+  expected-load slot **RETAINED** — the deliberate inversion of the void, since
+  the truck did come against this haul and we refused it. No schema change, no
+  migration. Residuals opened: **P-57** (ADR-0100's beacon cannot see a stage
+  that renders work while missing one affordance — this class stays
+  human-discovered), **P-58** (`LATE_REJECTABLE` is a 7th hand-maintained status
+  list), **P-59** (the MRC mirror disagreement below — nothing detects it),
+  **P-60** (the queue's consumed-slot card has no dead-end beacon while the
+  identical hauls card does).
 - **CORRECTED (12:45 PM PT): the discovery-gap watchdog was never blind — the
   11:00 AM report misread the gap-snapshot table** (`doc_ingest_reachable_items`
   is written only when a gap EXISTS; gap 0 since the 8/15 17:12 PT close means

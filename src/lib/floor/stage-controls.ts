@@ -82,6 +82,16 @@ export const STAGE_DISABLE_REASONS = [
   'invalid_count',
   /** No rejection / concern category picked yet. */
   'no_category',
+  /**
+   * ADR-0113 — the chosen category requires a written note and none is typed.
+   *
+   * Distinct from `no_category`, deliberately: a screen stuck because nothing is
+   * selected and a screen stuck because `other` was selected and nothing was
+   * typed are different operator situations with different next actions, and
+   * collapsing them would make the ADR-0122 snapshot say "pick a reason" to
+   * someone who already has.
+   */
+  'no_note',
   /** No live stack has been counted yet. */
   'no_stacks',
   /** The control is not rendered in this sub-state at all. */

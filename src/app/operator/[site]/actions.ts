@@ -360,6 +360,25 @@ export async function correctWeightAction(
   revalidatePath(`/operator/${siteCode}/load/${loadId}`);
 }
 
+/**
+ * Refuse the physical load. ADR-0113 made this reachable from `in_progress` and
+ * `finished` as well as the inspection stage, so one action now serves both the
+ * gate refusal and the mid-count one.
+ *
+ * ONLINE-ONLY, deliberately, on the same reasoning as the void (ADR-0090 D2.4):
+ * not in `FLOOR_SCOPES`, never enqueued. A rejection is contention-shaped and
+ * replaying one hours later would refuse a load whose state has moved on. The
+ * reverse hazard — a stack queued BEFORE the rejection replaying after it — is
+ * stopped at the OFFER, in `late-reject-panel.tsx`, the way `review-panel.tsx`
+ * stops it for the ADR-0090 Am.1 corrections. `addStack` refuses anything but
+ * `in_progress`, so a replay that slips through parks as a conflict for a person
+ * rather than resurrecting units into a refused load.
+ *
+ * Keeps the ADR-0004 auto-logout, and that is the difference from the void. A
+ * void is followed by "now tap the RIGHT haul", so signing out is friction
+ * between a mistake and its correction. A rejection ENDS the work: the truck is
+ * turned away and there is nothing to tap next.
+ */
 export async function rejectLoadAction(
   siteCode: string,
   loadId: string,
@@ -370,5 +389,12 @@ export async function rejectLoadAction(
   await svc.rejectLoad({ loadId, operatorUserId, siteId, category, note });
   await signOut({ redirect: false });
   revalidatePath(`/operator/${siteCode}/queue`);
+  // ADR-0113 D5 — the slot is RETAINED, not severed, so the hauls screen must
+  // re-render to show the haul as refused rather than as still-open dock work.
+  // The void revalidates this path to show a slot going FREE; the reject
+  // revalidates it to show one going final. Missing it would leave the refused
+  // truck rendering as live work until the cache expired.
+  revalidatePath(`/operator/${siteCode}/hauls`);
+  revalidatePath(`/operator/${siteCode}/load/${loadId}`);
   redirect(`/operator/${siteCode}`);
 }
