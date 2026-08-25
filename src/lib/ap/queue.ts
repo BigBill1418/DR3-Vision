@@ -8,6 +8,11 @@
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
 import type { ExtractionConfidence, ExtractionResult } from './extraction/types';
+import {
+  countDecisionMailUnsent,
+  decisionMailUnsentWhere,
+  isDecisionMailUnsent,
+} from './decision-mail';
 
 export type ApStatus =
   | 'pending'
@@ -46,6 +51,19 @@ export interface ApListRow {
   /** Amendment 3 — hold record (present iff status=pending_review). */
   heldByName: string | null;
   holdNote: string | null;
+  /**
+   * ADR-0126 — decided, with no confirmed decision email to accounting.
+   *
+   * Computed SERVER-side from the shared predicate rather than re-derived in the
+   * client from a raw timestamp. The digest sweep, the alarm and this badge must
+   * agree on what "unmailed" means; a second copy of the rule in the browser is
+   * how the badge and the 06:00 alert start disagreeing, at which point operators
+   * learn to trust neither.
+   *
+   * Always `false` for a reimbursement — they carry no decision mail at all, and a
+   * null stamp on one must never render as a delivery failure.
+   */
+  decisionMailUnsent: boolean;
   /**
    * Reimbursement-only. Bill 2026-07-30: reimbursements are work materials, tools
    * and equipment only — never medical or otherwise sensitive — so the beneficiary
@@ -165,18 +183,37 @@ const LIST_STATUSES = [
   'rejected',
   'quarantined',
 ] as const;
-export type ApListFilter = (typeof LIST_STATUSES)[number] | 'all';
+/**
+ * ADR-0126 — the decided-but-unmailed view. NOT a status: it cuts ACROSS
+ * approved + rejected, so it is a distinct filter value rather than a seventh
+ * entry in LIST_STATUSES (which is typed as, and queried as, the status enum).
+ */
+export const DECISION_MAIL_UNSENT_FILTER = 'decision_mail_unsent';
+
+export type ApListFilter =
+  | (typeof LIST_STATUSES)[number]
+  | 'all'
+  | typeof DECISION_MAIL_UNSENT_FILTER;
 
 export function isApListFilter(v: string | null): v is ApListFilter {
-  return v === 'all' || (v !== null && (LIST_STATUSES as readonly string[]).includes(v));
+  return (
+    v === 'all' ||
+    v === DECISION_MAIL_UNSENT_FILTER ||
+    (v !== null && (LIST_STATUSES as readonly string[]).includes(v))
+  );
 }
 
 export async function listApRequests(
   filter: ApListFilter = 'pending',
   prisma: PrismaClient = defaultPrisma,
 ): Promise<{ rows: ApListRow[]; counts: Record<string, number> }> {
-  const where = filter === 'all' ? {} : { status: filter };
-  const [rows, grouped] = await Promise.all([
+  const where =
+    filter === 'all'
+      ? {}
+      : filter === DECISION_MAIL_UNSENT_FILTER
+        ? decisionMailUnsentWhere()
+        : { status: filter };
+  const [rows, grouped, decisionMailUnsentCount] = await Promise.all([
     prisma.apRequest.findMany({
       where,
       orderBy: { received_at: 'desc' },
@@ -191,10 +228,15 @@ export async function listApRequests(
         amount_cents: true,
         held_by: true,
         hold_note: true,
+        // ADR-0126 — feeds the row badge via the shared predicate.
+        decision_mail_sent_at: true,
         _count: { select: { attachments: true, followups: true } },
       },
     }),
     prisma.apRequest.groupBy({ by: ['status'], _count: { _all: true } }),
+    // Counted on EVERY list load, not just when the tab is selected: the tab only
+    // renders when this is non-zero, so it has to be known before anyone opens it.
+    countDecisionMailUnsent(prisma),
   ]);
   // Batch-resolve holder names for on-hold rows (avoids N+1).
   const holderIds = Array.from(
@@ -221,6 +263,7 @@ export async function listApRequests(
     quarantined: 0,
   };
   for (const g of grouped) counts[g.status] = g._count._all;
+  counts[DECISION_MAIL_UNSENT_FILTER] = decisionMailUnsentCount;
   return {
     rows: rows.map((r) => ({
       id: r.id,
@@ -237,6 +280,7 @@ export async function listApRequests(
       heldByName:
         r.status === 'pending_review' && r.held_by ? (holderNames.get(r.held_by) ?? null) : null,
       holdNote: r.status === 'pending_review' ? r.hold_note : null,
+      decisionMailUnsent: isDecisionMailUnsent(r),
       reimbursement: null,
     })),
     counts,
@@ -305,6 +349,8 @@ export async function listReimbursementQueueRows(
       followupCount: 0,
       heldByName: null,
       holdNote: null,
+      // A reimbursement has no decision email — never render it as one that failed.
+      decisionMailUnsent: false,
       reimbursement: {
         siteCode: r.site.code,
         siteName: r.site.name,
@@ -371,6 +417,9 @@ export async function getApRequestDetail(
     kind: 'invoice' as const,
     reimbursement: null,
     status: r.status,
+    // ADR-0126 — the same predicate the list badge and the digest sweep use, so
+    // the detail pane cannot disagree with the row it was opened from.
+    decisionMailUnsent: isDecisionMailUnsent(r),
     subject: r.subject,
     senderAddress: r.sender_address,
     senderValidated: r.sender_validated,

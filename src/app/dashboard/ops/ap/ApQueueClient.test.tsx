@@ -10,12 +10,16 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { DetailPanel } from './ApQueueClient';
+import { ApQueueClient, DetailPanel } from './ApQueueClient';
 
 beforeEach(() => {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof fetch,
+    vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    })) as unknown as typeof fetch,
   );
 });
 afterEach(() => {
@@ -121,5 +125,101 @@ describe('DetailPanel — structured Approve gating (Amendment 5)', () => {
     expect(approveBtn().disabled).toBe(true);
     fireEvent.change(noteField(), { target: { value: 'parent-org bill, not DR3' } });
     expect(approveBtn().disabled).toBe(false);
+  });
+});
+
+// ── ADR-0126 D6 — the delivery failure is visible on the ROW ────────────────
+//
+// It used to live only inside the detail pane, so finding a decided-but-unmailed
+// request meant opening every decided request one at a time. Two rejections went
+// unnoticed for weeks because nobody does that.
+
+describe('ApQueueClient — mail-not-sent badge (ADR-0126 D6)', () => {
+  function listResponse(rows: unknown[], unsentCount: number) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        rows,
+        counts: { pending: 0, decision_mail_unsent: unsentCount },
+        filter: 'all',
+      }),
+    };
+  }
+  function row(over: Record<string, unknown> = {}) {
+    return {
+      id: 'req-1',
+      kind: 'invoice',
+      status: 'rejected',
+      subject: 'Invoice #4471',
+      senderAddress: 'morena@svdp.us',
+      senderValidated: true,
+      receivedAt: '2026-08-19T18:30:00.000Z',
+      vendor: null,
+      amountCents: null,
+      attachmentCount: 0,
+      followupCount: 0,
+      heldByName: null,
+      holdNote: null,
+      reimbursement: null,
+      ...over,
+    };
+  }
+
+  it('renders the badge on a decided row with no confirmed decision email', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        listResponse([row({ decisionMailUnsent: true })], 1),
+      ) as unknown as typeof fetch,
+    );
+    render(<ApQueueClient />);
+    expect(await screen.findByTestId('ap-queue-mail-unsent-badge')).toBeTruthy();
+  });
+
+  it('renders NO badge when the mail was confirmed sent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        listResponse([row({ decisionMailUnsent: false })], 0),
+      ) as unknown as typeof fetch,
+    );
+    render(<ApQueueClient />);
+    await screen.findByText('Invoice #4471');
+    expect(screen.queryByTestId('ap-queue-mail-unsent-badge')).toBeNull();
+  });
+
+  it('renders no badge for a payload from an older deploy (field absent)', async () => {
+    // Forward-compat: the field is optional, so a stale client/server pairing
+    // degrades to "no badge" rather than throwing the whole queue away.
+    vi.stubGlobal('fetch', vi.fn(async () => listResponse([row()], 0)) as unknown as typeof fetch);
+    render(<ApQueueClient />);
+    await screen.findByText('Invoice #4471');
+    expect(screen.queryByTestId('ap-queue-mail-unsent-badge')).toBeNull();
+  });
+
+  it('shows the filter tab ONLY when something is actually stuck', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        listResponse([row({ decisionMailUnsent: true })], 1),
+      ) as unknown as typeof fetch,
+    );
+    render(<ApQueueClient />);
+    // EXACT name, not a substring: the row button now contains the badge text
+    // too, so /mail not sent/i matches both the tab and the row and throws.
+    expect(await screen.findByRole('button', { name: 'mail not sent (1)' })).toBeTruthy();
+  });
+
+  it('HIDES the filter tab at zero — a permanent zero-state tab trains the eye to skip it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        listResponse([row({ decisionMailUnsent: false })], 0),
+      ) as unknown as typeof fetch,
+    );
+    render(<ApQueueClient />);
+    await screen.findByText('Invoice #4471');
+    expect(screen.queryByRole('button', { name: 'mail not sent (0)' })).toBeNull();
   });
 });

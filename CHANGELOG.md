@@ -9,6 +9,53 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-25 — A decision nobody received (ADR-0126)
+
+Two AP rejections (`1ee8e502…` 2026-07-31, `74daa199…` 2026-08-19) were decided
+in Vision, refused by the Graph transport as oversize, never stamped, and never
+re-sent. Accounting was told about neither. The first sat for **nineteen days**,
+and both were found by a human reading rows — no monitor, no digest line, no
+badge anywhere was capable of reporting them.
+
+**ADR-0114 fixed the cause; this fixes the blindness.** `sendDecisionEmail` has
+five ways to return without stamping `decision_mail_sent_at` — no recipients,
+oversize refusal, transport failure, M365 disabled, and a crash between the
+decide commit and the send — and all five look identical from outside. ADR-0114
+closed exactly one of them. So detection now keys on the **state** (decided, no
+mail stamp), which is true regardless of cause, including causes not yet written.
+
+- **The sweep.** The existing 06:00 weekday digest (ADR-0066 §1.7) grew a
+  decided-but-unmailed section **and** a `warnings` line — both, because a
+  warning sends when the queue is otherwise empty, which is exactly when an
+  unmailed decision would otherwise stay invisible. It raises the digest to high
+  at any age. No new scheduler, no new column, no migration.
+- **The page.** `dr3-vision-system` (an existing topic), graded `high` per
+  ADR-0037, with a **week-long cooldown fingerprinted on the sorted set of stuck
+  request ids** — the same backlog stays quiet, a NEW stuck decision changes the
+  key and pages that morning. Published _before_ the digest's own send decisions,
+  so the alarm does not depend on the mail channel it is reporting on. Click is
+  tier-1 for a single row, tier-2 for several.
+- **The queue shows it.** A red `mail not sent` chip on the LIST row (it lived
+  only inside one request's detail pane before, which is why nobody saw it), plus
+  a `mail not sent` filter tab that renders only when the count is non-zero.
+- **`'disabled'` stops being silent.** It returned with no log, no page and no
+  stamp; it now error-logs and pages, keyed on the _outage_ rather than the
+  request that hit it. Still fail-open — only the silence ends.
+- **CC is audited.** `notify_staff` recorded `intended`/`actual` TO addresses and
+  dropped CC entirely, so "was Mary actually copied?" was not answerable from
+  data — the audit kept the forwarder and discarded the roster. Now `cc` +
+  `cc_count`; absent on older rows means _unknown_, never _no CC_.
+- **Cosmetic:** a NOT-DR3 rejection stated its reason twice (location slot and
+  again as "Note:"). Once, in the location slot.
+- One predicate (`src/lib/ap/decision-mail.ts`) backs the sweep, the badge and
+  the detail view, so the alarm and the badge cannot drift apart. +41 tests
+  (6080 → 6121; 5999 passing, 122 skipped, 0 failing).
+
+**Note for the first run:** the two orphans above will appear in the first digest
+after deploy and will page once. That is the instrument working. They are
+deliberately **not** re-sent here — that is Bill's separate call — and they will
+keep appearing every morning until it is made.
+
 ## 2026-08-24 — Illegal Dropoff on the iPad, between Public and Incentive (ADR-0085 Amendment 1)
 
 The floor team's ask, verbatim placement included. `floor_illegal` is the third

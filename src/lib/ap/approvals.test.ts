@@ -35,7 +35,13 @@ const sendSystemEmail = vi.fn(async () => ({
   retries: 0,
   lastStatus: 202,
 }));
-const publishNtfy = vi.fn(async () => ({ ok: true, outcome: 'sent' as const }));
+// ADR-0126 — args are PASSED THROUGH (they used to be dropped), so the ADR-0037
+// grading of a page (topic, priority, fingerprint, cooldown) is assertable rather
+// than just its call count.
+const publishNtfy = vi.fn(async (args: unknown) => {
+  void args; // captured by vi.fn for assertions; not read by the stub itself
+  return { ok: true, outcome: 'sent' as const };
+});
 const notifyStaffSpy = vi.fn();
 
 // §1.6e / Amendment 4 — stamp module mocked so no real Chromium/pdf-lib runs;
@@ -94,7 +100,7 @@ vi.mock('@/lib/notify/notify-staff', () => ({
   },
 }));
 vi.mock('@/lib/notify/rollout', () => ({ NOTIFY_SURFACE: { AP_NOTIFY: 'ap_notify' } }));
-vi.mock('@/lib/ntfy', () => ({ publishNtfy: () => publishNtfy() }));
+vi.mock('@/lib/ntfy', () => ({ publishNtfy: (a: unknown) => publishNtfy(a) }));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -1426,5 +1432,118 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
       }),
     ).rejects.toBeInstanceOf(ApAlreadyDecidedError);
     expect(db.equipmentLinks).toHaveLength(0);
+  });
+});
+
+// ── ADR-0126 — the silent paths stop being silent ──────────────────────────
+//
+// Two rejections were decided, refused by the transport, never stamped and never
+// re-sent; accounting was told about neither for weeks. The `'disabled'` path was
+// the worst of the family — it returned without a stamp, without an error log and
+// without a page, so a credential outage taking out EVERY decision mail looked
+// exactly like a quiet afternoon.
+
+describe('ADR-0126 — decision mail cannot fail silently', () => {
+  const recips = [{ email: 'mary@svdp.us', active: true }];
+
+  it('D7: pages + error-logs when M365 is disabled, and does NOT stamp the row', async () => {
+    const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
+    sendSystemEmail.mockResolvedValueOnce({
+      delivered: false,
+      disabled: true,
+      messageId: '',
+      retries: 0,
+      lastStatus: 0,
+    });
+
+    const res = await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      note: 'duplicate invoice',
+      siteId: 'site-w',
+    });
+
+    expect(res.mail).toBe('disabled');
+    // The decision STANDS — fail-open on the transport is correct and unchanged.
+    expect(db.requests[0]!.status).toBe('rejected');
+    // But the mail stamp must NOT be set: it is the sweep's only signal, and a
+    // stamp here would make the row indistinguishable from a delivered one.
+    expect(db.requests[0]!.decision_mail_sent_at).toBeFalsy();
+    expect(publishNtfy).toHaveBeenCalledTimes(1);
+  });
+
+  it('D7: the page is keyed on the OUTAGE, not the request that hit it', async () => {
+    // A credential expiry stops every decision mail at once. A per-request
+    // fingerprint would page once per decision for the whole outage.
+    const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
+    sendSystemEmail.mockResolvedValueOnce({
+      delivered: false,
+      disabled: true,
+      messageId: '',
+      retries: 0,
+      lastStatus: 0,
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+    });
+
+    const page = publishNtfy.mock.calls[0]?.[0] as unknown as {
+      topic: string;
+      priority: string;
+      fingerprint: string;
+      cooldownMs: number;
+    };
+    expect(page.topic).toBe('dr3-vision-system'); // an EXISTING topic
+    expect(page.priority).toBe('high');
+    expect(page.fingerprint).toBe('ap-decision-mail-disabled');
+    expect(page.fingerprint).not.toContain('req-1');
+    expect(page.cooldownMs).toBeGreaterThan(60 * 60 * 1000);
+  });
+
+  it('D9: a NOT-DR3 rejection states its reason ONCE, in the location slot', async () => {
+    const reason = 'mis-addressed — this is a parent-org bill, not a DR3 location';
+    const db = newFakeDb({
+      requests: [pendingReq({ sender_address: 'accounting@svdp.us' })],
+      users,
+      decisionRecipients: recips,
+    });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      note: reason,
+      filedNotDr3: true,
+    });
+
+    const arg = notifyStaffSpy.mock.calls[0]?.[0] as { htmlBody: string };
+    // Present, and present exactly once — it used to render again as "Note: …",
+    // which reads as two facts and invites a hunt for a difference that is not there.
+    expect(arg.htmlBody).toContain('NOT DR3 — see reason:');
+    expect(arg.htmlBody).toContain(reason);
+    expect(arg.htmlBody.split(reason).length - 1).toBe(1);
+    expect(arg.htmlBody).not.toContain(`<li>Note: ${reason}</li>`);
+  });
+
+  it('D9: a NORMAL (site-filed) rejection still renders its note — dedupe is scoped', async () => {
+    // The guard must not swallow the note on every other decision.
+    const db = newFakeDb({ requests: [pendingReq()], users, decisionRecipients: recips });
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'req-1',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      note: 'duplicate of invoice 4470',
+      siteId: 'site-w',
+    });
+
+    const arg = notifyStaffSpy.mock.calls[0]?.[0] as { htmlBody: string };
+    expect(arg.htmlBody).toContain('<li>Note: duplicate of invoice 4470</li>');
   });
 });

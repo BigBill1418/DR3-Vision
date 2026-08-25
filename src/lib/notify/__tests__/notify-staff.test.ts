@@ -230,3 +230,51 @@ describe('notifyStaff — oversized attachments', () => {
     expect(audited.after['oversize_refused']).toBe(false);
   });
 });
+
+// ── ADR-0126 D8 — the CC set is audit evidence ──────────────────────────────
+//
+// During the 2026-08 unmailed-decision review the question "was accounting
+// actually copied?" was NOT answerable from data. The AP decision mail puts the
+// original forwarder in TO and Mary's `ap_decision_recipients` roster in CC, so
+// the audit trail recorded the one address nobody was asking about and omitted
+// the one everybody was.
+
+describe('notifyStaff — CC is recorded on the audit row (ADR-0126 D8)', () => {
+  it('audits the CC addresses so "was accounting copied?" is answerable from data', async () => {
+    surfaceFindUnique.mockResolvedValue({ rollout_state: 'live' });
+    await notifyStaff({
+      surfaceCode: 'alert_digest',
+      site: { id: 'site-w', code: 'woodland' },
+      recipients: ['forwarder@svdp.us'],
+      cc: ['mary.scott@svdp.us', 'ap@svdp.us'],
+      subject: 'DR3-Vision AP decision (rejected)',
+      htmlBody: '<!DOCTYPE html><html><body>hi</body></html>',
+    });
+
+    const audited = callArg<{ after: Record<string, unknown> }>(writeAudit, 0, 0);
+    expect(audited.after['cc']).toEqual(['mary.scott@svdp.us', 'ap@svdp.us']);
+    expect(audited.after['cc_count']).toBe(2);
+    // The TO set is still recorded — CC is additive, not a replacement.
+    expect(audited.after['intended']).toEqual(['forwarder@svdp.us']);
+  });
+
+  it('records an EMPTY cc as empty rather than omitting the field', async () => {
+    // "No CC" and "we did not record CC" must be distinguishable going forward.
+    // Rows written before this shipped have neither key, and a reader must treat
+    // that absence as UNKNOWN — which only works if a present key always means
+    // what it says.
+    surfaceFindUnique.mockResolvedValue({ rollout_state: 'live' });
+    await notifyStaff({
+      surfaceCode: 'alert_digest',
+      site: { id: 'site-w', code: 'woodland' },
+      recipients: ['forwarder@svdp.us'],
+      subject: 'No CC on this one',
+      htmlBody: '<!DOCTYPE html><html><body>hi</body></html>',
+    });
+
+    const audited = callArg<{ after: Record<string, unknown> }>(writeAudit, 0, 0);
+    expect(audited.after).toHaveProperty('cc');
+    expect(audited.after['cc']).toEqual([]);
+    expect(audited.after['cc_count']).toBe(0);
+  });
+});

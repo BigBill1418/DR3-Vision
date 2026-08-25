@@ -1020,7 +1020,20 @@ export async function sendDecisionEmail(
       ? `<li>Amount: $${(effectiveAmountCents / 100).toFixed(2)}</li>`
       : '';
   const vendorLine = effectiveVendor ? `<li>Vendor: ${escapeHtml(effectiveVendor)}</li>` : '';
-  const noteLine = effectiveNote ? `<li>Note: ${escapeHtml(effectiveNote)}</li>` : '';
+  // ADR-0126 (D5) — the NOT-DR3 reason is rendered ONCE.
+  //
+  // A NOT-DR3 filing puts `decision_note` in the location slot below as
+  // "NOT DR3 — see reason: …". On a REJECT, `effectiveNote` resolves to that same
+  // `decision_note`, so the identical sentence was also emitted as "Note: …" a few
+  // lines further down. Mary received every NOT-DR3 rejection with its reason
+  // stated twice, which reads like two different facts and invites a second look
+  // for a difference that is not there. The location slot wins because it is the
+  // unmissable one (bolded, and mirrored into the subject line).
+  const notDr3Reason = filedNotDr3 ? (req.decision_note?.trim() ?? '') : '';
+  const noteDuplicatesLocation =
+    filedNotDr3 && !!effectiveNote && effectiveNote.trim() === notDr3Reason;
+  const noteLine =
+    effectiveNote && !noteDuplicatesLocation ? `<li>Note: ${escapeHtml(effectiveNote)}</li>` : '';
   // D-M5-3 — the approver line. For a >= $1,000 decision both approvers + PT
   // timestamps appear (first approved / second confirmed-or-overrode); otherwise the
   // single terminal approver. A second-approver override reject also states the
@@ -1106,9 +1119,8 @@ export async function sendDecisionEmail(
   // the decision facts — accounting must never guess which site's books.
   // 2026-07-20 amendment: a NOT-DR3 decision leads with an unmissable marker + the
   // reason (in the same slot) so Mary never mistakes it for a DR3-site invoice.
-  const reason = req.decision_note?.trim() ?? '';
   const locationLine = filedNotDr3
-    ? `<li><b>NOT DR3 — see reason:</b> ${escapeHtml(reason || '(no reason provided)')}</li>`
+    ? `<li><b>NOT DR3 — see reason:</b> ${escapeHtml(notDr3Reason || '(no reason provided)')}</li>`
     : siteName
       ? `<li>Site: <b>${escapeHtml(siteName)}</b></li>`
       : '';
@@ -1245,7 +1257,38 @@ export async function sendDecisionEmail(
     db: prisma,
   });
 
-  if (notified.disabled) return 'disabled'; // M365 not configured — fail-open no-op
+  // ── ADR-0126. M365 unconfigured / credentials unresolved ──────────────────
+  //
+  // This path used to `return 'disabled'` in silence: no error log, no page, and
+  // no `decision_mail_sent_at` stamp. Fail-OPEN is right for the transport (a mail
+  // outage must never roll back a committed decision) but fail-SILENT is not — a
+  // credential expiry takes out decision mail for EVERY request at once, and the
+  // only trace was a return value nobody reads. That is the same
+  // indistinguishable-from-success shape that let two rejections go unnoticed.
+  //
+  // Not per-request: one page names the outage, and the sweep in the 06:00 digest
+  // is the backstop that enumerates every affected row even if this page is missed
+  // entirely (an unstamped decision is caught by STATE, not by this alert firing).
+  if (notified.disabled) {
+    log.error(
+      { requestId, status: req.status },
+      '[ap-approvals] decision email NOT sent — M365 is disabled or its credentials could not be resolved',
+    );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'AP decision email NOT sent — mail transport disabled',
+      body: `AP request ${requestId} was decided (${req.status}) but M365 mail is disabled or its credentials could not be resolved, so NO decision email reached accounting. This affects EVERY decision while it persists. Check the M365 credentials on the app container; decided requests with no confirmed mail are listed in the 06:00 AP digest and flagged in the AP queue.`,
+      priority: 'high',
+      tags: ['error', 'ap', 'config', 'dr3-vision'],
+      clickUrl: `${baseUrl()}/dashboard/ops/ap`,
+      // Config-class fingerprint, matching the empty-roster alarm above: the
+      // condition is the OUTAGE, not the request that happened to hit it. A
+      // per-request key would page once per decision for the whole outage.
+      fingerprint: 'ap-decision-mail-disabled',
+      cooldownMs: 6 * 60 * 60 * 1000,
+    }).catch(() => undefined);
+    return 'disabled';
+  }
   // Size refusal is reported BEFORE the generic failure branch: both leave
   // `delivered === 0`, but only this one is caused by the attachment rather than
   // the transport, and only this one is unfixable by re-sending. Pages so the

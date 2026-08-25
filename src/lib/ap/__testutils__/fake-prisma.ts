@@ -370,7 +370,9 @@ export function makeFakePrisma(db: FakeDb) {
     // newest scan, and a fake that always returned it regardless would leave that
     // ordering with no guard at all.
     docIngestReachabilityScan: {
-      async findFirst(args: { orderBy?: { scanned_at?: 'asc' | 'desc' }; select?: AnyRecord } = {}) {
+      async findFirst(
+        args: { orderBy?: { scanned_at?: 'asc' | 'desc' }; select?: AnyRecord } = {},
+      ) {
         if (db.reachabilityScans.length === 0) return null;
         const dir = args.orderBy?.scanned_at ?? 'asc';
         const rows = db.reachabilityScans
@@ -386,9 +388,7 @@ export function makeFakePrisma(db: FakeDb) {
     docIngestReachableItem: {
       async findMany(args: { where?: AnyRecord; take?: number; select?: AnyRecord } = {}) {
         const scanId = (args.where ?? {})['scan_id'];
-        const rows = db.reachableItems.filter(
-          (i) => scanId === undefined || i.scan_id === scanId,
-        );
+        const rows = db.reachableItems.filter((i) => scanId === undefined || i.scan_id === scanId);
         return rows.slice(0, args.take).map((r) => pick(r, args.select));
       },
     },
@@ -473,6 +473,15 @@ export function makeFakePrisma(db: FakeDb) {
             if (e === null || e.getTime() < escGte.getTime()) return false;
           }
           if (w['id'] !== undefined && r.id !== w['id']) return false;
+          // ADR-0126 — the decided-but-unmailed sweep reads
+          // `{ status: { in: [...] }, decision_mail_sent_at: null }`. An ABSENT
+          // field must read as null, exactly like the scanner's `escalated_at`
+          // key above: a fixture that omits the column is a row that was never
+          // mailed, and treating it as "no opinion" would let the sweep's own
+          // tests pass against a query that finds nothing.
+          if (w['decision_mail_sent_at'] === null && (r.decision_mail_sent_at ?? null) !== null) {
+            return false;
+          }
           return true;
         });
         const ob = args.orderBy as AnyRecord | undefined;
@@ -567,8 +576,24 @@ export function makeFakePrisma(db: FakeDb) {
       async count(args: { where?: AnyRecord }) {
         const w = args.where ?? {};
         const siteIn = (w['site_id'] as { in?: string[] } | undefined)?.in;
+        // ADR-0126 — `status` may be a scalar OR `{ in: [...] }` (the
+        // decided-but-unmailed count). Comparing a string to an object with `!==`
+        // is ALWAYS true, so without this branch an `{ in }` count silently
+        // matched nothing and returned 0 — a fake that cannot fail, reporting
+        // "no stuck rows" no matter what the table held.
+        const statusCond = w['status'];
+        const statusIn =
+          statusCond && typeof statusCond === 'object'
+            ? (statusCond as { in?: string[] }).in
+            : undefined;
         return db.requests.filter((r) => {
-          if (w['status'] !== undefined && r.status !== w['status']) return false;
+          if (statusIn) {
+            if (!statusIn.includes(r.status)) return false;
+          } else if (statusCond !== undefined && r.status !== statusCond) return false;
+          // An ABSENT column reads as null, matching the findMany convention above.
+          if (w['decision_mail_sent_at'] === null && (r.decision_mail_sent_at ?? null) !== null) {
+            return false;
+          }
           if (siteIn && !siteIn.includes(r.site_id ?? '')) return false;
           if (
             w['site_id'] !== undefined &&

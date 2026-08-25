@@ -71,6 +71,11 @@ import { docIngestDiscoveryGapWarning } from '@/lib/doc-ingest/reachability';
 import { dailyDigestRecipients } from './notification-prefs';
 import { resolveSecondApproval } from './second-approval-resolver';
 import { apQueueUrl, apRequestUrl, reimbursementUrl } from './notify';
+import {
+  decisionMailStuckFingerprint,
+  decisionMailUnsentWhere,
+  isDecisionMailStuck,
+} from './decision-mail';
 
 /**
  * Age (in Pacific calendar days) at which an item raises the age warning AND
@@ -91,6 +96,27 @@ export const STALE_HOLD_DAYS = AGE_WARNING_DAYS;
  * escalation delta. Covers a long holiday weekend with room to spare.
  */
 const MAX_LOOKBACK_DAYS = 7;
+
+/**
+ * ADR-0126 / ADR-0037 §3 — cooldown for the decided-but-unmailed page.
+ *
+ * A WEEK, which is far longer than any other alert in this module, and that is the
+ * grading rather than an oversight. The digest fires daily, so anything at or
+ * under 24h would re-page every morning for a row whose fix is a human deciding
+ * whether to re-send — the textbook chronic-condition alert that trains an
+ * operator to swipe the topic away, taking the genuinely urgent pages with it.
+ *
+ * Suppression is safe here ONLY because the page is not the durable surface: the
+ * digest line reappears every single morning until the row clears, and the queue
+ * badge is on the row itself. The page exists to catch the FIRST occurrence
+ * quickly; the digest carries it from then on. Because the fingerprint is keyed on
+ * the set of stuck ids, a new stuck decision is never suppressed by this window.
+ *
+ * Caveat worth knowing: `publishNtfy` cooldowns are held IN-PROCESS, so an app
+ * restart resets them and the next digest re-pages once. That errs toward one
+ * extra page rather than a missed one, which is the correct direction here.
+ */
+const DECIDED_UNMAILED_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** DR3 brand (CLAUDE.md hard rule #3 — GREEN + BLACK, never SVdP red). */
 const DR3_GREEN_DEEP = '#00524c';
@@ -147,6 +173,16 @@ export interface ApMorningDigestPayload {
    * not apply and a vendor that does not exist.
    */
   pendingReimbursements: DigestItem[];
+  /**
+   * ADR-0126 — decided with no evidence the notice ever reached accounting.
+   *
+   * Unlike every other section here this is not a WORK QUEUE — nobody needs to
+   * approve these, the decision already stands. It is a DELIVERY FAILURE list, and
+   * it stays in the digest every single morning until the row is cleared, because
+   * the failure mode it closes is precisely a thing that was true for weeks while
+   * no surface said so.
+   */
+  decidedUnmailed: DigestItem[];
   /** Routing-coverage + age warnings (and any resolver `problems`). */
   warnings: string[];
   /** True when any item is >= AGE_WARNING_DAYS old. Drives `importance: high`. */
@@ -175,6 +211,8 @@ export interface ApMorningDigestResult {
     awaitingFirstApproval: number;
     staleHolds: number;
     escalations: number;
+    /** ADR-0126 — decided rows with no confirmed decision email. */
+    decidedUnmailed: number;
     warnings: number;
   };
   mode?: NotifyStaffMode;
@@ -268,6 +306,10 @@ const ITEM_SELECT = {
   first_approver_id: true,
   first_approved_at: true,
   escalated_at: true,
+  // ADR-0126 — the decided-but-unmailed sweep needs both the decision instant (to
+  // apply the anti-race grace) and the mail stamp (the thing that is missing).
+  decided_at: true,
+  decision_mail_sent_at: true,
 } as const;
 
 interface RequestRow {
@@ -284,6 +326,8 @@ interface RequestRow {
   first_approver_id: string | null;
   first_approved_at: Date | null;
   escalated_at: Date | null;
+  decided_at: Date | null;
+  decision_mail_sent_at: Date | null;
 }
 
 function toItem(row: RequestRow, now: Date, detail: string | null): DigestItem {
@@ -549,9 +593,58 @@ export async function buildApMorningDigest(
     });
   }
 
+  // ── ADR-0126. Decided, but nobody was told ─────────────────────────────────
+  //
+  // The backstop for the whole decision-mail path. `sendDecisionEmail` can return
+  // without stamping `decision_mail_sent_at` in at least five ways (no recipients,
+  // an oversize refusal, transport failure, M365 disabled, or a crash between the
+  // decide commit and the send) and all five look identical from outside: a
+  // decided row, and an accounting inbox that never received anything. Two real
+  // rejections sat in exactly that state for weeks in July/August 2026.
+  //
+  // Detecting the STATE rather than any one cause is the point — this catches the
+  // failure paths nobody has thought of yet, including ones added after today.
+  //
+  // Rides `warnings` as well as its own section for the ADR-0067/ADR-0080 reason:
+  // a warning sends even when the queue is empty, and an all-quiet queue is the
+  // most likely condition under which an unmailed decision would otherwise sit
+  // invisible — nothing pending means nothing else would have sent the digest.
+  const unmailedRows = (await db.apRequest.findMany({
+    where: decisionMailUnsentWhere(),
+    select: ITEM_SELECT,
+    orderBy: { received_at: 'asc' },
+  })) as RequestRow[];
+  const decidedUnmailed = unmailedRows
+    .filter((row) => isDecisionMailStuck(row, now))
+    .map((row) => {
+      const decidedLabel = row.decided_at
+        ? `${formatPacificDateTime(row.decided_at)} PT`
+        : 'an unrecorded time';
+      const since = row.decided_at ? pacificCalendarDaysBetween(row.decided_at, now) : null;
+      const waited = since === null ? '' : ` · ${fmtAge(since)} ago`;
+      return toItem(
+        row,
+        now,
+        `Decided ${row.status.toUpperCase()} ${decidedLabel}${waited} — NO decision email confirmed sent`,
+      );
+    });
+  if (decidedUnmailed.length > 0) {
+    const one = decidedUnmailed.length === 1;
+    warnings.push(
+      `${decidedUnmailed.length} decided invoice${one ? '' : 's'} ${one ? 'has' : 'have'} NO confirmed ` +
+        `decision email: accounting was never told. The decision${one ? '' : 's'} stand${one ? 's' : ''} ` +
+        `and the stamped original is archived in Vision — open the AP queue to re-send. ` +
+        `This line stays here every morning until the mail is confirmed sent.`,
+    );
+  }
+
   // A reimbursement 3+ days old raises the whole digest, same bar as an invoice.
   const agedReimbursements = pendingReimbursements.filter((i) => i.ageDays >= AGE_WARNING_DAYS);
-  const anyHigh = highPriority || agedReimbursements.length > 0;
+  // ADR-0126 — an unmailed decision raises the digest on its own, at any age. The
+  // 3-day bar exists because a pending invoice is merely SLOW; an undelivered
+  // decision is already broken, and waiting three days to say so out loud would
+  // reproduce a third of the original incident.
+  const anyHigh = highPriority || agedReimbursements.length > 0 || decidedUnmailed.length > 0;
   if (agedReimbursements.length > 0) {
     const oldestR = agedReimbursements.reduce((a, b) => (b.ageDays > a.ageDays ? b : a));
     warnings.push(
@@ -569,6 +662,7 @@ export async function buildApMorningDigest(
     staleHolds.length === 0 &&
     escalations.length === 0 &&
     pendingReimbursements.length === 0 &&
+    decidedUnmailed.length === 0 &&
     warnings.length === 0;
 
   return {
@@ -578,6 +672,7 @@ export async function buildApMorningDigest(
     staleHolds,
     escalations,
     pendingReimbursements,
+    decidedUnmailed,
     warnings,
     highPriority: anyHigh,
     empty,
@@ -651,6 +746,7 @@ export function renderApMorningDigestHtml(payload: ApMorningDigestPayload): stri
           ${renderSection(`On hold ${STALE_HOLD_DAYS}+ days`, payload.staleHolds)}
           ${renderSection('Escalated since the last digest', payload.escalations)}
           ${renderSection('Reimbursements awaiting a second signature', payload.pendingReimbursements)}
+          ${renderSection('DECIDED — but no decision email confirmed sent', payload.decidedUnmailed)}
           <p style="font:400 12px/1.55 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${MUTED};margin:24px 0 0;border-top:1px solid ${HAIRLINE};padding-top:14px">
             Oversight only — the team works the live queue at
             <a href="${apQueueUrl()}" style="color:${DR3_GREEN_DEEP}">the AP approval queue</a>.
@@ -694,6 +790,7 @@ export async function runApMorningDigest(
     awaitingFirstApproval: 0,
     staleHolds: 0,
     escalations: 0,
+    decidedUnmailed: 0,
     warnings: 0,
   };
 
@@ -715,8 +812,44 @@ export async function runApMorningDigest(
     awaitingFirstApproval: payload.awaitingFirstApproval.length,
     staleHolds: payload.staleHolds.length,
     escalations: payload.escalations.length,
+    decidedUnmailed: payload.decidedUnmailed.length,
     warnings: payload.warnings.length,
   };
+
+  // ── ADR-0126 — page BEFORE the send decisions below ────────────────────────
+  //
+  // Placed here deliberately, ahead of both the no-recipients return and the
+  // mail-disabled return. The two failure modes are independent, and the one that
+  // most plausibly co-occurs with an unmailed decision is precisely a mail outage
+  // — the same broken credentials that stopped the decision email would stop the
+  // digest reporting it. Publishing first means the alarm does not depend on the
+  // channel it is reporting on.
+  //
+  // Fail-soft (`.catch`), like every other publish in the AP module: an alerting
+  // failure must never abort the digest that is the durable surface for this.
+  if (payload.decidedUnmailed.length > 0) {
+    const ids = payload.decidedUnmailed.map((i) => i.requestId);
+    const one = ids.length === 1;
+    log.error(
+      { dayISO, count: ids.length, requestIds: ids },
+      '[ap-morning-digest] decided requests have no confirmed decision email — accounting was never told',
+    );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: `AP decision email never confirmed sent (${ids.length})`,
+      // ADR-0045 — row ids only; never vendor or amount in a page body.
+      body: `${ids.length} decided AP request${one ? '' : 's'} ${one ? 'has' : 'have'} no confirmed decision email, so accounting was never notified. Request id${one ? '' : 's'}: ${ids.join(', ')}. The decision${one ? '' : 's'} stand and the stamped originals are archived — open the AP queue to re-send.`,
+      priority: 'high',
+      tags: ['warning', 'ap', 'decision-mail', 'dr3-vision'],
+      // ADR-0036 click policy: tier-1 deep link when there is exactly one row to
+      // land on, tier-2 queue when the page describes several.
+      clickUrl: one ? apRequestUrl(ids[0]!) : apQueueUrl(),
+      // Keyed on the SET of stuck ids: the same backlog stays suppressed for a
+      // week, a NEW stuck decision changes the key and pages the same morning.
+      fingerprint: decisionMailStuckFingerprint(ids),
+      cooldownMs: DECIDED_UNMAILED_COOLDOWN_MS,
+    }).catch(() => undefined);
+  }
 
   // §1.7 — SUPPRESSED ENTIRELY when there is nothing to report.
   if (payload.empty) {

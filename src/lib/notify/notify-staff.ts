@@ -195,6 +195,16 @@ export async function notifyStaff(args: NotifyStaffArgs): Promise<NotifyStaffRes
       intended: intendedAddrs,
       actual_count: actualAddrs.length,
       actual: actualAddrs,
+      // ADR-0126 — the CC set, recorded because "was accounting actually copied?"
+      // was NOT answerable from data during the 2026-08 unmailed-decision review.
+      // The AP decision mail carries Mary's `ap_decision_recipients` roster as CC
+      // and the TO is the original forwarder, so the audit trail recorded the one
+      // address nobody was asking about and omitted the one everybody was.
+      //
+      // Absent on rows written before this shipped — readers must treat a missing
+      // key as "unknown", never as "no CC".
+      cc_count: args.cc?.length ?? 0,
+      cc: args.cc ?? [],
       delivered,
       disabled,
       // Recorded on the audit row so "was this ever actually sent?" is answerable

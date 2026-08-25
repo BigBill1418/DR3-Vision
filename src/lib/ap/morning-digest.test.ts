@@ -21,6 +21,18 @@ vi.mock('@/lib/notify/notify-staff', () => ({
 }));
 // morning-digest.ts and rollout.ts import the real prisma client at module load.
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
+// ADR-0126 — the decided-but-unmailed page. Mocked rather than left to the real
+// helper's unconfigured no-op for two reasons: the ADR-0037 grading (priority,
+// cooldown, fingerprint, click tier) is only assertable if the call is captured,
+// and the real helper holds its cooldown IN-PROCESS, so a live publish in one
+// test would suppress the next test's page and hide a regression.
+const publishNtfy = vi.fn(async (args: unknown) => {
+  void args; // captured by vi.fn for assertions; not read by the stub itself
+  return { ok: true, outcome: 'sent' };
+});
+vi.mock('@/lib/ntfy', () => ({
+  publishNtfy: (a: unknown) => publishNtfy(a),
+}));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -168,6 +180,7 @@ function quietDb(over: Partial<FakeDb> = {}): FakeDb {
 }
 
 beforeEach(() => {
+  publishNtfy.mockClear();
   notifyStaff.mockReset();
   notifyStaff.mockResolvedValue({
     surfaceCode: 'ap_notify',
@@ -196,10 +209,26 @@ describe('empty-state suppression', () => {
   });
 
   it('is empty even with DECIDED history in the table — only open work counts', async () => {
+    // ADR-0126: the decided rows here are MAILED (`decision_mail_sent_at` set).
+    // That is the whole point of the fixture — this test's subject is "closed work
+    // does not reopen the digest", and closed means the notice actually went out.
+    // Leaving the stamp null would make these rows a genuine delivery failure and
+    // the test would be asserting the opposite of what it is named for; the
+    // sibling test below covers that case deliberately.
     const db = quietDb({
       requests: [
-        req({ status: 'approved', decided_by: JANETTE.id, decided_at: daysBefore(1) }),
-        req({ status: 'rejected', decided_by: MORENA.id, decided_at: daysBefore(2) }),
+        req({
+          status: 'approved',
+          decided_by: JANETTE.id,
+          decided_at: daysBefore(1),
+          decision_mail_sent_at: daysBefore(1),
+        }),
+        req({
+          status: 'rejected',
+          decided_by: MORENA.id,
+          decided_at: daysBefore(2),
+          decision_mail_sent_at: daysBefore(2),
+        }),
         req({ status: 'quarantined', quarantine_reason: 'external_sender' }),
       ],
     });
@@ -651,5 +680,168 @@ describe('ADR-0068 — pending reimbursements appear in the digest', () => {
     const payload = await buildApMorningDigest(fp(quietDb()), WED_0600_PT);
     expect(payload.pendingReimbursements).toHaveLength(0);
     expect(payload.empty).toBe(true);
+  });
+});
+
+// ── ADR-0126. Decided, but nobody was told ─────────────────────────────────
+//
+// The backstop for the whole decision-mail path. Two rejections were decided in
+// July/August 2026, refused by the transport as oversize, never stamped, and
+// never re-sent — accounting was told about neither, and no surface anywhere said
+// so for weeks. These tests pin the surface that ends that class of silence.
+
+describe('ADR-0126 — decided but no confirmed decision email', () => {
+  /** A decided row whose notice never went out, decided `days` Pacific days ago. */
+  const unmailed = (over: Partial<FakeApRequest> = {}) =>
+    req({
+      status: 'rejected',
+      decided_by: JANETTE.id,
+      decided_at: daysBefore(1),
+      decision_mail_sent_at: null,
+      ...over,
+    });
+
+  it('RESURRECTS an otherwise-empty digest — the queue being quiet is the dangerous case', async () => {
+    // The load-bearing test. Nothing is pending, so every other section is empty
+    // and the §1.7 suppression rule would have sent nothing at all. An unmailed
+    // decision has to be strong enough on its own to force the mail out, or it
+    // stays invisible on exactly the quiet mornings it is most likely to occur.
+    const db = quietDb({ requests: [unmailed()] });
+    const result = await runApMorningDigest({ db: fp(db), now: WED_0600_PT });
+
+    expect(result.sent).toBe(true);
+    expect(result.counts.decidedUnmailed).toBe(1);
+    expect(notifyStaff).toHaveBeenCalled();
+  });
+
+  it('raises the digest to high priority at ANY age', async () => {
+    // A pending invoice is merely slow and gets 3 days. An undelivered decision is
+    // already broken — waiting 3 days to say so reproduces part of the incident.
+    // 30 minutes ago — same Pacific day, just past the anti-race grace. Note
+    // `daysBefore(0)` is NOT usable here: it lands 5h AFTER the 06:00 fire time,
+    // i.e. a decision in the future, which correctly fails the grace check.
+    const db = quietDb({
+      requests: [unmailed({ decided_at: new Date(WED_0600_PT.getTime() - 30 * 60_000) })],
+    });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.highPriority).toBe(true);
+    expect(payload.decidedUnmailed).toHaveLength(1);
+  });
+
+  it('does NOT flag a send that may still be in flight (anti-race grace)', async () => {
+    const db = quietDb({
+      requests: [unmailed({ decided_at: new Date(WED_0600_PT.getTime() - 60_000) })],
+    });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.decidedUnmailed).toHaveLength(0);
+    expect(payload.empty).toBe(true);
+  });
+
+  it('does NOT flag a >= $1,000 request still awaiting its second signature', async () => {
+    // pending_second_approval sends no decision mail BY DESIGN (ADR-0046 D-M5-3).
+    // Flagging it would make the sweep noise from its very first run.
+    const db = quietDb({
+      requests: [
+        req({
+          status: 'pending_second_approval',
+          first_approver_id: JANETTE.id,
+          first_approved_at: daysBefore(1),
+          decision_mail_sent_at: null,
+        }),
+      ],
+    });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.decidedUnmailed).toHaveLength(0);
+  });
+
+  it('does NOT flag a decision whose mail was confirmed sent', async () => {
+    const db = quietDb({
+      requests: [unmailed({ decision_mail_sent_at: daysBefore(1) })],
+    });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.decidedUnmailed).toHaveLength(0);
+    expect(payload.empty).toBe(true);
+  });
+
+  it('surfaces a decided row with a NULL decided_at rather than hiding it', async () => {
+    const db = quietDb({ requests: [unmailed({ decided_at: null })] });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.decidedUnmailed).toHaveLength(1);
+    expect(payload.decidedUnmailed[0]?.detail).toContain('an unrecorded time');
+  });
+
+  it('renders its own section AND a warning line in the email body', async () => {
+    // Both surfaces, deliberately: the section carries the rows, the warning
+    // survives into the "Needs attention" block that Bill reads first.
+    const db = quietDb({ requests: [unmailed()] });
+    await runApMorningDigest({ db: fp(db), now: WED_0600_PT });
+
+    const arg = notifyStaff.mock.calls[0]?.[0] as { htmlBody: string; subject: string };
+    expect(arg.htmlBody).toContain('DECIDED — but no decision email confirmed sent');
+    expect(arg.htmlBody).toContain('accounting was never told');
+    expect(arg.subject).toContain('ACTION NEEDED');
+  });
+
+  it('pages ntfy on an EXISTING topic, graded high, keyed on the stuck SET', async () => {
+    const db = quietDb({ requests: [unmailed({ id: 'req-stuck-1' })] });
+    await runApMorningDigest({ db: fp(db), now: WED_0600_PT });
+
+    expect(publishNtfy).toHaveBeenCalledTimes(1);
+    const page = publishNtfy.mock.calls[0]?.[0] as unknown as {
+      topic: string;
+      priority: string;
+      fingerprint: string;
+      cooldownMs: number;
+      clickUrl: string;
+      body: string;
+    };
+    // An EXISTING topic. A new one is a silent black hole — nobody is subscribed.
+    expect(page.topic).toBe('dr3-vision-system');
+    // ADR-0037: high, not urgent. Accounting is un-notified about a decision that
+    // already stands; it is not customer-facing and does not warrant a 3am wake.
+    expect(page.priority).toBe('high');
+    expect(page.fingerprint).toContain('req-stuck-1');
+    // Longer than the daily digest cadence, or it re-pages every morning forever.
+    expect(page.cooldownMs).toBeGreaterThan(24 * 60 * 60 * 1000);
+    // Exactly one row ⇒ tier-1 deep link (ADR-0036 click policy).
+    expect(page.clickUrl).toContain('request=req-stuck-1');
+    // ADR-0045 — ids only in a page body, never vendor or amount.
+    expect(page.body).toContain('req-stuck-1');
+  });
+
+  it('falls back to the tier-2 queue link when several rows are stuck', async () => {
+    const db = quietDb({
+      requests: [unmailed({ id: 'req-a' }), unmailed({ id: 'req-b', status: 'approved' })],
+    });
+    await runApMorningDigest({ db: fp(db), now: WED_0600_PT });
+
+    const page = publishNtfy.mock.calls[0]?.[0] as unknown as {
+      clickUrl: string;
+      fingerprint: string;
+    };
+    expect(page.clickUrl).not.toContain('request=');
+    expect(page.clickUrl).toContain('/dashboard/ops/ap');
+    // Set-keyed: both ids present, so adding a third row would change the key and
+    // page again rather than hiding inside this alert's week-long cooldown.
+    expect(page.fingerprint).toContain('req-a');
+    expect(page.fingerprint).toContain('req-b');
+  });
+
+  it('does NOT page when nothing is stuck', async () => {
+    await runApMorningDigest({ db: fp(quietDb()), now: WED_0600_PT });
+    expect(publishNtfy).not.toHaveBeenCalled();
+  });
+
+  it('pages even when the digest email itself has nowhere to go', async () => {
+    // The co-occurring failure that matters: the same broken credentials that
+    // stopped the decision mail would stop the digest reporting it. The alarm must
+    // not depend on the channel it is reporting on.
+    const db = quietDb({ requests: [unmailed()] });
+    for (const p of db.notificationPrefs ?? []) p.notify_daily_digest = false;
+    const result = await runApMorningDigest({ db: fp(db), now: WED_0600_PT });
+
+    expect(result.reason).toBe('no_recipients');
+    const topics = publishNtfy.mock.calls.map((c) => (c[0] as unknown as { title: string }).title);
+    expect(topics.some((t) => t.includes('never confirmed sent'))).toBe(true);
   });
 });

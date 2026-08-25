@@ -25,7 +25,12 @@ type Status =
   | 'approved'
   | 'rejected'
   | 'quarantined';
-type Filter = Status | 'all';
+/**
+ * ADR-0126 — the decided-but-unmailed view. Cuts across approved + rejected, so
+ * it is a filter value rather than a status.
+ */
+const MAIL_UNSENT = 'decision_mail_unsent' as const;
+type Filter = Status | 'all' | typeof MAIL_UNSENT;
 
 // ─── ADR-0046 Amendment 5 client mirrors (D-M5-2/4/6). ────────────────────────
 type Confidence = 'high' | 'medium' | 'low' | 'failed';
@@ -88,6 +93,12 @@ interface ListRow {
   followupCount: number;
   heldByName: string | null;
   holdNote: string | null;
+  /**
+   * ADR-0126 — decided, with no confirmed decision email. Computed server-side
+   * from the shared predicate; optional so a payload from an older deploy simply
+   * renders no badge rather than throwing.
+   */
+  decisionMailUnsent?: boolean;
   /** Present iff `kind === 'reimbursement'`. */
   reimbursement?: {
     siteCode: string;
@@ -159,6 +170,11 @@ const TABS: Filter[] = [
   'approved',
   'rejected',
   'quarantined',
+  // ADR-0126 — rendered ONLY when the count is non-zero (or it is the active
+  // tab). A permanently-visible "mail not sent (0)" is clutter that trains the
+  // eye to skip it; a tab that appears exactly when something is wrong is a
+  // signal. See `visibleTabs` below.
+  MAIL_UNSENT,
   'all',
 ];
 
@@ -170,6 +186,7 @@ const STATUS_LABEL: Record<Filter, string> = {
   approved: 'approved',
   rejected: 'rejected',
   quarantined: 'quarantined',
+  [MAIL_UNSENT]: 'mail not sent',
   all: 'all',
 };
 
@@ -275,17 +292,28 @@ export function ApQueueClient() {
     if (selectedId) void loadDetail(selectedId);
   }, [filter, selectedId, loadList, loadDetail]);
 
+  // ADR-0126 — the mail-not-sent tab appears only when something is actually
+  // stuck. The `filter === MAIL_UNSENT` clause keeps it from vanishing out from
+  // under an operator who is standing on it when the last row clears.
+  const visibleTabs = TABS.filter(
+    (t) => t !== MAIL_UNSENT || (counts[MAIL_UNSENT] ?? 0) > 0 || filter === MAIL_UNSENT,
+  );
+
   return (
     <div className="mt-6">
       <div className="flex flex-wrap gap-2">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t}
             onClick={() => setFilter(t)}
             className={`rounded-full px-3 py-1 text-sm capitalize ${
               filter === t
                 ? 'bg-dr3-cyan text-dr3-space'
-                : 'bg-dr3-steel/30 text-dr3-mist hover:bg-dr3-steel/50'
+                : t === MAIL_UNSENT
+                  ? // Unselected, it still reads as a problem — it only exists
+                    // when one exists.
+                    'bg-red-500/25 text-red-200 hover:bg-red-500/40'
+                  : 'bg-dr3-steel/30 text-dr3-mist hover:bg-dr3-steel/50'
             }`}
           >
             {STATUS_LABEL[t]}
@@ -353,7 +381,15 @@ export function ApQueueClient() {
                     <span className="truncate text-sm font-medium">
                       {r.subject ?? '(no subject)'}
                     </span>
-                    <StatusBadge status={r.status} />
+                    <span className="flex shrink-0 items-center gap-1">
+                      {/* ADR-0126 — the delivery failure is visible on the ROW.
+                          It used to live only inside the detail pane, which meant
+                          finding it required opening every decided request one by
+                          one; nobody does that, so two rejections went unnoticed
+                          for weeks. */}
+                      {r.decisionMailUnsent && <MailUnsentBadge />}
+                      <StatusBadge status={r.status} />
+                    </span>
                   </div>
                   <div className="mt-1 truncate text-xs opacity-70">
                     {r.senderAddress}
@@ -381,6 +417,26 @@ export function ApQueueClient() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * ADR-0126 — "accounting was never told about this one."
+ *
+ * Deliberately the loudest chip in the list (solid red, not a tint): every other
+ * badge here reports a STATE OF WORK, and this one reports that the system failed
+ * to do something it said it did. `title` carries the plain-language explanation
+ * for the operator who has not read the ADR.
+ */
+function MailUnsentBadge() {
+  return (
+    <span
+      data-testid="ap-queue-mail-unsent-badge"
+      title="This decision was recorded, but no decision email to accounting was ever confirmed sent. Open the request to re-send."
+      className="shrink-0 rounded bg-red-600 px-2 py-0.5 text-[10px] font-bold uppercase text-white"
+    >
+      mail not sent
+    </span>
   );
 }
 

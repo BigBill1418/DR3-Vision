@@ -19,6 +19,41 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BN — 2026-08-25 AP decision-mail blindness closed (ADR-0126)
+
+The prevention shipped. What is still OPEN:
+
+- **BN-1 — the two orphaned rejections are NOT re-sent (Bill's decision).**
+  `1ee8e502-f15c-4e15-9b78-1415f2251847` (rejected 2026-07-31) and
+  `74daa199-6b6a-4974-90f8-b156183b1722` (rejected 2026-08-19) were decided,
+  the decision mail was refused as oversize, and accounting was never told.
+  ADR-0126 deliberately does **not** touch them — re-sending is Bill's call, and
+  an auto-re-send could duplicate a filing Mary has already made by hand. They
+  now appear in the 06:00 digest and carry the red `mail not sent` chip in the AP
+  queue, and they will keep appearing **every morning until the mail is confirmed
+  sent**. Expect one ntfy page on the first digest after deploy — that is the
+  instrument working, not a regression. Owner: Bill.
+- **BN-2 — `notifyStaff` forwards `cc` unchanged in PILOT mode.** Found while
+  adding the CC audit (ADR-0126 D8). The TO set reroutes to admins in pilot, but
+  `args.cc` is passed straight to the transport in BOTH modes, so a surface in
+  pilot still copies its real CC roster — pilot is not actually a dry run for
+  anyone on CC. It does **not** bite today (`ap_notify` is live at both sites),
+  and it was left alone rather than fixed blind because changing it silently
+  alters who receives the equipment-request mail. The new `cc` audit field makes
+  it visible in the data. Needs a decision: is pilot supposed to suppress CC?
+- **BN-3 — the `failed` path (transport delivered to nobody) is still
+  `log.warn`-only.** It is the last decision-mail path with no immediate signal.
+  The ADR-0126 sweep catches it the next business morning, which is why this is a
+  residual rather than a blocker.
+- **BN-4 — the sweep is weekday-only**, inheriting the digest's calendar. A
+  Saturday delivery failure is reported Monday. Accepted deliberately: the
+  alternative is a second scheduler with a second calendar across the DST seam,
+  which ADR-0066 §1.5 exists to prevent. Revisit only if a weekend AP decision
+  flow ever becomes routine.
+
+Live-verification still owed (could not be proven from a test run): the first
+real 06:00 PT digest tick after deploy is what proves the sweep fires end-to-end.
+
 ## 0.BM — 2026-08-24 pre-floor wrap: everything landed, verified, and confirmed good (3:05 AM PT)
 
 The full overnight sequence is COMPLETE. Verified against prod, not memory:
