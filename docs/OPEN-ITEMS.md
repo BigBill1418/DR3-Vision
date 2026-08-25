@@ -23,16 +23,30 @@ item below that names Kelsey as a dependency in that light.
 
 The prevention shipped. What is still OPEN:
 
-- **BN-1 — the two orphaned rejections are NOT re-sent (Bill's decision).**
-  `1ee8e502-f15c-4e15-9b78-1415f2251847` (rejected 2026-07-31) and
-  `74daa199-6b6a-4974-90f8-b156183b1722` (rejected 2026-08-19) were decided,
-  the decision mail was refused as oversize, and accounting was never told.
+- **BN-1 — FOUR orphaned decisions are NOT re-sent (Bill's decision).** The
+  sweep was run read-only against prod on 2026-08-25 and returned **four** rows,
+  not the two the manual investigation found:
+
+  | Request     | Status   | Decided    | Vendor                          | Amount    |
+  | ----------- | -------- | ---------- | ------------------------------- | --------- |
+  | `1ee8e502…` | rejected | 2026-07-31 | —                               | —         |
+  | `ffa0b0d6…` | approved | 2026-07-31 | Quality Mobile dba Trailer Proz | $3,315.99 |
+  | `eec29987…` | approved | 2026-08-05 | Carlos Linares Bro              | $8,950.00 |
+  | `74daa199…` | rejected | 2026-08-19 | —                               | —         |
+
+  **The two new ones are APPROVALS — $12,265.99 of invoices accounting was never
+  told to pay.** That is a payment exposure, and arguably more urgent than the
+  two rejections that prompted this work. All four are stamped, so the documents
+  exist in Vision; only the mail is missing. Bill should decide per row whether
+  Mary already filed it by hand (July invoices may well have been chased another
+  way) before anything is re-sent.
   ADR-0126 deliberately does **not** touch them — re-sending is Bill's call, and
   an auto-re-send could duplicate a filing Mary has already made by hand. They
   now appear in the 06:00 digest and carry the red `mail not sent` chip in the AP
   queue, and they will keep appearing **every morning until the mail is confirmed
   sent**. Expect one ntfy page on the first digest after deploy — that is the
   instrument working, not a regression. Owner: Bill.
+
 - **BN-2 — `notifyStaff` forwards `cc` unchanged in PILOT mode.** Found while
   adding the CC audit (ADR-0126 D8). The TO set reroutes to admins in pilot, but
   `args.cc` is passed straight to the transport in BOTH modes, so a surface in

@@ -51,10 +51,18 @@ mail stamp), which is true regardless of cause, including causes not yet written
   the detail view, so the alarm and the badge cannot drift apart. +41 tests
   (6080 → 6121; 5999 passing, 122 skipped, 0 failing).
 
-**Note for the first run:** the two orphans above will appear in the first digest
-after deploy and will page once. That is the instrument working. They are
-deliberately **not** re-sent here — that is Bill's separate call — and they will
-keep appearing every morning until it is made.
+**The sweep found FOUR, not two.** Run read-only against prod on 2026-08-25, the
+predicate returns the two known rejections **plus two approvals nobody knew about**
+— `ffa0b0d6…` (Quality Mobile dba Trailer Proz, $3,315.99, approved 2026-07-31)
+and `eec29987…` (Carlos Linares Bro, $8,950.00, approved 2026-08-05). That is
+**$12,265.99 of approved invoices accounting was never told to pay**, and it is
+the case for detecting the state rather than the cause, demonstrated on the first
+run: the manual hunt looked for oversize rejections and found two. Monthly split
+is 45 mailed / 2 unmailed (July) and 50 / 2 (August) — a recurring ~4% miss.
+
+All four will appear in the first digest after deploy and page once. They are
+deliberately **not** re-sent here — that is Bill's separate call (OPEN-ITEMS
+0.BN BN-1) — and they will keep appearing every morning until it is made.
 
 ## 2026-08-24 — Illegal Dropoff on the iPad, between Public and Incentive (ADR-0085 Amendment 1)
 

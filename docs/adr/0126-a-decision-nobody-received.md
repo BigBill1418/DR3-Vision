@@ -141,10 +141,29 @@ subject).
 
 ## Consequences
 
-- The two orphans in the table above **will appear in the first digest after
-  deploy and will page once**. That is the instrument working, not a regression.
-  They are deliberately NOT re-sent here — Bill is deciding that separately — and
-  they will keep appearing every morning until he does.
+- **The sweep found FOUR rows, not two.** Run read-only against the live
+  database on 2026-08-25 (12:40 PT), the D1 predicate returns:
+
+  | Request     | Status   | Decided    | Vendor                          | Amount    |
+  | ----------- | -------- | ---------- | ------------------------------- | --------- |
+  | `1ee8e502…` | rejected | 2026-07-31 | —                               | —         |
+  | `ffa0b0d6…` | approved | 2026-07-31 | Quality Mobile dba Trailer Proz | $3,315.99 |
+  | `eec29987…` | approved | 2026-08-05 | Carlos Linares Bro              | $8,950.00 |
+  | `74daa199…` | rejected | 2026-08-19 | —                               | —         |
+
+  **This is the argument for D1, demonstrated on its first run.** The manual
+  investigation went looking for oversize REJECTIONS and found two. The state
+  predicate — which knows nothing about causes — found two more, and the two it
+  added are **approvals**: invoices accounting was never told to PAY, totalling
+  **$12,265.99**. All four are stamped (`decision_pdf_sha256` present), so the
+  documents were rendered and archived and the mail is the only step that did not
+  happen. The monthly split is 45 mailed / 2 unmailed in July and 50 / 2 in
+  August — a recurring ~4% miss, not a pair of one-offs.
+
+- All four **will appear in the first digest after deploy and will page once**.
+  That is the instrument working, not a regression. They are deliberately NOT
+  re-sent here — Bill is deciding that separately — and they will keep appearing
+  every morning until he does.
 - `buildApMorningDigest` runs one additional indexed-status query per fire, and
   the AP queue list runs one additional `count()` per load. Both are trivial at
   this table's size.
