@@ -19,6 +19,144 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BO — 2026-08-25 the Lake County truck was worked on the Mt View haul card — INVESTIGATED, NOT CORRECTED (awaiting Bill)
+
+**Nothing was written to production.** This section is the evidence and the
+proposed correction; the correction itself is a Bill decision because the only
+sanctioned app-level remedy (ADR-0090 D2 `voidLoad`) refuses a `submitted` load
+by design, and the surface that would own it (ADR-0073, manager load
+corrections) is still **proposed, design only, nothing implemented**.
+
+### What happened (Woodland, 2026-08-25, times Pacific)
+
+The 9:30 AM truck was **Lake County Waste Solutions, haul H-138155**, carried by
+**Ron Lawrence & Son** (truck 113 / trailer 10744). It was worked, start to
+finish, on the **Recology Mountain View** haul card **H-138504** — a different
+supplier on DR3's own transport account.
+
+|             | Load `4a8f071d-5fdb-4a02-801b-a9a879a60f30`                  |
+| ----------- | ------------------------------------------------------------ |
+| Card tapped | Recology Mountain View, expected slot `3ab8434d…` (H-138504) |
+| Operator    | Nate Cullison                                                |
+| Arrived     | 9:45 AM · weight ticket declared "none" 9:45 AM              |
+| Unload      | 10:01 AM → 10:56 AM (3,308 s), 11 stacks, `multiplier` mode  |
+| Units       | **135**                                                      |
+| Submitted   | 10:56 AM, status `submitted`                                 |
+
+Three independent sources agree the truck was Lake County's:
+
+1. **The BOL photo attached to that load** (`loads/4a8f071d…/bol/fa4bad65…jpg`,
+   captured 9:45 AM) reads `Unique BOL # H-138155`, `Facility: LAKE COUNTY
+WASTE, 230 Soda Bay Road, Lakeport CA`, `Transporter: RON LAWRENCE AND SON
+TRANSPORT, INC.`, arrival `8/25 @ 9:30 AM`, certified net weight 23,600 lbs,
+   signed Janette Tomas / Manager.
+2. **MyMRC's own mirror** (`mymrc_hauls_mirror`): H-138155 →
+   `program_unit_count = 135`, `recycler_reported_delivery_date = 2026-08-25`.
+   H-138504 → `program_unit_count = 0`, delivery date NULL.
+3. **The count matches exactly** — 135 counted on the floor, 135 reported by the
+   recycler against H-138155.
+
+The door-open photo on that load shows a real trailer full of mattresses at the
+dock, so the load itself is genuine. Only its attribution is wrong.
+
+### The live hazard found while investigating
+
+At **4:21 PM** Janette Tomas opened the still-free Lake County slot `8ee5588e…`
+(H-138155) as load `ff061601-2d65-40d9-9499-a537aaf82bb9`, captured a "BOL"
+photo and a "door open" photo that are both **pictures of the office floor** (no
+truck, no dock), declared no weight ticket at 4:27 PM, and stopped. As of
+4:36 PM it sits at `arrived` with zero stacks.
+
+This reads as an uncoordinated floor-side attempt to re-file the morning load on
+the correct card. **If it is completed, Woodland books ~270 units for one
+135-unit truck** — the misfiled Mt View load is already inside
+`INVOICE_STATUSES` (which includes `submitted`). Nate/Janette must be told to
+stop before anyone taps further.
+
+### What is NOT affected
+
+- **No staff mail fired.** Zero `notify_staff` audit rows in the 17:56–18:30 UTC
+  window around the submit; the submit path notifies nobody.
+- **No invoice exists yet** — `select count(*) from invoices` = 0, so nothing has
+  been filed against the wrong supplier.
+- **Floor inventory is untouched** — `VERIFIED_INBOUND_STATUSES` is
+  `verified/submitted_to_mymrc/processed`; a `submitted` load is not yet in the
+  running balance. That protection ends the moment a manager verifies it.
+- `mymrc_submission_deadline` is NULL on the load; no clock is running.
+
+### Why the obvious fixes are wrong
+
+- **Reopening / un-submitting the Mt View load fixes nothing.** The load is real;
+  its 135 units are real. Reopening leaves them attributed to Recology Mountain
+  View and re-opens a dock card for a truck that left six hours ago.
+- **`voidLoad` (ADR-0090 D2, reason `wrong_haul`) is the right-shaped tool and is
+  refused here.** `ALLOWED_PRIOR.voided` stops at `finished`; ADR-0090 D2.3 is
+  explicit that past `submitted` "the load has left the floor's hands… a
+  floor-side void there would silently restate a filed number", and hands it to
+  ADR-0073 — which does not exist yet.
+- **Closing Lake County on Nate's behalf is refused by the flow's own shape.**
+  The close captures operator-supplied data (BOL photo, weight-ticket decision,
+  door-open photo, per-stack counts). Synthesising any of it would fabricate a
+  compliance record.
+
+### Proposed correction (needs Bill's go)
+
+Re-point the existing load rather than destroy and re-enter it — the photos,
+stacks, timings and signatures are all correct for the Lake County truck:
+
+1. Void the duplicate `ff061601…` first (it is `arrived`, so `voidLoad` accepts
+   it — reason `wrong_haul`), which severs and frees slot `8ee5588e…`.
+2. On `4a8f071d…` set `source_id` → Lake County (`a471ef1d…`), `transporter_id`
+   → Ron Lawrence & Son (`3bf3ea0e…`), `expected_load_id` → `8ee5588e…`; free
+   the Mt View slot `3ab8434d…` so H-138504 can be checked in when that truck
+   actually arrives.
+3. Re-derive the freight leg. This is the money consequence: Mt View is a
+   **self-haul on the DR3 parent account** (`transport_charged = false`), Lake
+   County is a **third-party Ron Lawrence haul**. Left alone, a billable
+   transport leg is understated.
+4. Record the paper BOL's certified net weight (23,600 lbs) if Bill wants it —
+   the operator declared "no weight ticket" while holding one.
+
+**BO-1 — Bill decides** whether the re-point above is executed as a scripted,
+audited correction (and by whom), or whether it waits for ADR-0073 to be built.
+Note ADR-0090's own warning that hand DB surgery is "a DBA-shaped tool in the
+hands of an actor with no product-level guardrail — the exact failure mode
+ADR-0073 was written to retire and has not yet retired."
+
+**BO-2 — Nate/Janette must be told not to complete `ff061601…`**, and the two
+office-floor photos on it are junk compliance records regardless of the outcome.
+
+**BO-3 — the defect this exposes is a UI one, and ADR-0090 D1 already named it.**
+H-138504 (Mt View, 8:30 AM appointment) and H-138155 (Lake County, 10:00 AM) sat
+adjacent on the queue. The haul chip shipped; it was not enough. Worth asking
+whether the check-in screen should surface the transporter name — the two cards
+differ starkly there (DR3's own account vs Ron Lawrence & Son) — or whether the
+BOL photo's haul number should be matched against the tapped card before the
+load can advance. That is the durable prevention; the re-point is only the
+cleanup.
+
+### Before-snapshot (for reversibility)
+
+`inbound_loads.4a8f071d-5fdb-4a02-801b-a9a879a60f30` — `status=submitted`,
+`source_id=2c5e6f34-192a-42c2-8bd6-edb9e1665cf0`,
+`transporter_id=8a13378c-6c7e-4f36-bff0-aa1458eaea96`,
+`expected_load_id=3ab8434d-8d65-4f0d-b9d3-cfa9e65f44fe`, `total_units=135`,
+`arrived_at=2026-08-25T16:45:20.236Z`, `unload_started_at=17:01:30.863Z`,
+`unload_finished_at=17:56:39.297Z`, `submitted_at=17:56:41.018Z`,
+`weight_skipped_at=16:45:43.433Z`, `unload_duration_seconds=3308`,
+`time_to_unload_start_seconds=971`, `count_mode=multiplier`,
+`transport_charged=false`, all void/freight/weight/external-id columns NULL,
+`assigned_operator_id = submitted_by_id = 21a42252…` (Nate Cullison).
+
+`inbound_loads.ff061601-2d65-40d9-9499-a537aaf82bb9` — `status=arrived`,
+`source_id=a471ef1d-6686-44c4-8270-68c59f7a48e5`,
+`transporter_id=3bf3ea0e-fb43-43e9-8d0b-8a006c64d9f8`,
+`expected_load_id=8ee5588e-ab61-4986-bb5c-5f0204661dcf`,
+`arrived_at=2026-08-25T23:21:20.252Z`, `weight_skipped_at=23:27:44.342Z`,
+`assigned_operator_id=e319ec7a…` (Janette Tomas), everything else NULL.
+
+---
+
 ## 0.BN — 2026-08-25 AP decision-mail blindness closed (ADR-0126)
 
 The prevention shipped. What is still OPEN:
