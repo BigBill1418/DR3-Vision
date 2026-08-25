@@ -19,13 +19,18 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BO — 2026-08-25 the Lake County truck was worked on the Mt View haul card — INVESTIGATED, NOT CORRECTED (awaiting Bill)
+## 0.BO — 2026-08-25 the Lake County truck was worked on the Mt View haul card — **EXECUTED 2026-08-25 4:48 PM PT**
 
-**Nothing was written to production.** This section is the evidence and the
-proposed correction; the correction itself is a Bill decision because the only
-sanctioned app-level remedy (ADR-0090 D2 `voidLoad`) refuses a `submitted` load
-by design, and the surface that would own it (ADR-0073, manager load
-corrections) is still **proposed, design only, nothing implemented**.
+**The correction is applied.** Bill authorized the proposed re-point (BO-1) and
+it was executed the same evening by
+`scripts/one-off/2026-08-25-bo-lake-county-repoint.ts`. The evidence and the
+reasoning below are kept verbatim as they were written before the write; the
+**After-state** section at the end records what actually landed, what was
+deliberately NOT done, and the two decisions that survive.
+
+Two of the four proposed legs were executed; **legs 3 and 4 were refused on
+measured evidence and are now BO-4 and BO-5**. Read the After-state before
+acting on the proposal above it.
 
 ### What happened (Woodland, 2026-08-25, times Pacific)
 
@@ -99,7 +104,7 @@ stop before anyone taps further.
   door-open photo, per-stack counts). Synthesising any of it would fabricate a
   compliance record.
 
-### Proposed correction (needs Bill's go)
+### Proposed correction (as written before execution — see After-state for what landed)
 
 Re-point the existing load rather than destroy and re-enter it — the photos,
 stacks, timings and signatures are all correct for the Lake County truck:
@@ -117,14 +122,16 @@ stacks, timings and signatures are all correct for the Lake County truck:
 4. Record the paper BOL's certified net weight (23,600 lbs) if Bill wants it —
    the operator declared "no weight ticket" while holding one.
 
-**BO-1 — Bill decides** whether the re-point above is executed as a scripted,
-audited correction (and by whom), or whether it waits for ADR-0073 to be built.
-Note ADR-0090's own warning that hand DB surgery is "a DBA-shaped tool in the
-hands of an actor with no product-level guardrail — the exact failure mode
-ADR-0073 was written to retire and has not yet retired."
+**BO-1 — DONE (2026-08-25).** Bill authorized the scripted, audited correction.
+Executed by Claude Code at 4:48 PM PT; see After-state.
 
-**BO-2 — Nate/Janette must be told not to complete `ff061601…`**, and the two
-office-floor photos on it are junk compliance records regardless of the outcome.
+**BO-2 — PARTLY CLOSED (2026-08-25).** `ff061601…` is now `voided`
+(`wrong_haul`) and no longer appears in any operator-actionable set, so it
+**cannot** be completed — the double-count hazard is closed mechanically rather
+than by instruction. What remains for a human: the two office-floor photos on it
+are junk compliance records that survive the void, and Nate/Janette should still
+be told what happened and why, so the same re-file attempt is not repeated on the
+next mis-tap. Owner: Bill.
 
 **BO-3 — the defect this exposes is a UI one, and ADR-0090 D1 already named it.**
 H-138504 (Mt View, 8:30 AM appointment) and H-138155 (Lake County, 10:00 AM) sat
@@ -154,6 +161,125 @@ cleanup.
 `expected_load_id=8ee5588e-ab61-4986-bb5c-5f0204661dcf`,
 `arrived_at=2026-08-25T23:21:20.252Z`, `weight_skipped_at=23:27:44.342Z`,
 `assigned_operator_id=e319ec7a…` (Janette Tomas), everything else NULL.
+
+### After-state — EXECUTED 2026-08-25 4:48 PM PT (23:48 UTC)
+
+Script: `scripts/one-off/2026-08-25-bo-lake-county-repoint.ts`, run dry first
+(preconditions PASS), then `--apply`. Both rows were re-read live immediately
+before the write and matched the before-snapshot **byte for byte**; the whole
+before-snapshot also rides the `updateMany` WHERE (ADR-0118 D1), so a row that
+had moved would have matched zero and rolled the transaction back.
+
+**Leg 1 — the duplicate is voided.** Through the shipped `voidLoad`
+(ADR-0090 D2), not by hand.
+`inbound_loads.ff061601…` — `status=voided`, `void_reason=wrong_haul`,
+`voided_at=2026-08-25T23:48:37.834Z`, `expected_load_id=NULL`,
+`voided_from_expected_load_id=8ee5588e…`, `total_units` still NULL.
+Woodland's open-dock set (`OPEN_DOCK_STATUSES`) now returns **zero rows**, and
+`voided` is a prior for no transition in `ALLOWED_PRIOR`, so no operator can
+advance it and `load-workflow.tsx` renders it as a terminal closed load.
+
+**Leg 2 — the real load is re-pointed.** `inbound_loads.4a8f071d…` now reads
+`source = Lake County Waste Solutions, Inc.`,
+`transporter = Ron Lawrence & Son`, `expected_load_id = 8ee5588e…` (**H-138155**).
+Everything else is untouched and verified so: `status=submitted`,
+`total_units=135`, 11 live stacks summing 135, `arrived_at=16:45:20.236Z`,
+`unload_started_at=17:01:30.863Z`, `unload_finished_at=17:56:39.297Z`,
+`submitted_at=17:56:41.018Z`, `weight_skipped_at=16:45:43.433Z`,
+`unload_duration_seconds=3308`, `time_to_unload_start_seconds=971`,
+`count_mode=multiplier`, operator and submitter still Nate Cullison.
+The Mt View slot `3ab8434d…` (**H-138504**) is now **childless and not
+cancelled** — free for that truck to check in.
+
+**Verification, fresh queries after the write:**
+
+| Check                                        | Result                                                         |
+| -------------------------------------------- | -------------------------------------------------------------- |
+| MyMRC mirror vs Vision, H-138155             | 135 = 135                                                      |
+| MyMRC mirror vs Vision, H-138504             | 0 = 0                                                          |
+| Woodland running-balance basis               | 464,413 units — **unchanged** (`submitted` ∉ verified-set)     |
+| 2026-08-25 invoice basis by source           | Recology Mt View row gone; Lake County 1 load / 135 units      |
+| `notify_staff` audit rows since the baseline | **0** (total still 346; last was 4:25 PM PT, pre-correction)   |
+| `audit_log` total                            | 17,875 → 17,878 — exactly the three rows this correction wrote |
+
+Three audit rows, no more: `voidLoad`'s own in-transaction row; a supplementary
+attribution row; and the re-point's before/after row carrying the full reason.
+
+**The void's audit row names Janette Tomas, and she did not decide it.**
+`voidLoad` takes an `operatorUserId` and both ownership-checks **and attributes**
+on it — `voidLoadAction` (an operator server action) is its only caller, so there
+is no manager-actor or label-actor void path anywhere in the build. The choice
+was: borrow her id and get the shipped transition guard, the slot severing and
+the ADR-0090 C audit shape; or hand-roll five column writes to get the label
+right and throw all of that away. The first is recoverable with an extra
+append-only row, the second is not — so an immediately-following audit row under
+`actor_label = system:bo-lake-county-repoint (…)` names the real actor and the
+authorization. **A reader of `inbound_loads.voided_by` alone will still get the
+wrong answer.** That is a gap in the void path, not a gap in this record — see
+BO-6.
+
+### Legs 3 and 4 were REFUSED on measured evidence
+
+**BO-4 — the freight leg was NOT re-derived, and the premise for doing so did
+not survive contact with the data.** §0.BO argued a Ron Lawrence haul is a
+billable third-party leg understated at `transport_charged = false`. Measured on
+production before writing:
+
+- `sources.is_trans_charge` is **false on all 176 sources** — there is not one
+  `true` row. This is the classifier the verify gate derives
+  `transport_charged` from (`verify-gate.ts`, ADR-0125 G-2), and it has never
+  been populated.
+- `transport_charged` is **false on all 774 inbound loads**, with `freight_cents`
+  and `fuel_surcharge_cents` NULL on all 774 — including **all 74 Ron Lawrence
+  loads** and the one prior Lake County load (`9bd22dd4…`, 2026-08-05, 125
+  units).
+
+So there is no precedent to match: the "precedent" is the absence of a writer,
+not a business decision. Setting `true` by hand on this one load would make it
+the **only** true row in the table and therefore the sole input to
+`resolveTransportationInputs` (`where transport_charged = true`) — with a NULL
+`freight_cents` — which is a sharper distortion than a consistent understatement
+shared with its 74 siblings. Left at `false`; re-pointing the source is precisely
+what makes the app derive it correctly the moment the seed is fixed.
+**The real question this exposes is bigger than one load:** no Ron Lawrence haul
+has ever carried a freight charge in Vision, and nothing in the system is capable
+of noticing. Bill decides whether `sources.is_trans_charge` is wrong seed data
+(and for which sources), or whether these hauls genuinely carry no DR3 freight
+leg. Owner: Bill.
+
+**BO-5 — the BOL's 23,600 lb certified net weight was NOT recorded.** It does not
+fit cleanly and was not forced:
+
+- `weight_lbs` is captured in the app only alongside a `weight_ticket` **photo**
+  (`stage-weight.tsx`); this load has a `bol` photo and two `door_open` photos
+  and no weight ticket. Writing the number would mint a weight with no evidence
+  behind it and a fabricated `weight_captured_at`.
+- `correctWeight` (ADR-0090 Am.1 B) refuses a `submitted` load by design —
+  `CORRECTABLE_STATUSES` stops at `finished`, the same boundary that refuses the
+  void.
+- The operator's declaration is not false. A BOL certified net weight is not a
+  scale ticket, and the schema is explicit that "no ticket" and "a ticket
+  weighing nothing" are different claims. `weight_skipped_at` stands.
+
+If Bill wants the 23,600 lbs in Vision, it needs a field that means "weight per
+the BOL" or an ADR-0073 manager correction with its own evidence rule — not this
+column. Owner: Bill.
+
+**BO-6 — `voidLoad` cannot record a non-operator actor.** Surfaced by executing
+this correction. `voided_by` is a bare `users.id` and the audit row's
+`actor_user_id` comes from the same argument, so any void performed on an
+operator's behalf — by a manager, by a script, by ADR-0073 when it exists —
+silently attributes itself to that operator. The repo's own one-off convention
+(2026-08-06 terex-ledger) is "a label rather than a borrowed `users.id`", and the
+void path has no way to honour it. Small fix, real audit consequence; folds
+naturally into ADR-0073's scope.
+
+**BO-7 — `external_mymrc_haul_id` stays NULL on `4a8f071d…`.** Not in scope and
+not a regression (it is NULL on all 74 Ron Lawrence loads — it is written only by
+the MyMRC bridge and the EOD add-line, never by a dock capture). Worth knowing
+that the reconciliation upload matches DR3 loads to external haul rows **on that
+column**, so no dock-captured load is reconcilable today. Systemic, not this
+load's.
 
 ---
 

@@ -9,6 +9,50 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-25 — The Lake County truck, filed against the wrong supplier (0.BO)
+
+A data correction, not a code change. The 9:30 AM Woodland truck was Lake County
+Waste Solutions haul **H-138155**, carried by Ron Lawrence & Son; it was worked
+start to finish — 135 units, 11 stacks, 55 minutes — on the **Recology Mountain
+View** card H-138504, a different supplier on DR3's own transport account. Three
+independent sources said so: the BOL photo on the load itself, MyMRC's mirror
+(H-138155 = 135 delivered, H-138504 = 0), and the count matching the recycler
+exactly. The load was real; only its attribution was wrong.
+
+Found alongside it: a **duplicate** opened on the correct card six hours later
+and abandoned at `arrived` with zero stacks and two photos of the office floor.
+`submitted` is inside `INVOICE_STATUSES`, so completing it would have booked ~270
+units for one 135-unit truck.
+
+- **The duplicate is voided** (`wrong_haul`) through the shipped `voidLoad`
+  (ADR-0090 D2), which severed its slot. Woodland's open-dock set is now empty
+  and no operator can advance it.
+- **The real load is re-pointed** to Lake County / Ron Lawrence / H-138155 by a
+  guarded, audited one-off
+  (`scripts/one-off/2026-08-25-bo-lake-county-repoint.ts`) — the whole
+  before-snapshot rides the `updateMany` WHERE, so a row that had moved would
+  have matched zero. Three columns changed; every stack, photo and workflow
+  timestamp untouched. The Mt View slot is free again for that truck. This leg
+  has no product surface: ADR-0090 D2.3 refuses a post-`submitted` void by
+  design and hands it to ADR-0073, which is still unbuilt.
+- **The freight re-derivation was refused on evidence.** `sources.is_trans_charge`
+  is false on all 176 sources and `transport_charged` is false on all 774 loads —
+  the classifier has never been populated, so there is no precedent to match and
+  flipping this one row would have made it the sole input to the CA freight leg
+  with a NULL amount. Left consistent; escalated as 0.BO / BO-4.
+- **The BOL's 23,600 lb certified net weight was not recorded.** `weight_lbs` is
+  only ever captured beside a weight-ticket photo, and there isn't one; the
+  operator's "no weight ticket" remains true. 0.BO / BO-5.
+
+Verified after the write: MyMRC parity both ways, floor running balance unmoved
+at 464,413 (a `submitted` load is not in the verified set), the Mt View row gone
+from the day's invoice basis, **zero** notifications fired, and exactly three new
+audit rows. Full before/after in `docs/OPEN-ITEMS.md` §0.BO.
+
+**Not built:** BO-3, the durable prevention (surface the transporter name on the
+check-in card, and/or match the BOL's haul number against the tapped card). The
+re-point is cleanup; BO-3 is the fix.
+
 ## 2026-08-25 — A decision nobody received (ADR-0126)
 
 Two AP rejections (`1ee8e502…` 2026-07-31, `74daa199…` 2026-08-19) were decided
