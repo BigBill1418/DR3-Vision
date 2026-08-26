@@ -96,6 +96,13 @@ signed Bill's decision with Janette Tomas's name.
   holder — that would silently reinstate the bug.
 - The 2026-08-25 void is corrected through the new mechanism, guarded on its full
   before-state (`scripts/one-off/2026-08-25-bo6-void-actor-correction.ts`).
+  **Executed 6:03 PM PT**, after the migration landed at 6:01 PM: `ff061601…` now
+  has `voided_by = NULL` and `voided_by_label` naming the real actor, with
+  status, reason, instant and severed slot untouched. Janette Tomas remains the
+  `assigned_operator_id` — she did hold the load — and the OTHER voided row
+  (`3bef297d…`, 2026-08-21) still names her as the voider, which is correct: the
+  audit trail shows her taking it over from Juan Perez and voiding it herself 45
+  seconds later. Checked, not assumed.
 
 **BO-4 — a freight leg nobody has ever decided about. INSTRUMENTED, NOT SEEDED.**
 Zero of 176 sources are `is_trans_charge`; zero of 774 loads are

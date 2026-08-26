@@ -23,8 +23,9 @@ item below that names Kelsey as a dependency in that light.
 
 **Disposition:** BO-1 done · BO-2 partly closed (operator conversation still Bill's)
 · **BO-3 fixed (ADR-0127)** · **BO-4 instrumented, seed AWAITING BILL (ADR-0128)**
-· **BO-5 skipped, reasons recorded** · **BO-6 fixed (ADR-0128)** · **BO-7 fixed +
-backfilled 133/133 (ADR-0128)**.
+· **BO-5 skipped, reasons recorded** · **BO-6 fixed AND EXECUTED (ADR-0128)** ·
+**BO-7 fixed + backfilled 133/133 (ADR-0128)**. Shipped in `b78e905`, live on
+CHAD-HQ 2026-08-25 6:01 PM PT (health gate `status:ok` in 91 ms).
 
 **The correction is applied.** Bill authorized the proposed re-point (BO-1) and
 it was executed the same evening by
@@ -376,10 +377,35 @@ an `actor` that names nobody is refused (`422 void_actor_required`) rather than
 normalised back to the holder. A void with no `actor` — the floor's own panel — is
 byte-identical to every void written before this.
 
-`ff061601…` is corrected through that mechanism by
-`scripts/one-off/2026-08-25-bo6-void-actor-correction.ts` (guarded on its full
-before-state; attribution only — status, reason, instant and severed slot
-untouched). Janette Tomas's name no longer sits on a decision she did not make.
+**EXECUTED against production 2026-08-25 6:03 PM PT**, after the ADR-0128
+migration landed at 6:01 PM PT (`20260857_adr0128_void_actor_label`,
+`finished_at = 2026-08-26 01:01:46 UTC`; the CHECK constraint reports
+`convalidated = t`, so it validated against all 774 existing rows rather than
+landing `NOT VALID`). The script refused correctly before that — its own
+precondition asserts the column exists — and was run dry first, its before-state
+matching this register's after-state byte for byte.
+
+`ff061601…` now reads, on a fresh query taken outside the script:
+
+| Column                         | Value                                    |
+| ------------------------------ | ---------------------------------------- |
+| `voided_by`                    | **NULL**                                 |
+| `voided_by_label`              | `system:bo-lake-county-repoint (…BO-1…)` |
+| `assigned_operator_id`         | Janette Tomas — she DID hold it          |
+| `status` / `void_reason`       | `voided` / `wrong_haul` — unchanged      |
+| `voided_at`                    | `2026-08-25T23:48:37.834Z` — unchanged   |
+| `voided_from_expected_load_id` | `8ee5588e…` — unchanged                  |
+
+**Janette Tomas's name is off the decision she did not make**, and the holder
+fact — which is true — is still on the row where it belongs. One audit row was
+written (`system:bo6-void-actor-correction …`). Across the whole table, both
+voided rows satisfy the exactly-one-actor invariant.
+
+**The other voided row still names her, and that is CORRECT — checked, not
+assumed.** `3bef297d…` (2026-08-21, `other` / "Load has bed bugs") shows Juan
+Perez starting and working the load, Janette taking it over at 17:46:00 and
+voiding it 45 seconds later. She was the actor there. It is left alone.
+
 The original finding, verbatim:
 
 **BO-6 (as found) — `voidLoad` cannot record a non-operator actor.** Surfaced by executing
