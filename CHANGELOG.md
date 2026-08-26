@@ -9,6 +9,23 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-26 — The crash the ledger could not see (ADR-0111 Amendment 1)
+
+The 1:00 PM PT MyMRC tick died at Chromium launch (`chrome-headless-shell`
+SIGSEGV — the 08-18 incident's P6 shape, now recurring top-of-hour) and left no
+trace anywhere but the container log: `launchBrowser()` sat outside the
+ADR-0111 session-failure guard, so no `__session__` ledger row was written and
+no page could ever fire, however long the crashes continued.
+
+- **`scripts/mymrc-scrape.mjs`** — a browser-launch failure now takes the same
+  ledger + paging path as a login failure: `__session__` row (status `error`),
+  silent on a lone blip, pages on a repeat (`mymrc-launch-failed:admin`).
+- The repeat count is per-feed (any two session-level failures page, mixed
+  kinds included) and the window is 75 min, not 60 — hourly ticks sat exactly
+  on the old boundary, so consecutive top-of-hour failures could never page.
+- Five new tests in `mymrc-scrape-session-paging.test.ts`, all watched red
+  first; full suite 6,042 green. ADR-0111 Amendment 1 carries the record.
+
 ## 2026-08-25 — Fixing the class, not the load (ADR-0127, ADR-0128)
 
 The follow-ups the Lake County mis-card exposed (§0.BO, BO-3 through BO-7). The

@@ -49,14 +49,23 @@ function fakePrisma(priorFailures = 0) {
         return data;
       }),
       count: vi.fn(
-        async ({ where }: { where: { feed: string; status: string } }) =>
-          rows.filter((r) => r.feed === where.feed && r.status === where.status).length,
+        async ({
+          where,
+        }: {
+          where: { feed: string; status?: string; started_at?: { gte: Date } };
+        }) =>
+          rows.filter(
+            (r) =>
+              r.feed === where.feed &&
+              (where.status === undefined || r.status === where.status) &&
+              (where.started_at?.gte === undefined || r.started_at >= where.started_at.gte),
+          ).length,
       ),
     },
   };
 }
 
-function harness(prisma: unknown) {
+function harness(prisma: unknown, opts: { launchError?: Error } = {}) {
   const pageCalls: PageCall[] = [];
   const mymrc = {
     CredentialsNotConfiguredError: class extends Error {},
@@ -72,7 +81,10 @@ function harness(prisma: unknown) {
     SITE_CODES: ['eugene', 'woodland'],
     ntfyPager: { page: async (a: PageCall): Promise<void> => void pageCalls.push(a) },
   };
-  const launchBrowser = vi.fn(async () => ({ close: vi.fn(async () => undefined) }));
+  const launchBrowser = vi.fn(async () => {
+    if (opts.launchError) throw opts.launchError;
+    return { close: vi.fn(async () => undefined) };
+  });
   return {
     pageCalls,
     run: () =>
@@ -127,7 +139,75 @@ describe('session-start failure — ledger row (ADR-0111)', () => {
   });
 });
 
+// 2026-08-26 — the OTHER way a tick never gets a session: `launchBrowser()`
+// itself crashed (chrome-headless-shell SIGSEGV at launch, seen 08-18 boot slot
+// and 08-26 1:00 PM top-of-hour). Before this, the throw skipped the ADR-0111
+// guard entirely — no `__session__` row, no page, straight to the top-level
+// `fatal:` handler. The ledger read green through the whole class.
+describe('browser-launch failure — same ledger + paging policy (ADR-0111 extension)', () => {
+  const launchError = new Error(
+    'browserType.launch: Target page, context or browser has been closed',
+  );
+
+  it('exits 1 and writes a __session__ error row instead of throwing to the fatal handler', async () => {
+    const prisma = fakePrisma(0);
+    const h = harness(prisma, { launchError });
+
+    await expect(h.run()).resolves.toBe(1);
+
+    expect(prisma.mymrcSyncRun.create).toHaveBeenCalledTimes(1);
+    const row = prisma.rows.at(-1);
+    expect(row?.feed).toBe('__session__');
+    expect(row?.status).toBe('error');
+    expect(row?.error).toContain('browserType.launch');
+  });
+
+  it('does NOT page on the first launch failure — the next tick gets to heal it', async () => {
+    const h = harness(fakePrisma(0), { launchError });
+    await h.run();
+    expect(h.pageCalls).toHaveLength(0);
+  });
+
+  it('PAGES when a session-level failure of ANY kind already sits in the window', async () => {
+    // The prior row is auth_failed; the count is per-feed, not per-status —
+    // a login failure followed by a launch crash is still two dead ticks.
+    const h = harness(fakePrisma(1), { launchError });
+    await h.run();
+
+    expect(h.pageCalls).toHaveLength(1);
+    expect(h.pageCalls[0]?.kind).toBe('error');
+    expect(h.pageCalls[0]?.fingerprint).toBe('mymrc-launch-failed:admin');
+    expect(h.pageCalls[0]?.message).toContain('/admin/mrc-scrape');
+  });
+
+  it('PAGES when the ledger itself is unavailable — fail open, as the login path does', async () => {
+    const h = harness({}, { launchError });
+    await h.run();
+    expect(h.pageCalls).toHaveLength(1);
+  });
+});
+
 describe('recordSessionFailure — unit', () => {
+  it('counts a failure from 65 minutes ago — consecutive top-of-hour ticks land INSIDE the window', async () => {
+    // Hourly ticks are ~60 min apart; a 60-min window put the previous tick's
+    // row exactly on the boundary, so back-to-back hourly failures never paged.
+    const prisma = fakePrisma(0);
+    prisma.rows.push({
+      site_id: 'site-woodland',
+      feed: '__session__',
+      status: 'error',
+      started_at: new Date(Date.now() - 65 * 60 * 1000),
+    });
+
+    const res = await recordSessionFailure({
+      prisma,
+      activeSites: ['woodland'],
+      message: 'boom',
+      log: () => undefined,
+    });
+    expect(res).toEqual({ ledgered: true, recent: 2 });
+  });
+
   it('reports the count of failures in the window, including the one just written', async () => {
     const prisma = fakePrisma(0);
     const first = await recordSessionFailure({

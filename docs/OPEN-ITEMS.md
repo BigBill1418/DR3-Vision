@@ -19,6 +19,28 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BP — 2026-08-26 the MyMRC launch crash the ledger could not see — **FIXED (ADR-0111 Amendment 1), one watch item**
+
+The 1:00 PM PT scrape tick died at Chromium launch — `chrome-headless-shell`
+SIGSEGV, the 08-18 incident's P6 shape, this time in a top-of-hour slot (19
+clean hourly runs preceded it since the container start). The crash bypassed
+the ADR-0111 guard entirely: no `__session__` ledger row, no page, exit 1 to
+the `fatal:` handler. The ledger read 100% green through it. The 12:01 PM run
+was the last clean one at time of fix; the 2:00 PM tick was expected to heal it
+(both prior occurrences were isolated single-tick events).
+
+**Shipped same day:** launch failures now write a `__session__` row (status
+`error`) and share the login-failure paging policy — silent lone blip, page on
+repeat (`mymrc-launch-failed:admin`), per-feed count, window widened 60→75 min
+so consecutive hourly failures actually land inside it. ADR-0111 Amendment 1 +
+CHANGELOG 2026-08-26 carry the record.
+
+- **BP-1 (watch)** — the SIGSEGV root cause is still unexplained (not OOM; 2
+  occurrences in 8 days, both isolated). The ledger can now see the class: if
+  `__session__` rows with `browser launch failed` start clustering, dig into
+  the Chromium launch flags (`--enable-unsafe-swiftshader`) or pin the
+  Playwright image. No action while occurrences stay isolated.
+
 ## 0.BO — 2026-08-25 the Lake County truck was worked on the Mt View haul card — **CORRECTION EXECUTED 4:48 PM PT; PREVENTION SHIPPED 5:30 PM PT**
 
 **Disposition:** BO-1 done · BO-2 partly closed (operator conversation still Bill's)

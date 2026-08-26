@@ -100,7 +100,12 @@ export function resolveActiveSites({ explicit, envValue, known, log: logFn = log
 // blip stays silent, and a genuinely dead session pages on the retry ~9 minutes
 // later.
 const SESSION_FEED = '__session__';
-const SESSION_REPEAT_WINDOW_MS = 60 * 60 * 1000;
+// 75 min, NOT 60: the steady-state cadence is hourly, so two consecutive
+// top-of-hour failures sit ~60 min apart — a 60-min `gte` window put the prior
+// row exactly on the boundary and back-to-back hourly failures could never
+// page. Seen 2026-08-26: the 1:00 PM tick died at Chromium launch; had 2:00 PM
+// died too, a 60-min window would have stayed silent.
+const SESSION_REPEAT_WINDOW_MS = 75 * 60 * 1000;
 const SESSION_PAGE_AFTER = 2; // this failure + at least one more in the window
 
 /**
@@ -110,7 +115,13 @@ const SESSION_PAGE_AFTER = 2; // this failure + at least one more in the window
  * `Infinity` so the caller still pages. Broken bookkeeping must never be able to
  * silence a real outage.
  */
-export async function recordSessionFailure({ prisma, activeSites, message, log: logFn = log }) {
+export async function recordSessionFailure({
+  prisma,
+  activeSites,
+  message,
+  status = 'auth_failed',
+  log: logFn = log,
+}) {
   try {
     const code = Array.isArray(activeSites) ? activeSites[0] : undefined;
     const site =
@@ -127,14 +138,15 @@ export async function recordSessionFailure({ prisma, activeSites, message, log: 
         feed: SESSION_FEED,
         started_at: now,
         finished_at: now,
-        status: 'auth_failed',
+        status,
         error: message,
       },
     });
+    // Count per-FEED, not per-status: a login failure followed by a launch
+    // crash is still two consecutive dead ticks and must page the same way.
     const recent = await prisma.mymrcSyncRun.count({
       where: {
         feed: SESSION_FEED,
-        status: 'auth_failed',
         started_at: { gte: new Date(now.getTime() - SESSION_REPEAT_WINDOW_MS) },
       },
     });
@@ -183,7 +195,46 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     return notConfigured ? 3 : 4;
   }
 
-  const browser = await launchBrowser();
+  // The OTHER way a tick never gets a session: Chromium itself dies at launch
+  // (chrome-headless-shell SIGSEGV — 2026-08-18 boot slot, 2026-08-26 1:00 PM
+  // top-of-hour). Uncaught, the throw skipped the ADR-0111 guard entirely —
+  // no `__session__` row, no page, straight to the top-level `fatal:` handler,
+  // and the ledger read green through the whole class. Same ledger + same
+  // paging policy as a login failure: a lone blip stays silent (the next tick
+  // heals it), a repeat inside the window pages.
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (err) {
+    const msg = describeErr(err);
+    logFn('error', `browser launch failed: ${msg}`);
+    const { recent } = await recordSessionFailure({
+      prisma,
+      activeSites,
+      message: `browser launch failed: ${msg}`,
+      status: 'error',
+      log: logFn,
+    });
+    if (recent < SESSION_PAGE_AFTER) {
+      logFn(
+        'warn',
+        `mymrc: browser launch failed (${recent} session failure(s) in the window) — NOT paging yet, the next tick decides (ADR-0037 Q3)`,
+      );
+      return 1;
+    }
+    await mymrc.ntfyPager
+      .page({
+        kind: 'error',
+        site: 'admin',
+        message:
+          `MyMRC browser launch failed — ${recent} session-level failures in the last 75 min ` +
+          `(latest: ${msg}). The scrape never reached the portal; the run ledger has __session__ rows. ` +
+          `Status surface: ${ADMIN_SURFACE_URL}.`,
+        fingerprint: 'mymrc-launch-failed:admin',
+      })
+      .catch(() => undefined);
+    return 1;
+  }
   let client;
   try {
     // Single admin login (ADR-0057 D1). Storage state defaults to the single admin

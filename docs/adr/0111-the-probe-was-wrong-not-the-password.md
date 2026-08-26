@@ -180,3 +180,41 @@ headroom.
   that fixture described the sign-in markup in its own header comment, which the
   predicates scan; the test caught it asserting the opposite of its purpose.
 - Full `src/lib/mymrc` suite green (453 tests) plus the new paging tests.
+
+## Amendment 1 — the launch crash was outside the guard (2026-08-26)
+
+The 1:00 PM PT tick on 2026-08-26 died before any of this ADR's machinery could
+see it: `chrome-headless-shell` took a SIGSEGV **at launch** — the same crash
+shape the 08-18 incident logged in the boot slot (P6 in the incident doc), now
+recurring top-of-hour. `launchBrowser()` sat outside the D-guard try/catch, so
+the throw went straight to the top-level `fatal:` handler: exit 1, **no
+`__session__` ledger row, no page**. The ledger read green through it — the
+precise blindness D2 was written to close, one call earlier in the flow.
+
+Three changes, same policy:
+
+- **D2 extension** — a browser-launch failure now takes the same path as a
+  login failure: `recordSessionFailure` writes a `__session__` row (status
+  `error`, truthful — nothing was authenticated or rejected), and the page
+  decision counts ledger rows, not process memory.
+- **The repeat count is per-feed, not per-status** — a login failure followed
+  by a launch crash is two consecutive dead ticks and pages the same as two of
+  either kind. Fingerprint for the launch class: `mymrc-launch-failed:admin`.
+- **The window is 75 min, not 60** — steady-state ticks are hourly, so two
+  consecutive top-of-hour failures sit ~60 min apart; a 60-min `gte` window put
+  the prior row exactly on the boundary and back-to-back hourly failures could
+  never reach `SESSION_PAGE_AFTER`. This also widens the login-failure window
+  from 60 to 75 min, which changes nothing in practice (its retry is ~9 min).
+
+The SIGSEGV itself (P6) remains unexplained — not OOM (SIGSEGV not SIGKILL,
+host memory free), two occurrences in 8 days, both isolated, both healed by the
+next tick. This amendment makes the class _visible and pageable_, which is the
+prerequisite for ever diagnosing it. If the ledger starts collecting
+`__session__ error` rows in clusters, that is the signal to dig into the
+Chromium flags (`--enable-unsafe-swiftshader` is on the list) or pin the
+Playwright image.
+
+Verification: five new tests in `mymrc-scrape-session-paging.test.ts` drive the
+launch-failure shape (ledger row written, first failure silent, repeat pages,
+ledger-down fails open, 65-min-old row counts). All watched failing before the
+change; full suite green after (6,042 passed).
