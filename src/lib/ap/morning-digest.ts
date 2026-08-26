@@ -68,6 +68,7 @@ import {
 } from './business-clock';
 import { docIngestReauthWarning } from '@/lib/doc-ingest/reauth';
 import { docIngestDiscoveryGapWarning } from '@/lib/doc-ingest/reachability';
+import { unchargedThirdPartyFreightWarning } from '@/lib/loads/uncharged-freight';
 import { dailyDigestRecipients } from './notification-prefs';
 import { resolveSecondApproval } from './second-approval-resolver';
 import { apQueueUrl, apRequestUrl, reimbursementUrl } from './notify';
@@ -550,6 +551,21 @@ export async function buildApMorningDigest(
   // never run or could not run — "we did not look" is a warning, not silence.
   const docDiscoveryWarning = await docIngestDiscoveryGapWarning(db, now);
   if (docDiscoveryWarning) warnings.push(docDiscoveryWarning);
+
+  // ── OPEN-ITEMS §0.BO / BO-4 — third-party hauls nobody is charging for ─────
+  //
+  // A LOADS-domain finding in an AP digest, which §1.7's scope rule would
+  // normally exclude. It is here for the same reason the two doc-ingest lines
+  // above are: it produces no AP items — an uncharged freight leg is an invoice
+  // line that never gets written — so an items-gated surface is silent exactly
+  // when the money is going missing. And it is a money finding whose decision is
+  // Bill's, which is precisely this digest's audience.
+  //
+  // DIGEST-TIER, not a page (ADR-0037): it rides `warnings` and publishes no
+  // ntfy. The remedy is a data-entry session against the Woodland workbook, not
+  // a five-minute action, so paging on it would train the pager to be ignored.
+  const unchargedFreightWarning = await unchargedThirdPartyFreightWarning(db, now);
+  if (unchargedFreightWarning) warnings.push(unchargedFreightWarning);
 
   // ── ADR-0068 (Amendment 2) — reimbursements awaiting a second signature ────
   //

@@ -82,6 +82,8 @@ const YESTERDAY_APPT = new Date('2026-08-10T16:00:00.000Z');
 
 const SITE = 'site-w';
 const OP = 'user-janette';
+/** The slot's haul number — the one the operator confirmed (ADR-0127). */
+const HAUL = 'H-136980';
 
 function slot(over: Record<string, unknown> = {}) {
   return {
@@ -91,6 +93,10 @@ function slot(over: Record<string, unknown> = {}) {
     source_id: 'src-1',
     transporter_id: 'tr-1',
     bol_number: null,
+    // ADR-0127 — the acknowledgement's comparand. `HAUL` is named once and used
+    // by both the fixture and `start()`; a mismatch here would refuse every call
+    // in this file with a DIFFERENT 409 than the one it is measuring.
+    external_mymrc_haul_id: HAUL,
     expected_arrival_at: YESTERDAY_APPT,
     inbound_load: null,
     ...over,
@@ -102,6 +108,7 @@ async function start(over: Record<string, unknown> = {}) {
     expectedLoadId: 'exp-h136980',
     siteId: SITE,
     operatorUserId: OP,
+    acknowledgedHaulId: HAUL,
     now: NOW,
     ...over,
   } as Parameters<typeof startInboundLoad>[0]);

@@ -262,6 +262,25 @@ export interface FakeDb {
   // warning deliberately reports rather than passing over in silence.
   reachabilityScans: FakeReachabilityScan[];
   reachableItems: FakeReachableItem[];
+  // OPEN-ITEMS §0.BO / BO-4 — the inbound loads the digest's uncharged-freight
+  // warning counts. EMPTY (the default) means "no third-party haul went
+  // uncharged", which is the correct quiet state for every AP test that does not
+  // care about freight — and which the warning correctly reports as silence.
+  unchargedFreightLoads: FakeUnchargedFreightLoad[];
+}
+
+/**
+ * BO-4 — only the two columns `scanUnchargedThirdPartyFreight` selects.
+ *
+ * Rows seeded here are ALREADY the answer to the predicate: the fake does not
+ * re-implement `transport_charged` / `is_internal` / status / window filtering,
+ * because a fake that re-derives a filter is a second implementation of it and
+ * the test would then measure the fake. What the predicate itself asks for is
+ * asserted directly, on the recorded `where`, in `loads/uncharged-freight.test.ts`.
+ */
+export interface FakeUnchargedFreightLoad {
+  total_units: number | null;
+  transporter: { name: string } | null;
 }
 
 /** ADR-0080 — only the columns the digest warning selects. */
@@ -337,6 +356,7 @@ export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
     docIngestConnection: seed.docIngestConnection ?? null,
     reachabilityScans: seed.reachabilityScans ?? [],
     reachableItems: seed.reachableItems ?? [],
+    unchargedFreightLoads: seed.unchargedFreightLoads ?? [],
   };
 }
 
@@ -383,6 +403,13 @@ export function makeFakePrisma(db: FakeDb) {
               : a.scanned_at.getTime() - b.scanned_at.getTime(),
           );
         return pick(rows[0]!, args.select);
+      },
+    },
+    // BO-4 — read-only. See `FakeUnchargedFreightLoad` for why this does not
+    // re-implement the predicate.
+    inboundLoad: {
+      async findMany() {
+        return db.unchargedFreightLoads.map((r) => ({ ...r }));
       },
     },
     docIngestReachableItem: {

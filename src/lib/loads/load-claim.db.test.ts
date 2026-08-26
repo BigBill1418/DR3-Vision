@@ -79,6 +79,13 @@ const INACTIVE = 'tk-op-inactive'; // at SITE, is_active = false
 const LOAD = 'tk-load';
 const AGG = 'tk-load-agg';
 const EXPECTED = 'tk-expected';
+/**
+ * ADR-0127 — the slot's haul number, named ONCE so the fixture and every caller
+ * cannot drift. A call that passed a different string would be refused with a
+ * 409 before reaching the claim, and every race assertion in this file would go
+ * green on a load that was never created.
+ */
+const EXPECTED_HAUL = 'tk-haul-1';
 const SOURCE = 'tk-source';
 
 let seq = 5000;
@@ -113,8 +120,31 @@ async function seed(d: any): Promise<void> {
   await d.$executeRawUnsafe(
     `DELETE FROM "idempotency_keys" WHERE "actor_user_id" IN ('${A}','${B}','${C}','${CROSS}','${INACTIVE}')`,
   );
-  await d.$executeRawUnsafe(`DELETE FROM "inbound_loads" WHERE "id" LIKE 'tk-%'`);
-  await d.$executeRawUnsafe(`DELETE FROM "expected_loads" WHERE "id" LIKE 'tk-%'`);
+  // ADR-0128 — SCOPED BY SITE, not only by the `tk-` id prefix.
+  //
+  // Loads this fixture creates by hand carry `tk-` ids; loads the TESTS create
+  // through `startInboundLoad` carry a UUID, so the prefix delete never removed
+  // them and every run leaked its own claims. That was invisible while
+  // `expected_load_id` was the only UNIQUE column on the table — the leaked rows
+  // were detached from any slot the next `seed()` recreated. As of ADR-0128 a
+  // load also carries a UNIQUE `external_mymrc_haul_id`, so a leaked row from the
+  // previous test holds `tk-haul-1` and the next test's check-in fails on an
+  // index that has nothing to do with what it is measuring.
+  //
+  // Deleting by SITE is safe because both site ids are this fixture's own
+  // (`tk` / `tk2`), so this is still scoped and still never a blanket truncate.
+  await d.$executeRawUnsafe(
+    `DELETE FROM "audit_log" WHERE "row_id" IN (SELECT "id" FROM "inbound_loads" WHERE "site_id" IN ('${SITE}','${OTHER_SITE}'))`,
+  );
+  await d.$executeRawUnsafe(
+    `DELETE FROM "load_stacks" WHERE "load_id" IN (SELECT "id" FROM "inbound_loads" WHERE "site_id" IN ('${SITE}','${OTHER_SITE}'))`,
+  );
+  await d.$executeRawUnsafe(
+    `DELETE FROM "inbound_loads" WHERE "id" LIKE 'tk-%' OR "site_id" IN ('${SITE}','${OTHER_SITE}')`,
+  );
+  await d.$executeRawUnsafe(
+    `DELETE FROM "expected_loads" WHERE "id" LIKE 'tk-%' OR "site_id" IN ('${SITE}','${OTHER_SITE}')`,
+  );
   await d.$executeRawUnsafe(site(SITE, 'tk'));
   await d.$executeRawUnsafe(site(OTHER_SITE, 'tk2'));
   await d.$executeRawUnsafe(user(A, 'Alma Ruiz', SITE));
@@ -129,7 +159,7 @@ async function seed(d: any): Promise<void> {
   await d.$executeRawUnsafe(`
     INSERT INTO "expected_loads" ("id","site_id","external_mymrc_haul_id","expected_arrival_at",
       "source_id","source_name_at_sync","last_synced_at")
-    VALUES ('${EXPECTED}','${SITE}','tk-haul-1',CURRENT_TIMESTAMP,'${SOURCE}','Kiefer Landfill',
+    VALUES ('${EXPECTED}','${SITE}','${EXPECTED_HAUL}',CURRENT_TIMESTAMP,'${SOURCE}','Kiefer Landfill',
       CURRENT_TIMESTAMP)`);
   // A load already claimed by A, mid-count.
   await d.$executeRawUnsafe(`
@@ -220,6 +250,7 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
       expectedLoadId: EXPECTED,
       siteId: SITE,
       operatorUserId: A,
+      acknowledgedHaulId: EXPECTED_HAUL,
     });
     expect(started.claimed).toBe(true);
     let row = await d.inboundLoad.findUnique({ where: { id: started.id } });
@@ -374,8 +405,18 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
     const lock = await holdRowLock(d, 'expected_loads', EXPECTED);
 
     const both = Promise.allSettled([
-      startInboundLoad({ expectedLoadId: EXPECTED, siteId: SITE, operatorUserId: A }),
-      startInboundLoad({ expectedLoadId: EXPECTED, siteId: SITE, operatorUserId: B }),
+      startInboundLoad({
+        expectedLoadId: EXPECTED,
+        siteId: SITE,
+        operatorUserId: A,
+        acknowledgedHaulId: EXPECTED_HAUL,
+      }),
+      startInboundLoad({
+        expectedLoadId: EXPECTED,
+        siteId: SITE,
+        operatorUserId: B,
+        acknowledgedHaulId: EXPECTED_HAUL,
+      }),
     ]);
     await sleep(700);
     lock.release();
@@ -412,12 +453,14 @@ describe.skipIf(!SAME_DB)('ADR-0082 — load claim, takeover and honest attribut
       expectedLoadId: EXPECTED,
       siteId: SITE,
       operatorUserId: A,
+      acknowledgedHaulId: EXPECTED_HAUL,
     });
     // B's queue page has not re-rendered; B taps the same row.
     const second = await startInboundLoad({
       expectedLoadId: EXPECTED,
       siteId: SITE,
       operatorUserId: B,
+      acknowledgedHaulId: EXPECTED_HAUL,
     });
 
     expect(second.id).toBe(first.id);

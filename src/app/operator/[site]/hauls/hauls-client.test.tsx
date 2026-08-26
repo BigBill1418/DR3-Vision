@@ -310,13 +310,22 @@ describe('ADR-0096 — a truck that arrived on a different day is not a dead end
     expect(screen.getByText(new RegExp(en.floor.hauls.late_yes, 'i'))).toBeTruthy();
   });
 
-  it('sends the slot’s OWN day to the server on confirm', () => {
-    // The value the server compares. A client that never read this slot cannot
-    // produce it, which is what makes the acknowledgement evidence.
+  it('sends the slot’s OWN day AND haul number to the server on confirm', () => {
+    // The values the server compares. A client that never read this slot can
+    // produce neither, which is what makes the acknowledgement evidence.
+    //
+    // ADR-0127 added the haul number to what travels: this panel already read it
+    // back to the operator, and leaving the weaker guarantee on the noisier
+    // control would have been the wrong way round.
     list(late());
     fireEvent.click(rowList().getByRole('button'));
     fireEvent.click(screen.getByText(new RegExp(en.floor.hauls.late_yes, 'i')));
-    expect(startLoadReconciledAction).toHaveBeenCalledWith('woodland', 'exp-h136980', '2026-08-10');
+    expect(startLoadReconciledAction).toHaveBeenCalledWith(
+      'woodland',
+      'exp-h136980',
+      '2026-08-10',
+      'H-136980',
+    );
   });
 
   it('cancelling backs out and writes nothing', () => {
@@ -335,8 +344,14 @@ describe('ADR-0096 — a truck that arrived on a different day is not a dead end
     expect(rowList().queryByRole('button')).toBeNull();
   });
 
-  it('a slot due TODAY still gets the ordinary one-tap check-in', () => {
-    // The friction is scoped to the divergent state; the common path is untouched.
+  it('a slot due TODAY still gets the ORDINARY check-in control, not this one', () => {
+    // This used to read "…the ordinary ONE-TAP check-in — the friction is scoped
+    // to the divergent state; the common path is untouched." ADR-0127 deliberately
+    // ends that: the common path is exactly where the 2026-08-25 mis-card
+    // happened, and a test whose title still promises one tap would pin the
+    // defect as the contract. What survives is the real claim — the late-arrival
+    // control is scoped to the late-arrival state and does not leak onto a slot
+    // that is due today.
     list(row({ expectedLoadId: 'exp-live' }));
     expect(screen.getByText(en.floor.hauls.check_in)).toBeTruthy();
     expect(screen.queryByText(new RegExp(en.floor.hauls.late_cta, 'i'))).toBeNull();

@@ -320,6 +320,13 @@
       "started_by": "Started by {{name}} — tap to take it over",
       "already_worked_status": "Already worked — {{status}}"
     },
+    "confirm_checkin": {
+      "question": "Is this the truck on the dock?",
+      "carrier": "Carried by {{name}}",
+      "yes": "Yes — check it in",
+      "no": "No, wrong card",
+      "mismatch": "This card changed since the page loaded. Pull down to refresh, then try again."
+    },
     "hub": {
       "heading": "Daily check",
       "caption": "{{site}} · {{name}}",

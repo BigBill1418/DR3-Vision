@@ -800,6 +800,17 @@ model InboundLoad {
   // FACTS, so "it was voided" and "why, by whom, when" cannot drift apart.
   voided_at   DateTime?
   voided_by   String? // bare scalar FK -> users.id, ON DELETE SET NULL (ADR-0084 pattern)
+  /// ADR-0128 — a NON-USER actor, in the `audit_log.actor_label` shape
+  /// (`system:<slug>`). Exactly one of `voided_by` / `voided_by_label` is set on
+  /// a voided row; the pair is a CHECK constraint in the migration.
+  ///
+  /// `voided_by` used to be written from `voidLoad`'s `operatorUserId`, which is
+  /// the HOLDER, not necessarily the decider — so a void made on an operator's
+  /// behalf signed itself with their name (OPEN-ITEMS §0.BO, BO-6: the Lake
+  /// County correction's void reads "Janette Tomas" for Bill's decision). The
+  /// repo's own one-off convention is "a label rather than a borrowed
+  /// `users.id`"; this column is what lets the void path honour it.
+  voided_by_label String?
   void_reason LoadVoidReason?
   void_note   String? // required when void_reason = other
   /// The `expected_loads` slot this load was severed FROM.

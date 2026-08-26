@@ -79,6 +79,11 @@ const { globalCalls, txCalls, prismaMock } = vi.hoisted(() => {
           source_id: null,
           transporter_id: null,
           bol_number: null,
+          // ADR-0127 — the acknowledgement's comparand. The caller below passes
+          // the same value; a fixture that returned a DIFFERENT one would refuse
+          // before the write and this file would stop measuring which client the
+          // re-read goes through.
+          external_mymrc_haul_id: 'H-000001',
           inbound_load: null,
         };
       }),
@@ -171,6 +176,7 @@ describe('startInboundLoad — the claim re-read is inside the transaction', () 
       expectedLoadId: 'E',
       siteId: 'S',
       operatorUserId: 'A',
+      acknowledgedHaulId: 'H-000001',
     });
 
     expect(result).toEqual({ id: 'NEW', claimed: true });

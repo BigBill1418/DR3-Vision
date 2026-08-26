@@ -150,6 +150,8 @@ async function assertOwn(args: { loadId: string; operatorUserId: string; siteId:
       weight_lbs: true,
       // ADR-0090 C — the slot the void severs.
       expected_load_id: true,
+      // ADR-0128 — the haul number the void severs alongside it (UNIQUE column).
+      external_mymrc_haul_id: true,
     },
   });
   if (!load) throw new LoadAccessError(404, 'load_not_found');
@@ -168,19 +170,41 @@ function placeholderStorageKey(kind: PhotoKind): string {
 }
 
 /**
- * Prisma's `P2002` raised by the UNIQUE index on `inbound_loads.expected_load_id`,
- * and only that.
+ * The two UNIQUE indexes that both encode "this slot has already been claimed",
+ * and only those.
  *
  * Deliberately narrower than `code === 'P2002'`: a bare code check would also
  * absorb a future unique constraint elsewhere on this table and report an
  * unrelated collision as "someone else claimed it" — a wrong answer wearing a
  * right one's clothes.
+ *
+ * ── ADR-0128 — why `external_mymrc_haul_id` is now in this list ─────────────
+ *
+ * A dock capture carries its slot's haul number, and that column is UNIQUE too.
+ * So the concurrent double-tap this catch exists for can now lose on EITHER
+ * index — which of the two Postgres reports is an implementation detail of index
+ * ordering, not a fact about what happened. Recognising only `expected_load_id`
+ * meant the loser sometimes got a raw `P2002` out of the server action: exactly
+ * the opaque digest ADR-0082 spent a whole section removing, re-armed by adding
+ * a column.
+ *
+ * This was NOT hypothetical and was NOT caught by the mocked suites. It was
+ * caught by `load-claim.db.test.ts` against a real Postgres, in the
+ * `holdRowLock` race — which is what that file is for.
+ *
+ * Widening this is safe because the recovery is already conditional: the caller
+ * re-reads by `expected_load_id` and RE-THROWS when nothing is there. A haul-id
+ * collision that is genuinely something else — a bridge-created load already
+ * holding that number — therefore still surfaces as itself rather than being
+ * swallowed as a claim.
  */
+const CLAIM_UNIQUE_COLUMNS = ['expected_load_id', 'external_mymrc_haul_id'] as const;
+
 function isExpectedLoadClaimCollision(e: unknown): boolean {
   if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== 'P2002') return false;
   const target = e.meta?.['target'];
   const fields = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
-  return fields.some((f) => f.includes('expected_load_id'));
+  return fields.some((f) => CLAIM_UNIQUE_COLUMNS.some((col) => f.includes(col)));
 }
 
 /**
@@ -236,6 +260,20 @@ export async function startInboundLoad(args: {
   siteId: string;
   operatorUserId: string;
   /**
+   * ADR-0127 — the haul number the operator READ BACK before confirming, exactly
+   * as the card rendered it. REQUIRED, and compared against the slot's own
+   * `external_mymrc_haul_id` inside the transaction.
+   *
+   * Deliberately not optional. An optional acknowledgement is one a stale tab, a
+   * replayed POST or a forgetful future caller skips silently, which is the
+   * `allowAnyDay: true` critique ADR-0096 made of its own guard — the value has
+   * to be one a caller who never read this slot cannot produce. It is also NOT
+   * the expected-load id restated: the id is what the operator TAPPED, and the
+   * haul number is what they were shown; the whole point is that the two are
+   * checked against each other.
+   */
+  acknowledgedHaulId: string;
+  /**
    * ADR-0096 — present ONLY on the explicit "this truck arrived on a different
    * day" path. Absent means the ordinary path, which now requires the slot to be
    * due today.
@@ -261,6 +299,9 @@ export async function startInboundLoad(args: {
           source_id: true,
           transporter_id: true,
           bol_number: true,
+          // ADR-0127 — the acknowledgement's comparand. ADR-0128 — and the value
+          // the child load now carries, so a dock capture is reconcilable.
+          external_mymrc_haul_id: true,
           inbound_load: { select: { id: true } },
         },
       });
@@ -269,6 +310,22 @@ export async function startInboundLoad(args: {
         throw new LoadAccessError(403, 'expected_load_not_at_this_site');
       }
       if (expected.cancelled_at) throw new LoadAccessError(409, 'expected_load_cancelled');
+
+      // ── ADR-0127 — THE CARD THE OPERATOR CONFIRMED IS THE CARD THAT OPENS ──
+      //
+      // Checked BEFORE the idempotent already-claimed return, deliberately. A
+      // mismatch means the page the operator read no longer describes this slot,
+      // and handing back somebody else's load in that state would answer a
+      // question they did not ask. The claim branch below is for a double-tap on
+      // a card that IS this slot.
+      //
+      // Trimmed on both sides but compared exactly otherwise: haul numbers are
+      // machine-issued (`H-138155`) and a case-insensitive or fuzzy compare
+      // would be a guess dressed as a check.
+      if (args.acknowledgedHaulId.trim() !== expected.external_mymrc_haul_id.trim()) {
+        throw new LoadAccessError(409, 'haul_number_mismatch');
+      }
+
       if (expected.inbound_load) {
         // Already claimed — by this operator on a double-tap, or by another one.
         // Either way the load exists and minting a second is the one thing that
@@ -323,6 +380,21 @@ export async function startInboundLoad(args: {
           source_id: expected.source_id,
           transporter_id: expected.transporter_id,
           bol_number: expected.bol_number,
+          // ── ADR-0128 — the dock load carries its haul number ────────────────
+          //
+          // This column was NULL on all 774 production loads (measured
+          // 2026-08-25), because only the MyMRC bridge and the EOD add-line ever
+          // wrote it and neither touches a dock capture. The monthly
+          // reconciliation upload matches DR3 loads to MyMRC haul rows ON THIS
+          // COLUMN (`reconciliation.ts` `categorizeRows`), so every truck the
+          // floor has ever counted was unreconcilable — it fell out as
+          // `missing_in_dr3` against a load sitting right there in the table.
+          //
+          // The value is COPIED, not referenced, and that is the point: it is the
+          // haul this load was booked against at the moment it was worked. A void
+          // later severs `expected_load_id` (ADR-0090 C) and would otherwise take
+          // the answer with it.
+          external_mymrc_haul_id: expected.external_mymrc_haul_id,
         },
         select: { id: true },
       });
@@ -1093,19 +1165,62 @@ export async function finishUnload(args: {
  * is audited and names both parties — so a manager voids by taking over first,
  * and no second authorization path is invented. Two places that have to agree
  * about who holds a load is the defect ADR-0082 spent a whole section removing.
+ *
+ * ## ADR-0128 — authorization and ATTRIBUTION are now two arguments
+ *
+ * They used to be one. `operatorUserId` both proved the caller may void and
+ * became `voided_by` and the audit row's `actor_user_id`, so a void performed on
+ * an operator's behalf — by a script, by a manager, by ADR-0073 when it exists —
+ * silently signed itself with that operator's name. The 2026-08-25 Lake County
+ * correction did exactly that: `inbound_loads.voided_by` names Janette Tomas for
+ * a decision Bill made and a script executed, and only a supplementary audit row
+ * says otherwise (OPEN-ITEMS §0.BO, BO-6).
+ *
+ * `operatorUserId` keeps its ONE job — it is the holder, and the ownership check
+ * is unchanged. `actor` is who decided. Omit it and behaviour is identical to
+ * before, which is what the floor's own void panel wants: there the holder IS
+ * the actor.
  */
+export interface VoidActor {
+  /** The deciding Vision user, when that is somebody other than the holder. */
+  userId?: string | null;
+  /**
+   * A non-user actor — a script, a scheduled job — in the repo's established
+   * `system:<slug>` shape (`audit_log.actor_label`, the 2026-08-06 terex
+   * one-offs). A label rather than a borrowed `users.id`.
+   */
+  label?: string | null;
+}
+
 export async function voidLoad(args: {
   loadId: string;
+  /** THE HOLDER. Authorization only — see {@link VoidActor} for attribution. */
   operatorUserId: string;
   siteId: string;
   reason: LoadVoidReason;
   note: string | null;
+  /**
+   * ADR-0128 — who is actually making this decision, when it is not the holder.
+   * Absent ⇒ the holder is the actor (the floor's own void panel).
+   */
+  actor?: VoidActor | undefined;
 }): Promise<void> {
   const note = args.note?.trim() || null;
   // Checked BEFORE the ownership read so a malformed request cannot be used to
   // probe which loads exist at a site.
   if (args.reason === 'other' && !note) {
     throw new LoadAccessError(422, 'void_note_required');
+  }
+
+  // ADR-0128 — an `actor` that names nobody is worse than no `actor` at all: it
+  // would blank `voided_by` and put nothing in its place, leaving a voided row
+  // that cannot say who closed it. Refused at the door rather than normalised
+  // back to the holder, which would silently reinstate the bug this argument
+  // exists to fix.
+  const actorUserId = args.actor?.userId?.trim() || null;
+  const actorLabel = args.actor?.label?.trim() || null;
+  if (args.actor && !actorUserId && !actorLabel) {
+    throw new LoadAccessError(422, 'void_actor_required');
   }
 
   const current = await assertOwn({
@@ -1127,17 +1242,37 @@ export async function voidLoad(args: {
 
   const now = new Date();
   const severed = current.expected_load_id;
+  const severedHaulId = current.external_mymrc_haul_id;
+  // ADR-0128 — attribution. No `actor` ⇒ the holder decided, exactly as before.
+  const attributedUserId = args.actor ? actorUserId : args.operatorUserId;
+  const attributedLabel = args.actor ? actorLabel : null;
   await prisma.$transaction(async (tx) => {
     await tx.inboundLoad.update({
       where: { id: args.loadId },
       data: {
         status: 'voided',
         voided_at: now,
-        voided_by: args.operatorUserId,
+        voided_by: attributedUserId,
+        voided_by_label: attributedLabel,
         void_reason: args.reason,
         void_note: note,
         expected_load_id: null,
         voided_from_expected_load_id: severed,
+        // ── ADR-0128 — the haul number is severed WITH the slot ──────────────
+        //
+        // Not tidiness: `inbound_loads.external_mymrc_haul_id` is UNIQUE, and as
+        // of ADR-0128 a dock capture carries it. A voided load that kept it
+        // would hold the number against the whole table, so the re-check-in this
+        // void exists to make possible would die inside `startInboundLoad` on a
+        // `P2002` that `isExpectedLoadClaimCollision` correctly refuses to
+        // absorb — a raw 500 on the one tap the operator has been told to make.
+        // That is the ADR-0074 Am.1 dead end, reintroduced through a different
+        // column, and it is closed here rather than discovered on a dock.
+        //
+        // The answer to "which haul did they mis-tap?" is not lost:
+        // `voided_from_expected_load_id` still points at the slot, and this
+        // transaction's audit row names the number outright.
+        external_mymrc_haul_id: null,
       },
     });
     // In-transaction (ADR-0082): the void and the record of who made it commit
@@ -1145,17 +1280,27 @@ export async function voidLoad(args: {
     // reconstructible from the append-only log rather than merely asserted.
     await writeAudit(
       {
-        actor_user_id: args.operatorUserId,
+        actor_user_id: attributedUserId,
+        actor_label: attributedLabel,
         action: 'update',
         table_name: 'inbound_loads',
         row_id: args.loadId,
-        before: { status: current.status, expected_load_id: severed },
+        before: {
+          status: current.status,
+          expected_load_id: severed,
+          external_mymrc_haul_id: severedHaulId,
+        },
         after: {
           status: 'voided',
           void_reason: args.reason,
           void_note: note,
           voided_at: now,
           voided_from_expected_load_id: severed,
+          // ADR-0128 — present ONLY when somebody other than the holder decided.
+          // The presence of the key is the signal, the same way ADR-0096's
+          // `reconciled_from_day` is; an ordinary floor void is byte-identical to
+          // the rows written before this ADR.
+          ...(args.actor ? { voided_on_behalf_of: args.operatorUserId } : {}),
         },
       },
       { tx },

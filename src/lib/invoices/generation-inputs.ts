@@ -288,10 +288,19 @@ export async function resolveTransportationInputs(args: {
   // no error. The whole CA inbound freight + fuel-surcharge leg then generates
   // as structurally empty and nothing says so.
   //
-  // That is not hypothetical. `transport_charged` has no writer anywhere in the
-  // codebase — it is DDL-default `false` on all 743 prod rows, read at
-  // `:272` here and at `leg-fetchers.ts:105` and written nowhere — so this
-  // filter has always matched zero rows.
+  // That is not hypothetical. When ADR-0115 was written `transport_charged` had
+  // no writer anywhere in the codebase — DDL-default `false` on all 743 prod
+  // rows, read here and at `leg-fetchers.ts` and written nowhere.
+  //
+  // CORRECTED 2026-08-25 (OPEN-ITEMS §0.BO / BO-4): it has had two writers since
+  // ADR-0125 — the verify gate (`loads/verify-gate.ts`, deriving it from
+  // `source.is_trans_charge`) and the EOD add-line (`eod/inbound-line.ts`). The
+  // conclusion is unchanged and the reason has moved one layer down:
+  // `sources.is_trans_charge` is `false` on all 176 production sources, so both
+  // writers faithfully derive `false` and this filter still matches zero rows.
+  // The classification itself has never been entered — see
+  // `loads/uncharged-freight.ts` for the daily instrument and §0.BO BO-4 for
+  // whose decision it is.
   //
   // The two zero-cases are NOT the same thing and must be told apart, or the
   // warning is just noise on a genuinely quiet month:

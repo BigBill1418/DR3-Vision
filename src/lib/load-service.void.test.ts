@@ -35,6 +35,8 @@ const SITE = 'site-woodland';
 const OP = 'user-janette';
 const LOAD = 'load-h136796';
 const SLOT = 'expected-h136796';
+/** ADR-0128 — the haul number the load carries from check-in. */
+const HAUL = 'H-136796';
 
 /** The tx handle the service is handed inside `$transaction`. */
 const tx = { inboundLoad: { update } };
@@ -48,6 +50,8 @@ function loadRow(over: Record<string, unknown> = {}) {
     arrived_at: new Date('2026-08-10T22:49:16.000Z'),
     unload_started_at: null,
     expected_load_id: SLOT,
+    // ADR-0128 — the UNIQUE haul number the void must sever alongside the slot.
+    external_mymrc_haul_id: HAUL,
     ...over,
   };
 }
@@ -245,5 +249,104 @@ describe('voidLoad', () => {
     });
     const data = update.mock.calls[0]?.[0]?.data;
     expect(data?.voided_from_expected_load_id).toBeNull();
+  });
+  // ── ADR-0128 — WHO decided, and the haul number that has to go with the slot ──
+
+  it('severs the UNIQUE haul number with the slot, or the re-check-in dies', async () => {
+    // `inbound_loads.external_mymrc_haul_id` is UNIQUE, and as of ADR-0128 a dock
+    // capture carries it. A voided load that kept it would hold the number
+    // against the whole table, so the very check-in this void exists to make
+    // possible would die inside `startInboundLoad` on a P2002 that
+    // `isExpectedLoadClaimCollision` correctly refuses to absorb — a raw 500 on
+    // the one tap the operator has been told to make. Same dead end as the
+    // un-severed slot, through a different column.
+    await voidLoad({
+      loadId: LOAD,
+      operatorUserId: OP,
+      siteId: SITE,
+      reason: 'wrong_haul',
+      note: null,
+    });
+    const data = update.mock.calls[0]?.[0]?.data;
+    expect(data?.external_mymrc_haul_id).toBeNull();
+    // And it is not LOST — the audit row names it, alongside the severed slot.
+    expect(writeAudit.mock.calls[0]?.[0]?.before).toMatchObject({
+      external_mymrc_haul_id: HAUL,
+    });
+  });
+
+  it('attributes to the HOLDER when no actor is named — behaviour is unchanged', async () => {
+    // The floor's own void panel passes no actor: there the holder IS the actor.
+    // A row written by this path must be byte-identical to the ones written
+    // before ADR-0128, or the new column changes the meaning of old data.
+    await voidLoad({
+      loadId: LOAD,
+      operatorUserId: OP,
+      siteId: SITE,
+      reason: 'wrong_haul',
+      note: null,
+    });
+    const data = update.mock.calls[0]?.[0]?.data;
+    expect(data?.voided_by).toBe(OP);
+    expect(data?.voided_by_label).toBeNull();
+    const row = writeAudit.mock.calls[0]?.[0];
+    expect(row?.actor_user_id).toBe(OP);
+    expect(row?.actor_label).toBeNull();
+    expect(row?.after).not.toHaveProperty('voided_on_behalf_of');
+  });
+
+  it('THE DEFECT: a script void no longer signs itself with the operator name', async () => {
+    // OPEN-ITEMS §0.BO, BO-6. The 2026-08-25 Lake County correction voided the
+    // duplicate through this path, deliberately, to keep the transition guard and
+    // the slot severing — and `voided_by` came out naming Janette Tomas for a
+    // decision Bill made and a script executed.
+    await voidLoad({
+      loadId: LOAD,
+      operatorUserId: OP,
+      siteId: SITE,
+      reason: 'wrong_haul',
+      note: null,
+      actor: { label: 'system:bo-lake-county-repoint' },
+    });
+    const data = update.mock.calls[0]?.[0]?.data;
+    expect(data?.voided_by, 'a reader of voided_by alone must not get a wrong name').toBeNull();
+    expect(data?.voided_by_label).toBe('system:bo-lake-county-repoint');
+    const row = writeAudit.mock.calls[0]?.[0];
+    expect(row?.actor_user_id).toBeNull();
+    expect(row?.actor_label).toBe('system:bo-lake-county-repoint');
+    // The borrowed ownership is not hidden — it is stated.
+    expect(row?.after).toMatchObject({ voided_on_behalf_of: OP });
+  });
+
+  it('carries a real acting USER through when a manager voids on a holder’s behalf', async () => {
+    await voidLoad({
+      loadId: LOAD,
+      operatorUserId: OP,
+      siteId: SITE,
+      reason: 'wrong_haul',
+      note: null,
+      actor: { userId: 'user-bill' },
+    });
+    const data = update.mock.calls[0]?.[0]?.data;
+    expect(data?.voided_by).toBe('user-bill');
+    expect(data?.voided_by_label).toBeNull();
+    expect(writeAudit.mock.calls[0]?.[0]?.actor_user_id).toBe('user-bill');
+  });
+
+  it('REFUSES an actor that names nobody rather than falling back to the holder', async () => {
+    // Falling back would silently reinstate the exact bug this argument exists to
+    // fix, and blanking both columns would leave a voided row that cannot say who
+    // closed it — which the migration’s CHECK constraint would reject anyway.
+    await expect(
+      voidLoad({
+        loadId: LOAD,
+        operatorUserId: OP,
+        siteId: SITE,
+        reason: 'wrong_haul',
+        note: null,
+        actor: { label: '   ' },
+      }),
+    ).rejects.toMatchObject({ status: 422, reason: 'void_actor_required' });
+    expect(update).not.toHaveBeenCalled();
   });
 });

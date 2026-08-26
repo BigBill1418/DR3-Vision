@@ -9,6 +9,126 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-25 — Fixing the class, not the load (ADR-0127, ADR-0128)
+
+The follow-ups the Lake County mis-card exposed (§0.BO, BO-3 through BO-7). The
+correction below shipped earlier the same day; this is the prevention.
+
+### The card is confirmed before the truck is worked (ADR-0127) — BO-3
+
+**Every check-in is now two taps.** The first expands a panel that reads the
+truck back — haul number, supplier, and **carried by** — and the second commits.
+One component (`QueueRow`) sits behind both check-in surfaces, so `/queue` and
+`/hauls` cannot drift apart on this.
+
+The diagnosis that mattered: every identifying fact was ALREADY on the card.
+ADR-0090 A put the haul number there, the supplier was there, and the carrier
+was there and differed starkly ("DR3 parent account CA" vs "Ron Lawrence & Son").
+A chip you are never asked about is a chip you do not read. What was missing is
+that one tap committed to all of it.
+
+- The confirmed haul number **travels**, and `startInboundLoad` compares it
+  against `expected_loads.external_mymrc_haul_id` inside the writing transaction
+  — `409 haul_number_mismatch`, nothing minted. Same discipline ADR-0096 applied
+  to the date: the UI is where the operator READS it, the server is where it is
+  CHECKED.
+- The argument is **required**, not optional — an optional acknowledgement is one
+  a future caller skips silently, which is ADR-0096's own `allowAnyDay` critique
+  one level up. It surfaced as a compile error at six call sites.
+- The guard runs BEFORE the idempotent already-claimed return: a mismatch means
+  the page no longer describes this slot, and handing back somebody else's load
+  answers a question nobody asked.
+- The late-arrival panel (ADR-0096) now sends both acknowledgements. It already
+  read both back; only one was checked.
+- `NEXT_REDIRECT` re-throwing is now one shared, tested predicate
+  (`src/lib/next-redirect.ts`) instead of two inlined copies.
+- **Not built, deliberately:** BOL-photo OCR matched against the tapped card. The
+  strongest layer — the attached BOL reads `H-138155` in plain text — but it needs
+  a confidence policy and an answer to "may a low-confidence read BLOCK a truck on
+  the dock". Recorded as a future rung, not half-built.
+
+### Three things the record could not tell you (ADR-0128) — BO-6, BO-7, BO-4
+
+**BO-7 — no dock-captured load was reconcilable.**
+`inbound_loads.external_mymrc_haul_id` was NULL on all 774 loads, because only
+the MyMRC bridge and the EOD add-line ever wrote it. The monthly reconciliation
+upload matches on that column — so every truck the floor has ever counted came
+out as `missing_in_dr3` against a load sitting in the same table.
+
+- Forward: `startInboundLoad` copies the number from the slot at check-in.
+  Copied, not read through the link — a void severs the link and would take the
+  answer with it.
+- And so the void severs the **number** too. It is UNIQUE: a voided load keeping
+  it would kill the very re-check-in the void exists to enable, on a raw `P2002`
+  the collision guard correctly refuses to absorb. ADR-0074 Am.1's dead end
+  through a different column, found before it bit anyone.
+- A second, latent consequence: the ADR-0082 concurrent double-tap can now lose
+  on **either** unique index, because both operators compute the same haul
+  number. `isExpectedLoadClaimCollision` recognised only `expected_load_id`, so
+  the loser could get a raw `P2002` out of the server action — the opaque digest
+  ADR-0082 removed, re-armed by adding a column. Both columns are now
+  recognised; the re-read still re-throws a collision that is genuinely
+  something else. **Caught only by the real-Postgres suite** — every mocked test
+  was green — and pinned by a deterministic test, because re-running the race
+  with the fix reverted went green on the other index.
+- Backfill: **133 of 133 loads stamped** (130 `submitted`, 3 `rejected`, all
+  Woodland, zero UNIQUE collisions), each with its own audit row, via
+  `scripts/one-off/2026-08-25-bo7-haul-id-backfill.ts` (dry-run default). Verified
+  after: **133/133 now match a `mymrc_hauls_mirror` row.** The other 641 aggregate
+  and paper loads are untouched — an unreconcilable aggregate is honest, a
+  wrongly-reconciled one is not.
+- **Expect the next reconciliation upload to look different.** Dock loads that
+  used to fall out as non-matches will now match, and may surface real count or
+  weight mismatches that were hidden behind the blanket miss.
+
+**BO-6 — a void could not name a non-operator actor.** `voidLoad` used one
+argument for the ownership check and the attribution, so yesterday's correction
+signed Bill's decision with Janette Tomas's name.
+
+- Authorization and attribution are now two arguments. No `actor` ⇒ byte-identical
+  to every void written before this.
+- New nullable `inbound_loads.voided_by_label` for a non-user actor, in the
+  `audit_log.actor_label` shape. When a label actor is supplied `voided_by` goes
+  **NULL** — a reader of that column alone must get no answer, not a wrong one.
+- A validated CHECK constraint enforces exactly one of the pair on a voided row.
+  Stated in SQL because hand corrections write these columns too.
+- An `actor` naming nobody is refused (`422`), never normalised back to the
+  holder — that would silently reinstate the bug.
+- The 2026-08-25 void is corrected through the new mechanism, guarded on its full
+  before-state (`scripts/one-off/2026-08-25-bo6-void-actor-correction.ts`).
+
+**BO-4 — a freight leg nobody has ever decided about. INSTRUMENTED, NOT SEEDED.**
+Zero of 176 sources are `is_trans_charge`; zero of 774 loads are
+`transport_charged`; 103 loads / 11,734 units / 7 third-party carriers in the
+trailing 30 days carry no freight. No Ron Lawrence haul ever has.
+
+- The rate card **does** exist and is seeded — 7 CA mileage tiers ($425 →
+  $3,000), the `(EIA $/gal ÷ 6.5) × miles` fuel formula above a $5.05 trigger,
+  and a resolver that fails loud rather than billing zero. What does not exist
+  anywhere in this repo is WHICH sources are charged and their mileage; that
+  lives in the Woodland workbook (`list` tab, `variables!Mileage_Table`) and
+  ADR-0037 defers it explicitly.
+- **No seed is written and none is proposed.** `false` on 176 sources is the
+  absence of data, not wrong data, and seeding a guess would launder it into
+  truth. The remedy is a person at `/admin/sources`. **Awaiting Bill.**
+- New instrument: `src/lib/loads/uncharged-freight.ts` adds one line to the 06:00
+  AP digest counting billing-ready loads on a third-party truck with no transport
+  charge. Keyed on `transporters.is_internal`, not the source — the verify gate
+  leaves sourceless loads unstamped by design, so `false` on the source side
+  cannot tell "free" from "unclassified".
+- **Digest-tier, not a page** (ADR-0037): no ntfy, and it does not raise the
+  digest to high priority. It fails the gate on Q1 and Q3. **It will appear every
+  weekday morning until the classification is entered** — that is the instrument
+  working.
+
+**BO-5 — SKIPPED, with reasons.** See `docs/OPEN-ITEMS.md` §0.BO.
+
+Also corrected: ADR-0115's comment in `invoices/generation-inputs.ts` claiming
+`transport_charged` "has no writer anywhere in the codebase" — it has had two
+since ADR-0125. The conclusion is unchanged; the reason moves one layer down.
+
+Migration: `20260857_adr0128_void_actor_label`.
+
 ## 2026-08-25 — The Lake County truck, filed against the wrong supplier (0.BO)
 
 A data correction, not a code change. The 9:30 AM Woodland truck was Lake County

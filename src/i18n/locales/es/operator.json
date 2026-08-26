@@ -334,6 +334,13 @@
       "started_by": "Iniciada por {{name}} — toque para tomarla",
       "already_worked_status": "Ya trabajada — {{status}}"
     },
+    "confirm_checkin": {
+      "question": "¿Es este el camión que está en el muelle?",
+      "carrier": "Transportado por {{name}}",
+      "yes": "Sí — regístrelo",
+      "no": "No, tarjeta equivocada",
+      "mismatch": "Esta tarjeta cambió desde que se cargó la página. Actualice la página e inténtelo de nuevo."
+    },
     "hub": {
       "heading": "Revisión diaria",
       "caption": "{{site}} · {{name}}",

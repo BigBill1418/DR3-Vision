@@ -56,7 +56,20 @@ async function ctx(siteCode: string) {
   return { operatorUserId: session.user.id, siteId: site.id, siteCode };
 }
 
-export async function startLoadAction(siteCode: string, expectedLoadId: string): Promise<void> {
+/**
+ * ADR-0127 — check in the truck on the card the operator confirmed.
+ *
+ * `acknowledgedHaulId` is the haul number the card RENDERED and the operator
+ * read back on the confirm step. It is not an authorization token and is not
+ * trusted as one: it is compared against `expected_loads.external_mymrc_haul_id`
+ * inside the same transaction that writes, and a mismatch is a 409. The
+ * operator, the site and the load id all still come from the session via `ctx()`.
+ */
+export async function startLoadAction(
+  siteCode: string,
+  expectedLoadId: string,
+  acknowledgedHaulId: string,
+): Promise<void> {
   const { operatorUserId, siteId } = await ctx(siteCode);
   // ADR-0082 — `claimed` is deliberately NOT branched on here. Whether this call
   // made the claim or lost the race to a colleague, the destination is the same
@@ -64,7 +77,12 @@ export async function startLoadAction(siteCode: string, expectedLoadId: string):
   // panel when you do not. Branching in the action would mean two places that
   // have to agree about who holds a load, and the one that got it wrong before
   // was the one that redirected without saying anything.
-  const load = await svc.startInboundLoad({ expectedLoadId, siteId, operatorUserId });
+  const load = await svc.startInboundLoad({
+    expectedLoadId,
+    siteId,
+    operatorUserId,
+    acknowledgedHaulId,
+  });
   revalidatePath(`/operator/${siteCode}/queue`);
   redirect(`/operator/${siteCode}/load/${load.id}`);
 }
@@ -98,12 +116,17 @@ export async function startLoadReconciledAction(
   siteCode: string,
   expectedLoadId: string,
   acknowledgedSlotDayISO: string,
+  acknowledgedHaulId: string,
 ): Promise<void> {
   const { operatorUserId, siteId } = await ctx(siteCode);
   const load = await svc.startInboundLoad({
     expectedLoadId,
     siteId,
     operatorUserId,
+    // ADR-0127 — this path already read the haul number back to the operator; it
+    // now travels and is checked, exactly like the day. Two acknowledgements on
+    // the noisier path, one on the ordinary one, and both are compared server-side.
+    acknowledgedHaulId,
     reconcile: { acknowledgedSlotDayISO },
   });
   revalidatePath(`/operator/${siteCode}/queue`);

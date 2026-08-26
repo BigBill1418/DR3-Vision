@@ -35,6 +35,7 @@
 
 import { useState, useTransition } from 'react';
 import { useT } from '@/i18n/provider';
+import { isNextRedirectSignal } from '@/lib/next-redirect';
 import { startLoadReconciledAction } from '../actions';
 
 export function ReconcileRow({
@@ -91,21 +92,21 @@ export function ReconcileRow({
               onClick={() =>
                 startTransition(async () => {
                   try {
-                    await startLoadReconciledAction(siteCode, expectedLoadId, slotDayISO);
+                    // ADR-0127 — the haul number this panel already reads back
+                    // now travels with the day and is checked the same way.
+                    await startLoadReconciledAction(
+                      siteCode,
+                      expectedLoadId,
+                      slotDayISO,
+                      haulLabel,
+                    );
                   } catch (e) {
                     // A server action's `redirect()` throws a control-flow signal
                     // that MUST be re-thrown, or a successful check-in would be
                     // reported to the operator as a failure — the inverse of D-8
                     // and just as bad.
-                    if (
-                      e &&
-                      typeof e === 'object' &&
-                      'digest' in e &&
-                      typeof (e as { digest?: unknown }).digest === 'string' &&
-                      (e as { digest: string }).digest.startsWith('NEXT_REDIRECT')
-                    ) {
-                      throw e;
-                    }
+                    // ADR-0127 — the shared predicate; see `next-redirect.ts`.
+                    if (isNextRedirectSignal(e)) throw e;
                     setFailed(true);
                     setConfirming(false);
                   }

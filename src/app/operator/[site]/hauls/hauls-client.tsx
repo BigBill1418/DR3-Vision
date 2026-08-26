@@ -229,17 +229,31 @@ export function HaulsClient({
             {consumedNote(r.consumedLoad)}
           </p>
         </div>
-      ) : r.expectedLoadId ? (
+      ) : r.expectedLoadId && r.externalHaulId ? (
         // Live sibling, unconsumed, and due TODAY — this haul is real dock work,
         // so it gets the same tap-to-start affordance the queue uses. Nothing new
         // is written here; `startLoadAction` is the existing, gated path.
-        <QueueRow siteCode={siteCode} expectedLoadId={r.expectedLoadId}>
+        //
+        // ADR-0127 — `externalHaulId` joins the condition rather than being
+        // defaulted to a dash. It is non-null by construction on this branch
+        // (`portal-hauls.ts` resolves the sibling BY haul number, so a row with
+        // none can never carry an `expectedLoadId`), and a placeholder would be
+        // a value the server assert rejects — a control whose only outcome is a
+        // refusal, which ADR-0074 Am.1 forbids. Falling through to the read-only
+        // branch is the honest answer to a row that cannot name itself.
+        <QueueRow
+          siteCode={siteCode}
+          expectedLoadId={r.expectedLoadId}
+          haulLabel={r.externalHaulId}
+          sourceLabel={r.collectionSite ?? r.collectionSource ?? t('queue.unknown_source')}
+          transporterLabel={r.transporterName ?? t('queue.unknown_carrier')}
+        >
           {renderBody(r)}
           <p className="mt-2 text-start text-xs font-bold uppercase tracking-wide text-dr3-chartreuse">
             {t('floor.hauls.check_in')}
           </p>
         </QueueRow>
-      ) : r.reconcilableExpectedLoadId && r.slotDayISO ? (
+      ) : r.reconcilableExpectedLoadId && r.slotDayISO && r.externalHaulId ? (
         // ADR-0096 — a LIVE, UNCONSUMED slot booked for another Pacific day. The
         // truck can be on the dock right now; H-136980 was, on 2026-08-11, and
         // this branch is why tapping its card did nothing.
@@ -253,7 +267,12 @@ export function HaulsClient({
           expectedLoadId={r.reconcilableExpectedLoadId}
           slotDayISO={r.slotDayISO}
           slotDayLabel={formatDate(new Date(`${r.slotDayISO}T12:00:00Z`), locale)}
-          haulLabel={r.externalHaulId ?? t('floor.hauls.no_date')}
+          // ADR-0127 — was `?? t('floor.hauls.no_date')`, a placeholder that
+          // read "No date" where a haul number belongs. It is now guarded in the
+          // branch condition instead: the label travels to the server and is
+          // compared against the slot, so a stand-in string would be a guaranteed
+          // 409 rather than a cosmetic wobble.
+          haulLabel={r.externalHaulId}
         >
           {renderBody(r)}
         </ReconcileRow>

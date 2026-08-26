@@ -19,7 +19,12 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BO — 2026-08-25 the Lake County truck was worked on the Mt View haul card — **EXECUTED 2026-08-25 4:48 PM PT**
+## 0.BO — 2026-08-25 the Lake County truck was worked on the Mt View haul card — **CORRECTION EXECUTED 4:48 PM PT; PREVENTION SHIPPED 5:30 PM PT**
+
+**Disposition:** BO-1 done · BO-2 partly closed (operator conversation still Bill's)
+· **BO-3 fixed (ADR-0127)** · **BO-4 instrumented, seed AWAITING BILL (ADR-0128)**
+· **BO-5 skipped, reasons recorded** · **BO-6 fixed (ADR-0128)** · **BO-7 fixed +
+backfilled 133/133 (ADR-0128)**.
 
 **The correction is applied.** Bill authorized the proposed re-point (BO-1) and
 it was executed the same evening by
@@ -133,14 +138,30 @@ are junk compliance records that survive the void, and Nate/Janette should still
 be told what happened and why, so the same re-file attempt is not repeated on the
 next mis-tap. Owner: Bill.
 
-**BO-3 — the defect this exposes is a UI one, and ADR-0090 D1 already named it.**
-H-138504 (Mt View, 8:30 AM appointment) and H-138155 (Lake County, 10:00 AM) sat
-adjacent on the queue. The haul chip shipped; it was not enough. Worth asking
-whether the check-in screen should surface the transporter name — the two cards
-differ starkly there (DR3's own account vs Ron Lawrence & Son) — or whether the
-BOL photo's haul number should be matched against the tapped card before the
-load can advance. That is the durable prevention; the re-point is only the
-cleanup.
+**BO-3 — FIXED (2026-08-25, ADR-0127).** H-138504 (Mt View, 8:30 AM appointment)
+and H-138155 (Lake County, 10:00 AM) sat adjacent on the queue. The haul chip
+shipped; it was not enough.
+
+The question above was "should the check-in screen surface the transporter
+name". **It already did** — measured on production: the queue card renders
+`source_name_at_sync` and `transporter_name_at_sync`, and both slots carry them
+(`St. Vincent de Paul Society of Lane County, Inc - DR3 parent account CA` vs
+`Ron Lawrence & Son`). So the diagnosis had to move: the identifying facts were
+not absent, **one tap committed to them**. A chip nobody is asked about is a chip
+nobody reads, and the card's largest element was the appointment time.
+
+Shipped: check-in is now a two-tap confirmation in `QueueRow` — the single
+component behind BOTH `/queue` and `/hauls` — reading back the haul number, the
+supplier and **carried by**, with the carrier deliberately not the faintest line
+on the panel. The confirmed haul number travels and `startInboundLoad` compares
+it against the slot inside the writing transaction (`409 haul_number_mismatch`).
+Required, not optional. Full reasoning, alternatives and cost in ADR-0127.
+
+**BOL-photo OCR is NOT built** and is recorded as the next rung rather than
+half-attempted: the attached BOL reads `H-138155` in plain text, so a machine
+comparison would have caught this at 9:45 AM — but it needs an OCR path, a
+confidence policy, and an answer to whether a low-confidence read may BLOCK a
+truck on the dock. ADR-0127 §Alternatives; ADR-0128 §Follow-ups.
 
 ### Before-snapshot (for reversibility)
 
@@ -247,6 +268,54 @@ of noticing. Bill decides whether `sources.is_trans_charge` is wrong seed data
 (and for which sources), or whether these hauls genuinely carry no DR3 freight
 leg. Owner: Bill.
 
+**BO-4 — INSTRUMENTED 2026-08-25 (ADR-0128 D10–D12). NO SEED WRITTEN. STILL
+BILL'S DECISION.**
+
+The repo was searched exhaustively for authoritative rates and flags. The result
+splits, and it is not what the paragraph above assumed:
+
+- **The rate card EXISTS and is seeded.** The CA mileage-tier zone table
+  (`prisma/seed.mjs` `seedTransportRateTiers`, 7 tiers, $425 / $600 / $925 /
+  $1,450 / $2,000 / $2,500 / $3,000, effective 2026-01-01); the CA fuel-surcharge
+  formula (`state_program_rules`, `(EIA $/gal ÷ 6.5) × miles`, applied strictly
+  above $5.05 — OR is structurally impossible by design); and a resolver chain
+  (`billing-rates/freight-resolver.ts`) that raises a typed error rather than
+  silently billing zero.
+- **WHICH sources are transport-charged does NOT exist anywhere in this repo.**
+  Not in a seed CSV, not in an ADR, not in a migration, not in `.env.example`.
+  All that exists is a COUNT (the workbook `list` tab's "47 trans-charge sites";
+  a 2026-07-03 handoff says "~49" — the two documents disagree), a POINTER to
+  where the truth lives (`variables!Mileage_Table`, 61 rows, carrying both the
+  per-account haul rate and the mileage), and an explicit deferral: ADR-0037
+  §"Deferred (needs Rick's data, out of scope here) … left at the `false` default
+  so no false trans-charge variance rows are produced." `account_haul_rates` is
+  seeded EMPTY for the same stated reason.
+- **So `false` on 176 sources is the ABSENCE of data, not wrong data.** No seed
+  script was written and none is proposed — seeding a guess would launder the
+  absence into truth, which ADR-0040's consequences already forbid.
+
+**What Bill has to do, and where:** `/admin/sources` (shipped by ADR-0125 D7)
+writes both `is_trans_charge` and `canonical_mileage` with an audit row. The
+inputs are the workbook's `list` tab (~47 site classifications) and
+`variables!Mileage_Table` (61 mileages). Alternatively, record the decision that
+these hauls carry no DR3 freight leg — in which case the instrument below should
+be told so rather than silenced.
+
+**What shipped instead: the silence is now visible.**
+`src/lib/loads/uncharged-freight.ts` counts billing-ready loads on a third-party
+truck (`transporters.is_internal = false`) with `transport_charged = false` over
+the trailing 30 Pacific days, and contributes ONE line to the 06:00 AP digest.
+Measured on production 2026-08-25: **103 loads / 11,734 units / 7 carriers**, all
+Woodland. Keyed on the TRANSPORTER rather than the source deliberately — the
+verify gate leaves a sourceless load's column untouched by design, so `false` on
+the source side cannot distinguish "classified as free" from "never classified".
+Graded **digest-tier, not a page** (ADR-0037: fails the gate on Q1 and Q3) — no
+ntfy, and it does not raise the digest to high priority.
+
+**Expect this line every weekday morning until the classification is entered.**
+That is the instrument working, the same way ADR-0126's four orphaned decisions
+are. Owner: Bill.
+
 **BO-5 — the BOL's 23,600 lb certified net weight was NOT recorded.** It does not
 fit cleanly and was not forced:
 
@@ -265,7 +334,55 @@ If Bill wants the 23,600 lbs in Vision, it needs a field that means "weight per
 the BOL" or an ADR-0073 manager correction with its own evidence rule — not this
 column. Owner: Bill.
 
-**BO-6 — `voidLoad` cannot record a non-operator actor.** Surfaced by executing
+**BO-5 — SKIPPED 2026-08-25, deliberately, and this is the reason.** Re-examined
+with a mandate to add a distinct BOL-certified-weight field if a clean, small
+mechanism existed. There is not one, and the honest version is not small:
+
+- **A column alone would be a field with no writer and no reader.** Nothing on
+  any operator or manager surface captures a BOL-declared weight, and nothing
+  renders one. Adding `bol_declared_weight_lbs` and scripting 23,600 into it for
+  a single row produces a column that exists for exactly one load — shipped, and
+  indistinguishable from dead. The repo has paid for that shape before.
+- **The capture path does not exist and is not trivial.** The load is
+  `submitted`; there is no post-submit operator flow, and `correctWeight`
+  (ADR-0090 Am.1 B) refuses `submitted` by design at the same boundary that
+  refuses the void. A real capture path is a manager surface — which is ADR-0073,
+  still unbuilt.
+- **The semantics are a compliance question this repo cannot answer.** Weights
+  feed billing and MRC compliance (CLAUDE.md). Whether a BOL certified net weight
+  counts for anything under the MRC contract, and whether it may ever substitute
+  for a scale ticket, is not written down anywhere here. Guessing and shipping a
+  field would be deciding it silently — the one thing CLAUDE.md's "never bury a
+  product decision in code" forbids.
+- **Nothing is lost by waiting.** The number is preserved in three places: the
+  BOL photo on the load (`loads/4a8f071d…/bol/fa4bad65…jpg`), this register, and
+  the CHANGELOG. `weight_skipped_at` stands and remains TRUE as the operator
+  declared it — a BOL certified weight is not a scale ticket.
+
+**Sketch for whoever picks this up:** a nullable `bol_declared_weight_lbs` plus a
+`bol_weight_source` distinguishing it from `weight_lbs`, captured on the ADR-0073
+manager-correction surface with the BOL photo as its required evidence, and
+excluded from every scale-ticket compliance reader by name rather than by
+convention. Owner: Bill.
+
+**BO-6 — FIXED (2026-08-25, ADR-0128 D5–D9), including the row it was found on.**
+`voidLoad` now takes an `actor` distinct from the holder: `operatorUserId` keeps
+its one job (the ownership check, unchanged), and a non-user actor gets the new
+nullable `inbound_loads.voided_by_label` in the `audit_log.actor_label` shape.
+When a label actor is supplied `voided_by` is set to **NULL** rather than left on
+the holder — a reader of that column alone must get no answer, not a wrong one. A
+validated CHECK constraint enforces exactly one of the pair on a voided row, and
+an `actor` that names nobody is refused (`422 void_actor_required`) rather than
+normalised back to the holder. A void with no `actor` — the floor's own panel — is
+byte-identical to every void written before this.
+
+`ff061601…` is corrected through that mechanism by
+`scripts/one-off/2026-08-25-bo6-void-actor-correction.ts` (guarded on its full
+before-state; attribution only — status, reason, instant and severed slot
+untouched). Janette Tomas's name no longer sits on a decision she did not make.
+The original finding, verbatim:
+
+**BO-6 (as found) — `voidLoad` cannot record a non-operator actor.** Surfaced by executing
 this correction. `voided_by` is a bare `users.id` and the audit row's
 `actor_user_id` comes from the same argument, so any void performed on an
 operator's behalf — by a manager, by a script, by ADR-0073 when it exists —
@@ -274,7 +391,29 @@ silently attributes itself to that operator. The repo's own one-off convention
 void path has no way to honour it. Small fix, real audit consequence; folds
 naturally into ADR-0073's scope.
 
-**BO-7 — `external_mymrc_haul_id` stays NULL on `4a8f071d…`.** Not in scope and
+**BO-7 — FIXED (2026-08-25, ADR-0128 D1–D4), forward and backward.**
+`startInboundLoad` now copies `external_mymrc_haul_id` from the slot onto the
+child load at check-in — COPIED, not read through the parent link, because a void
+severs that link and would take the answer with it. The void therefore severs the
+number too: the column is UNIQUE, so a voided load that kept it would kill the
+very re-check-in the void exists to enable, on a raw `P2002` the collision guard
+correctly refuses to absorb.
+
+Backfill: `scripts/one-off/2026-08-25-bo7-haul-id-backfill.ts` (dry-run default),
+run with `--apply` at 5:19 PM PT. **133 of 133 loads stamped** — 130 `submitted`,
+3 `rejected`, all Woodland, zero UNIQUE collisions — each with its own append-only
+audit row under `actor_label = 'system:bo7-haul-id-backfill …'`. Verified after
+the run: **133/133 match a row in `mymrc_hauls_mirror`**, so they are genuinely
+reconcilable rather than merely non-null, and `4a8f071d…` now carries H-138155.
+The other 641 aggregate and paper loads have no parent slot and were NOT
+synthesised.
+
+**Expect the next MyMRC reconciliation upload to behave differently** — dock loads
+that previously fell out as `missing_in_dr3` will now match, and may surface real
+`count_mismatch` / `weight_mismatch` items that were hidden behind the blanket
+non-match. That is the point, not a regression. The original finding, verbatim:
+
+**BO-7 (as found) — `external_mymrc_haul_id` stays NULL on `4a8f071d…`.** Not in scope and
 not a regression (it is NULL on all 74 Ron Lawrence loads — it is written only by
 the MyMRC bridge and the EOD add-line, never by a dock capture). Worth knowing
 that the reconciliation upload matches DR3 loads to external haul rows **on that

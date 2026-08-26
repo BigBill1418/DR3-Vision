@@ -331,7 +331,17 @@ export default async function OperatorQueuePage({ params }: Props) {
                           );
                         })()
                       ) : (
-                        <QueueRow siteCode={site.code} expectedLoadId={l.id}>
+                        <QueueRow
+                          siteCode={site.code}
+                          expectedLoadId={l.id}
+                          // ADR-0127 — the three facts the confirm step reads
+                          // back are the three the card already renders, taken
+                          // from the same expressions, so the panel cannot
+                          // describe a different truck than the row above it.
+                          haulLabel={l.external_mymrc_haul_id}
+                          sourceLabel={sourceName}
+                          transporterLabel={transporterName}
+                        >
                           {body}
                         </QueueRow>
                       )}
