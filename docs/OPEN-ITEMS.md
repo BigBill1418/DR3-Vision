@@ -39,11 +39,22 @@ or executed same day (commit + one-off script, ADR-0129):
 - **BQ-1 (residual)** — a future hand-filed decision needs the out-of-band
   stamp, and there is no admin UI for it; it is a one-off script or authorized
   direct write until one exists. Build only when the second real case appears.
-- **BO-4 (still open, in flight this session)** — Bill chose the
-  workbook-import path: read the `list` tab (~47 trans-charge sites) +
-  `variables!Mileage_Table` (61 rows), stage `is_trans_charge` +
-  `canonical_mileage` for his review, apply on confirm. Staging deliverable
-  pending below.
+- **One-off EXECUTED against prod 2026-08-27 1:47 PM PT** and read back:
+  Daven's roster row expired, Patrick on the roster + routed → Rick (row
+  `0d551aa2…`), all four BN-1 rows stamped out-of-band with `sent_at` still
+  honestly NULL. Tomorrow's 06:00 digest is the end-to-end proof: the routing
+  warning and the unmailed-decisions section should both be gone.
+- **BO-4 STAGED, awaiting Bill's review** — Bill chose the workbook-import
+  path. `scripts/one-off/2026-08-27-bo4-workbook-classification.ts` reads the
+  LIVE workbook via the workbook-sync Graph transport (`list` tab +
+  `variables` Mileage_Table, both side-by-side copies cross-checked) and
+  matched against `sources` via the alias resolver:
+  **47 trans-charge names → 20 CLEAN / 11 FLAGGED / 16 UNMATCHED.** Full
+  proposal: `docs/2026-08-27-bo4-staging-proposal.md`. Nothing written;
+  `--apply --i-reviewed-the-stage` writes the CLEAN rows only (audited,
+  is_trans_charge + canonical_mileage). Bill: review the three buckets —
+  the flagged Stockton-destination rows and the 16 unmatched names (mostly
+  alias gaps) each need a per-row call.
 
 ## 0.BP — 2026-08-26 the MyMRC launch crash the ledger could not see — **FIXED (ADR-0111 Amendment 1), one watch item**
 
