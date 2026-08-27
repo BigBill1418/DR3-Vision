@@ -32,6 +32,13 @@ triaged with Bill in session:
   included).
 - New tests watched red first across decision-mail, queue, and digest suites;
   full AP suite 423 green.
+- **BO-4 clean-20 APPLIED (2:39 PM PT, Bill's confirm)** — 20 Woodland sources
+  now `is_trans_charge = true` with the workbook's DR3-Woodland-Primary
+  mileage (staged from the live workbook's `list` tab + Mileage_Table via the
+  workbook-sync Graph transport; 47 names → 20 clean / 11 flagged /
+  16 unmatched, the residue registered in 0.BQ for per-row calls). Freight +
+  fuel-surcharge lines now derive for future verified loads from these
+  sources; the digest's trailing-30-day load count shrinks as loads age out.
 
 ## 2026-08-26 — The crash the ledger could not see (ADR-0111 Amendment 1)
 

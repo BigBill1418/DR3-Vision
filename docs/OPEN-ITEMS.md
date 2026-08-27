@@ -44,17 +44,30 @@ or executed same day (commit + one-off script, ADR-0129):
   `0d551aa2…`), all four BN-1 rows stamped out-of-band with `sent_at` still
   honestly NULL. Tomorrow's 06:00 digest is the end-to-end proof: the routing
   warning and the unmailed-decisions section should both be gone.
-- **BO-4 STAGED, awaiting Bill's review** — Bill chose the workbook-import
-  path. `scripts/one-off/2026-08-27-bo4-workbook-classification.ts` reads the
-  LIVE workbook via the workbook-sync Graph transport (`list` tab +
-  `variables` Mileage_Table, both side-by-side copies cross-checked) and
-  matched against `sources` via the alias resolver:
-  **47 trans-charge names → 20 CLEAN / 11 FLAGGED / 16 UNMATCHED.** Full
-  proposal: `docs/2026-08-27-bo4-staging-proposal.md`. Nothing written;
-  `--apply --i-reviewed-the-stage` writes the CLEAN rows only (audited,
-  is_trans_charge + canonical_mileage). Bill: review the three buckets —
-  the flagged Stockton-destination rows and the 16 unmatched names (mostly
-  alias gaps) each need a per-row call.
+- **BO-4 CLEAN-20 APPLIED — Bill's confirm, 2026-08-27 2:39 PM PT.**
+  `scripts/one-off/2026-08-27-bo4-workbook-classification.ts` read the LIVE
+  workbook via the workbook-sync Graph transport (`list` tab + `variables`
+  Mileage_Table, both side-by-side copies cross-checked), matched via the
+  alias resolver — **47 trans-charge names → 20 CLEAN / 11 FLAGGED /
+  16 UNMATCHED** (full buckets: `docs/2026-08-27-bo4-staging-proposal.md`).
+  Bill reviewed and said "apply the clean 20": all 20 sources now carry
+  `is_trans_charge = true` + the workbook's DR3-Woodland-Primary
+  `canonical_mileage`, verified by read-back, 20 audit rows. Two honest
+  caveats: (1) Ord Ranch Road's workbook mileage 53.8 stored as 53 (Int
+  column; same $925 tier either way); (2) the 06:00 uncharged-freight line
+  counts trailing-30-day LOADS (`transport_charged` is stamped at verify
+  time), so it shrinks as newly-verified loads from these sources arrive and
+  old ones age out — it does not vanish overnight, and that is the
+  instrument being accurate, not a failure of this apply.
+- **BO-4 residue for Bill — 11 FLAGGED + 16 UNMATCHED, per-row calls.**
+  Flagged: mostly Stockton-destination accounts with no DR3 Woodland
+  mileage row, plus Pleasanton's genuine 90-vs-8 disagreement between the
+  workbook's two copies. Unmatched: trans-charge names with no Woodland
+  `sources` row (Diamond Recycling, Gather Home, Loyalton, Salvation Army
+  SFARC, South Tahoe, Happy Camp, Scott River, …) — each needs an alias row,
+  a new source, or an explicit drop. The one-off is idempotent and re-runnable
+  once rows are added/aliased: re-stage, review, re-apply picks up the new
+  clean matches only.
 
 ## 0.BP — 2026-08-26 the MyMRC launch crash the ledger could not see — **FIXED (ADR-0111 Amendment 1), one watch item**
 
