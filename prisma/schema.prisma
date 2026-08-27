@@ -4738,6 +4738,12 @@ model ApRequest {
   decided_at                 DateTime?
   decision_note              String?
   decision_mail_sent_at      DateTime?
+  // ADR-0129 D1 — a person confirmed the decision reached accounting OUTSIDE
+  // Vision's mail path (e.g. Mary filed it by hand). Its own fact, never a
+  // substitute stamp: decision_mail_sent_at stays transport-confirmed only.
+  decision_mail_filed_out_of_band_at   DateTime?
+  decision_mail_filed_out_of_band_by   String? // bare audit-actor column (user id)
+  decision_mail_filed_out_of_band_note String?
   quarantine_reason          String? // set iff status=quarantined (external sender / parse failure)
   // AP go-live features — 2026-07-09 (ADR-0046 Amendment 3) — hold / "pending review".
   // Set when an approver places the request on hold (status=pending_review). held_by

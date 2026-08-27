@@ -23,12 +23,40 @@ const ago = (ms: number) => new Date(NOW.getTime() - ms);
 describe('isDecisionMailUnsent', () => {
   it('is true for a decided row with no mail stamp', () => {
     for (const status of DECIDED_STATUSES) {
-      expect(isDecisionMailUnsent({ status, decision_mail_sent_at: null })).toBe(true);
+      expect(
+        isDecisionMailUnsent({
+          status,
+          decision_mail_sent_at: null,
+          decision_mail_filed_out_of_band_at: null,
+        }),
+      ).toBe(true);
     }
   });
 
   it('is false once the mail stamp lands', () => {
-    expect(isDecisionMailUnsent({ status: 'rejected', decision_mail_sent_at: NOW })).toBe(false);
+    expect(
+      isDecisionMailUnsent({
+        status: 'rejected',
+        decision_mail_sent_at: NOW,
+        decision_mail_filed_out_of_band_at: null,
+      }),
+    ).toBe(false);
+  });
+
+  // ADR-0129 D1 — the BN-1 rows: Mary filed the decisions with accounting by
+  // hand, so no mail is missing and re-sending would duplicate her filing.
+  // Stamping decision_mail_sent_at would be a lie (no transport ever confirmed
+  // a send — ADR-0117 made that stamp a fact, not a promise). The out-of-band
+  // stamp is its own truthful fact: a person confirmed delivery happened
+  // outside Vision's mail path.
+  it('is false once a person confirms the decision was filed out of band', () => {
+    expect(
+      isDecisionMailUnsent({
+        status: 'approved',
+        decision_mail_sent_at: null,
+        decision_mail_filed_out_of_band_at: NOW,
+      }),
+    ).toBe(false);
   });
 
   it('ignores every non-terminal status', () => {
@@ -36,14 +64,25 @@ describe('isDecisionMailUnsent', () => {
     // legitimately has no decision mail yet, and reporting it would make the sweep
     // noise from its first run.
     for (const status of ['pending', 'pending_review', 'pending_second_approval', 'quarantined']) {
-      expect(isDecisionMailUnsent({ status, decision_mail_sent_at: null })).toBe(false);
+      expect(
+        isDecisionMailUnsent({
+          status,
+          decision_mail_sent_at: null,
+          decision_mail_filed_out_of_band_at: null,
+        }),
+      ).toBe(false);
     }
   });
 });
 
 describe('isDecisionMailStuck (grace)', () => {
   it('does NOT count a send that may still be in flight', () => {
-    const row = { status: 'rejected', decided_at: ago(60_000), decision_mail_sent_at: null };
+    const row = {
+      status: 'rejected',
+      decided_at: ago(60_000),
+      decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: null,
+    };
     expect(isDecisionMailStuck(row, NOW)).toBe(false);
   });
 
@@ -52,6 +91,7 @@ describe('isDecisionMailStuck (grace)', () => {
       status: 'rejected',
       decided_at: ago(DECISION_MAIL_GRACE_MS + 1000),
       decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: null,
     };
     expect(isDecisionMailStuck(row, NOW)).toBe(true);
   });
@@ -60,7 +100,12 @@ describe('isDecisionMailStuck (grace)', () => {
     // Should be impossible (decide writes both in one update). If it happens we
     // cannot tell when it was decided — and "we cannot tell" must surface, not
     // fall through the grace check and stay invisible forever.
-    const row = { status: 'approved', decided_at: null, decision_mail_sent_at: null };
+    const row = {
+      status: 'approved',
+      decided_at: null,
+      decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: null,
+    };
     expect(isDecisionMailStuck(row, NOW)).toBe(true);
   });
 
@@ -69,6 +114,17 @@ describe('isDecisionMailStuck (grace)', () => {
       status: 'approved',
       decided_at: ago(90 * 86_400_000),
       decision_mail_sent_at: ago(90 * 86_400_000),
+      decision_mail_filed_out_of_band_at: null,
+    };
+    expect(isDecisionMailStuck(row, NOW)).toBe(false);
+  });
+
+  it('never counts a row confirmed filed out of band, however old the decision', () => {
+    const row = {
+      status: 'approved',
+      decided_at: ago(90 * 86_400_000),
+      decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: ago(1000),
     };
     expect(isDecisionMailStuck(row, NOW)).toBe(false);
   });
@@ -79,6 +135,7 @@ describe('decisionMailUnsentWhere', () => {
     expect(decisionMailUnsentWhere()).toEqual({
       status: { in: ['approved', 'rejected'] },
       decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: null,
     });
   });
 

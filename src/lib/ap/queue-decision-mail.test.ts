@@ -25,6 +25,7 @@ interface Row {
   id: string;
   status: string;
   decision_mail_sent_at: Date | null;
+  decision_mail_filed_out_of_band_at: Date | null;
 }
 
 /** Captures the `where` each call received so the filter can be asserted. */
@@ -36,6 +37,11 @@ function stubPrisma(rows: Row[]) {
     if (typeof status === 'string' && r.status !== status) return false;
     if (status && typeof status === 'object' && !status.in?.includes(r.status)) return false;
     if (where['decision_mail_sent_at'] === null && r.decision_mail_sent_at !== null) return false;
+    if (
+      where['decision_mail_filed_out_of_band_at'] === null &&
+      r.decision_mail_filed_out_of_band_at !== null
+    )
+      return false;
     return true;
   };
   const prisma = {
@@ -56,6 +62,7 @@ function stubPrisma(rows: Row[]) {
             held_by: null,
             hold_note: null,
             decision_mail_sent_at: r.decision_mail_sent_at,
+            decision_mail_filed_out_of_band_at: r.decision_mail_filed_out_of_band_at,
             _count: { attachments: 0, followups: 0 },
           }));
       },
@@ -73,11 +80,21 @@ const unmailed = (id: string, status = 'rejected'): Row => ({
   id,
   status,
   decision_mail_sent_at: null,
+  decision_mail_filed_out_of_band_at: null,
 });
 const mailed = (id: string, status = 'approved'): Row => ({
   id,
   status,
   decision_mail_sent_at: new Date('2026-08-19T18:05:00.000Z'),
+  decision_mail_filed_out_of_band_at: null,
+});
+// ADR-0129 D1 — decided, never machine-mailed, but a person confirmed it was
+// filed with accounting by hand (the BN-1 shape).
+const filedByHand = (id: string, status = 'approved'): Row => ({
+  id,
+  status,
+  decision_mail_sent_at: null,
+  decision_mail_filed_out_of_band_at: new Date('2026-08-27T17:00:00.000Z'),
 });
 
 describe('AP queue list — decisionMailUnsent badge (ADR-0126 D6)', () => {
@@ -127,7 +144,18 @@ describe('AP queue list — decisionMailUnsent badge (ADR-0126 D6)', () => {
     expect(seen.findManyWhere).toEqual({
       status: { in: ['approved', 'rejected'] },
       decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: null,
     });
+  });
+
+  it('does NOT flag a row confirmed filed out of band, and the filter excludes it', async () => {
+    const { prisma } = stubPrisma([filedByHand('req-h'), unmailed('req-i')]);
+    const all = await listApRequests('all', prisma);
+    expect(all.rows.find((r) => r.id === 'req-h')?.decisionMailUnsent).toBe(false);
+    expect(all.rows.find((r) => r.id === 'req-i')?.decisionMailUnsent).toBe(true);
+    const filtered = await listApRequests(DECISION_MAIL_UNSENT_FILTER, prisma);
+    expect(filtered.rows.map((r) => r.id)).toEqual(['req-i']);
+    expect(filtered.counts[DECISION_MAIL_UNSENT_FILTER]).toBe(1);
   });
 
   it('accepts the new filter value at the API boundary', async () => {

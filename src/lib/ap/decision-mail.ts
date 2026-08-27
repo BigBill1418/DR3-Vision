@@ -66,10 +66,16 @@ export const DECISION_MAIL_GRACE_MS = 20 * 60 * 1000;
 export function isDecisionMailUnsent(row: {
   status: string;
   decision_mail_sent_at: Date | null;
+  decision_mail_filed_out_of_band_at: Date | null;
 }): boolean {
   return (
     (DECIDED_STATUSES as readonly string[]).includes(row.status) &&
-    row.decision_mail_sent_at === null
+    row.decision_mail_sent_at === null &&
+    // ADR-0129 D1 — a person confirmed the decision reached accounting outside
+    // Vision's mail path. Nothing is missing; re-sending would duplicate the
+    // hand filing. This is deliberately NOT decision_mail_sent_at: that stamp
+    // stays transport-confirmed only (ADR-0117 — a fact, not a promise).
+    row.decision_mail_filed_out_of_band_at === null
   );
 }
 
@@ -85,7 +91,12 @@ export function isDecisionMailUnsent(row: {
  * the same shape of silence this ADR exists to end.
  */
 export function isDecisionMailStuck(
-  row: { status: string; decided_at: Date | null; decision_mail_sent_at: Date | null },
+  row: {
+    status: string;
+    decided_at: Date | null;
+    decision_mail_sent_at: Date | null;
+    decision_mail_filed_out_of_band_at: Date | null;
+  },
   now: Date,
 ): boolean {
   if (!isDecisionMailUnsent(row)) return false;
@@ -100,7 +111,12 @@ export function isDecisionMailStuck(
  * would silently drop exactly those rows.
  */
 export function decisionMailUnsentWhere(): Prisma.ApRequestWhereInput {
-  return { status: { in: [...DECIDED_STATUSES] }, decision_mail_sent_at: null };
+  return {
+    status: { in: [...DECIDED_STATUSES] },
+    decision_mail_sent_at: null,
+    // ADR-0129 D1 — hand-filed decisions are not unsent.
+    decision_mail_filed_out_of_band_at: null,
+  };
 }
 
 /**

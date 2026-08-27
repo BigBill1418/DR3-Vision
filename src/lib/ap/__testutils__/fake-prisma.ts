@@ -41,6 +41,7 @@ export interface FakeApRequest {
   decided_at: Date | null;
   decision_note: string | null;
   decision_mail_sent_at: Date | null;
+  decision_mail_filed_out_of_band_at: Date | null;
   quarantine_reason: string | null;
   // ADR-0046 §3 amendment (handoff §1.6c/e).
   site_id: string | null;
@@ -509,6 +510,12 @@ export function makeFakePrisma(db: FakeDb) {
           if (w['decision_mail_sent_at'] === null && (r.decision_mail_sent_at ?? null) !== null) {
             return false;
           }
+          if (
+            w['decision_mail_filed_out_of_band_at'] === null &&
+            (r.decision_mail_filed_out_of_band_at ?? null) !== null
+          ) {
+            return false;
+          }
           return true;
         });
         const ob = args.orderBy as AnyRecord | undefined;
@@ -543,6 +550,7 @@ export function makeFakePrisma(db: FakeDb) {
           decided_at: null,
           decision_note: (d['decision_note'] as string | null) ?? null,
           decision_mail_sent_at: null,
+          decision_mail_filed_out_of_band_at: null,
           quarantine_reason: (d['quarantine_reason'] as string | null) ?? null,
           site_id: (d['site_id'] as string | null) ?? null,
           filed_not_dr3: (d['filed_not_dr3'] as boolean | undefined) ?? false,
@@ -619,6 +627,12 @@ export function makeFakePrisma(db: FakeDb) {
           } else if (statusCond !== undefined && r.status !== statusCond) return false;
           // An ABSENT column reads as null, matching the findMany convention above.
           if (w['decision_mail_sent_at'] === null && (r.decision_mail_sent_at ?? null) !== null) {
+            return false;
+          }
+          if (
+            w['decision_mail_filed_out_of_band_at'] === null &&
+            (r.decision_mail_filed_out_of_band_at ?? null) !== null
+          ) {
             return false;
           }
           if (siteIn && !siteIn.includes(r.site_id ?? '')) return false;

@@ -70,6 +70,7 @@ import { docIngestReauthWarning } from '@/lib/doc-ingest/reauth';
 import { docIngestDiscoveryGapWarning } from '@/lib/doc-ingest/reachability';
 import { unchargedThirdPartyFreightWarning } from '@/lib/loads/uncharged-freight';
 import { dailyDigestRecipients } from './notification-prefs';
+import { activeApproverUserIds } from './approvers';
 import { resolveSecondApproval } from './second-approval-resolver';
 import { apQueueUrl, apRequestUrl, reimbursementUrl } from './notify';
 import {
@@ -311,6 +312,7 @@ const ITEM_SELECT = {
   // apply the anti-race grace) and the mail stamp (the thing that is missing).
   decided_at: true,
   decision_mail_sent_at: true,
+  decision_mail_filed_out_of_band_at: true,
 } as const;
 
 interface RequestRow {
@@ -329,6 +331,7 @@ interface RequestRow {
   escalated_at: Date | null;
   decided_at: Date | null;
   decision_mail_sent_at: Date | null;
+  decision_mail_filed_out_of_band_at: Date | null;
 }
 
 function toItem(row: RequestRow, now: Date, detail: string | null): DigestItem {
@@ -454,17 +457,35 @@ export async function buildApMorningDigest(
   });
 
   // ── W1. Routing coverage (§1.4 — "the table must be TOTAL").
-  // Enumerate every ACTIVE approver-role user and diff against the active
-  // routing rows. An approver with no row falls back to admin IMMEDIATELY, which
-  // works but is not the separation-of-duties design — Bill must see it.
-  const [approvers, routingRows] = await Promise.all([
-    db.user.findMany({
-      where: { role: { in: ['manager', 'admin'] }, is_active: true, deleted_at: null },
-      select: { id: true, name: true },
-      orderBy: { name: 'asc' },
-    }),
+  // Enumerate everyone who can actually FIRST-APPROVE and diff against the
+  // active routing rows. An approver with no row falls back to admin
+  // IMMEDIATELY, which works but is not the separation-of-duties design — Bill
+  // must see it.
+  //
+  // ADR-0129 D2 — "who can first-approve" is the ADR-0046 ap_approvers ROSTER
+  // (expiry-aware) plus active admins, exactly the set canActOnApRequest
+  // permits. It is NOT "every active manager": the 2026-08-27 digest named a
+  // manager who was never on the roster — he could not approve anything, so
+  // there was no fallback to warn about — while saying nothing distinct about
+  // the roster member the warning was actually for. The warning must use the
+  // same authority as the permission it warns about.
+  const [rosterIds, routingRows] = await Promise.all([
+    activeApproverUserIds(db),
     db.apApprovalRouting.findMany({ where: { active: true }, select: { first_approver_id: true } }),
   ]);
+  const [rosterUsers, adminUsers] = await Promise.all([
+    db.user.findMany({
+      where: { id: { in: rosterIds }, is_active: true, deleted_at: null },
+      select: { id: true, name: true },
+    }),
+    db.user.findMany({
+      where: { role: 'admin', is_active: true, deleted_at: null },
+      select: { id: true, name: true },
+    }),
+  ]);
+  const approvers = [
+    ...new Map([...rosterUsers, ...adminUsers].map((u) => [u.id, u])).values(),
+  ].sort((a, b) => a.name.localeCompare(b.name));
   const routedIds = new Set(routingRows.map((r) => r.first_approver_id));
   const unrouted = approvers.filter((u) => !routedIds.has(u.id));
   if (unrouted.length > 0) {

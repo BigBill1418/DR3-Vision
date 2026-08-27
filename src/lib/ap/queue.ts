@@ -230,6 +230,7 @@ export async function listApRequests(
         hold_note: true,
         // ADR-0126 — feeds the row badge via the shared predicate.
         decision_mail_sent_at: true,
+        decision_mail_filed_out_of_band_at: true,
         _count: { select: { attachments: true, followups: true } },
       },
     }),

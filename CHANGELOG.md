@@ -9,6 +9,30 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-08-27 — The mail that left by hand, and the roster the warning ignored (ADR-0129)
+
+The first live ADR-0126 digest surfaced its own backlog and one false name,
+triaged with Bill in session:
+
+- **`ap_requests` + migration `20260858`** — three out-of-band columns
+  (`decision_mail_filed_out_of_band_at/_by/_note`): a person's confirmation
+  that a decision reached accounting outside Vision's mail path is now its own
+  truthful fact. The shared predicate funnel honors it, so the queue chip,
+  filter, count, digest section, and ntfy fingerprint clear together while
+  `decision_mail_sent_at` stays honestly NULL (ADR-0117).
+- **`morning-digest.ts` W1** — the routing-coverage warning now enumerates the
+  ADR-0046 `ap_approvers` roster (expiry-aware) plus admins — the set that can
+  actually first-approve — instead of every manager-role user. The 08-27
+  digest had named a manager who was never an approver.
+- **One-off `2026-08-27-adr0129-roster-routing-and-bn1.ts`** (dry-run-first,
+  idempotent, audited): Daven Stetson expired off the approver roster (Bill:
+  not an approver), Patrick Dills added and routed → Rick Albritton, and the
+  four BN-1 decisions stamped filed-out-of-band (Mary filed them by hand;
+  re-sending would have duplicated her filing — $12,265.99 of approvals
+  included).
+- New tests watched red first across decision-mail, queue, and digest suites;
+  full AP suite 423 green.
+
 ## 2026-08-26 — The crash the ledger could not see (ADR-0111 Amendment 1)
 
 The 1:00 PM PT MyMRC tick died at Chromium launch (`chrome-headless-shell`

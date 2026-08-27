@@ -55,6 +55,7 @@ function seededRequest(internetMessageId: string): FakeApRequest {
     decided_at: null,
     decision_note: null,
     decision_mail_sent_at: null,
+    decision_mail_filed_out_of_band_at: null,
     quarantine_reason: null,
     site_id: null,
     filed_not_dr3: false,

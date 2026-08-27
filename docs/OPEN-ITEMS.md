@@ -19,6 +19,32 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BQ — 2026-08-27 the first ADR-0126 digest, triaged with Bill — **EXECUTED (ADR-0129), one residual, one item still staged**
+
+Bill answered all three digest lines in session; everything answerable shipped
+or executed same day (commit + one-off script, ADR-0129):
+
+- **BN-1 CLOSED — the four unmailed decisions were filed by hand.** Bill:
+  "Mary already filed these." All four stamped
+  `decision_mail_filed_out_of_band_at` (new ADR-0129 D1 columns) with the note
+  naming Mary's filing and Bill's confirmation; `decision_mail_sent_at` stays
+  NULL truthfully. Digest line, queue chip, filter and count all clear from
+  the same predicate. **Nothing was re-sent, deliberately.**
+- **Routing warning CLOSED — and it had named the wrong man.** Daven Stetson:
+  Bill says NOT an approver → roster row expired (Kelsey pattern; expiry job
+  reaps+audits). Patrick Dills: approver, peer → Rick Albritton → added to the
+  ADR-0046 roster + routing row via `saveRoutingRow`. W1 itself was enumerating
+  user ROLES, not the roster — fixed (ADR-0129 D2) so a non-approver manager
+  can never appear in the warning again.
+- **BQ-1 (residual)** — a future hand-filed decision needs the out-of-band
+  stamp, and there is no admin UI for it; it is a one-off script or authorized
+  direct write until one exists. Build only when the second real case appears.
+- **BO-4 (still open, in flight this session)** — Bill chose the
+  workbook-import path: read the `list` tab (~47 trans-charge sites) +
+  `variables!Mileage_Table` (61 rows), stage `is_trans_charge` +
+  `canonical_mileage` for his review, apply on confirm. Staging deliverable
+  pending below.
+
 ## 0.BP — 2026-08-26 the MyMRC launch crash the ledger could not see — **FIXED (ADR-0111 Amendment 1), one watch item**
 
 The 1:00 PM PT scrape tick died at Chromium launch — `chrome-headless-shell`

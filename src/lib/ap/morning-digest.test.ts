@@ -112,6 +112,7 @@ function req(over: Partial<FakeApRequest> = {}): FakeApRequest {
     decided_at: null,
     decision_note: null,
     decision_mail_sent_at: null,
+    decision_mail_filed_out_of_band_at: null,
     quarantine_reason: null,
     site_id: null,
     filed_not_dr3: false,
@@ -138,6 +139,13 @@ function quietDb(over: Partial<FakeDb> = {}): FakeDb {
     sites: [
       { id: 's-w', code: 'woodland', name: 'Woodland' },
       { id: 's-e', code: 'eugene', name: 'Eugene' },
+    ],
+    // ADR-0129 D2 — W1's roster is the ADR-0046 ap_approvers table (plus
+    // admins), not "every manager". The quiet fleet therefore carries roster
+    // rows for its two managers; Bill is in-set by role.
+    approvers: [
+      { id: 'a-jt', user_id: JANETTE.id, active_until: null, created_by: null },
+      { id: 'a-mg', user_id: MORENA.id, active_until: null, created_by: null },
     ],
     approvalRouting: [
       {
@@ -333,6 +341,93 @@ describe('routing-coverage warning', () => {
 
   it('does not warn when the routing table is total', async () => {
     const db = quietDb({ requests: [req()] });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.warnings.filter((w) => w.includes('ap_approval_routing'))).toEqual([]);
+  });
+
+  // ADR-0129 D2 — the 2026-08-27 digest named Daven Stetson and Patrick Dills
+  // as "active approvers" with no routing row. Patrick was not on the
+  // ap_approvers roster at all: he could not first-approve anything, so there
+  // was no fallback to warn about. W1 was enumerating user ROLES while
+  // canActOnApRequest enumerates the ADR-0046 ROSTER; the warning must use the
+  // same authority as the permission it warns about.
+  it('does NOT warn about an active manager who is not on the ap_approvers roster', async () => {
+    const db = quietDb({
+      users: [
+        BILL,
+        JANETTE,
+        MORENA,
+        {
+          id: 'u-ds',
+          name: 'Daven Stetson',
+          email: 'daven.stetson@svdp.us',
+          role: 'manager',
+          all_sites: false,
+          is_active: true,
+        },
+      ],
+      requests: [req()],
+    });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    expect(payload.warnings.filter((w) => w.includes('ap_approval_routing'))).toEqual([]);
+  });
+
+  it('DOES warn about a roster member with no routing row, whatever their role', async () => {
+    const db = quietDb({
+      users: [
+        BILL,
+        JANETTE,
+        MORENA,
+        {
+          id: 'u-pd',
+          name: 'Patrick Dills',
+          email: 'patrick.dills@svdp.us',
+          role: 'manager',
+          all_sites: false,
+          is_active: true,
+        },
+      ],
+      approvers: [
+        { id: 'a-jt', user_id: JANETTE.id, active_until: null, created_by: null },
+        { id: 'a-mg', user_id: MORENA.id, active_until: null, created_by: null },
+        { id: 'a-pd', user_id: 'u-pd', active_until: null, created_by: null },
+      ],
+      requests: [req()],
+    });
+    const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
+    const warning = payload.warnings.find((w) => w.includes('ap_approval_routing'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('Patrick Dills');
+  });
+
+  it('an EXPIRED roster row does not put its user back on the warning', async () => {
+    const db = quietDb({
+      users: [
+        BILL,
+        JANETTE,
+        MORENA,
+        {
+          id: 'u-ds',
+          name: 'Daven Stetson',
+          email: 'daven.stetson@svdp.us',
+          role: 'manager',
+          all_sites: false,
+          is_active: true,
+        },
+      ],
+      approvers: [
+        { id: 'a-jt', user_id: JANETTE.id, active_until: null, created_by: null },
+        { id: 'a-mg', user_id: MORENA.id, active_until: null, created_by: null },
+        // Daven's row expired yesterday — the Kelsey pattern.
+        {
+          id: 'a-ds',
+          user_id: 'u-ds',
+          active_until: new Date(WED_0600_PT.getTime() - 86_400_000),
+          created_by: null,
+        },
+      ],
+      requests: [req()],
+    });
     const payload = await buildApMorningDigest(fp(db), WED_0600_PT);
     expect(payload.warnings.filter((w) => w.includes('ap_approval_routing'))).toEqual([]);
   });
@@ -698,6 +793,7 @@ describe('ADR-0126 — decided but no confirmed decision email', () => {
       decided_by: JANETTE.id,
       decided_at: daysBefore(1),
       decision_mail_sent_at: null,
+      decision_mail_filed_out_of_band_at: null,
       ...over,
     });
 
@@ -747,6 +843,7 @@ describe('ADR-0126 — decided but no confirmed decision email', () => {
           first_approver_id: JANETTE.id,
           first_approved_at: daysBefore(1),
           decision_mail_sent_at: null,
+          decision_mail_filed_out_of_band_at: null,
         }),
       ],
     });
