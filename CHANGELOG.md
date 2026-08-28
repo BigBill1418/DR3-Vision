@@ -32,6 +32,14 @@ triaged with Bill in session:
   included).
 - New tests watched red first across decision-mail, queue, and digest suites;
   full AP suite 423 green.
+- **BO-4 residue worked same evening — all 27 dispositioned with Bill.** Six
+  more sources classified (five drifted spellings aliased + classified with
+  workbook mileage; Pleasanton at 90 mi on Bill's call over the workbook's
+  own 90-vs-8 copy disagreement), three alias-only, events + zero-Woodland
+  Stockton-side names deliberately dropped, and the nine no-mileage accounts
+  registered as §2 S-11 for Rick. Now **26 trans-charge sources + 8 aliases**,
+  read back from prod, every write audited
+  (`scripts/one-off/2026-08-27-bo4-residue-apply.ts`).
 - **BO-4 clean-20 APPLIED (2:39 PM PT, Bill's confirm)** — 20 Woodland sources
   now `is_trans_charge = true` with the workbook's DR3-Woodland-Primary
   mileage (staged from the live workbook's `list` tab + Mileage_Table via the
