@@ -31,6 +31,7 @@ import {
 import { deriveDailyRows, type DailySiteScope } from './daily-adapter';
 import { sourceAliasResolver } from '@/lib/audit/workbook/site-alias';
 import {
+  matchMonthlyFileTolerant,
   resolveMonthlyFileName,
   resolveMonthlyFolderPath,
   yearMonthKeyFromFileName,
@@ -66,6 +67,23 @@ export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error' | 'skipped';
 
 /** Page at most this often per site once a failure streak is established. */
 const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * ADR-0130 §6 — a 403 repeats twice as often as a missing file.
+ *
+ * Both are silent data loss, but they differ on ADR-0037 Q1 (actionable in five
+ * minutes). `not_found` needs someone to go LOOK for the file — a rename, a stray
+ * copy, a moved folder — which is a working-hours task, so daily is right.
+ * `forbidden` means the Files.Read.All grant is gone and NOTHING ingests until an
+ * operator re-grants it; there is one action and it takes a minute, so a half-day
+ * repeat is the correct nag rate.
+ */
+const FORBIDDEN_ALERT_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+/** The ADR-0130 §6 window for this poll's failure status. */
+function alertCooldownFor(status: string): number {
+  return status === 'forbidden' ? FORBIDDEN_ALERT_COOLDOWN_MS : ALERT_COOLDOWN_MS;
+}
 
 /**
  * How long a source may produce NO successful read before it is treated as dead.
@@ -226,6 +244,20 @@ export async function syncOneSource(
   let status: SyncStatus = 'ok';
   let error: string | null = null;
   let fileName: string | null = null;
+  /**
+   * ADR-0130 D10 — where the transport ACTUALLY looked, recorded on the run so a
+   * future reader can see it without re-deriving the token expansion by hand. The
+   * September outage was invisible for six days precisely because nothing said
+   * which folder had been asked for.
+   */
+  let folderPathResolved: string | null = null;
+  /**
+   * ADR-0130 D9 — the file name actually USED, which is not always the one the
+   * pattern predicted (`SEPT …` vs `SEPTEMBER …`). `fileName` stays the expectation.
+   */
+  let fileNameMatched: string | null = null;
+  /** Folder listing captured on a miss, so the not_found page can show it (D9). */
+  let folderListing: string[] | null = null;
   let changesDetected = false;
   let cutoverNoop = false;
   let rowsUpserted = 0;
@@ -294,7 +326,45 @@ export async function syncOneSource(
       // month's folder instead of hunting last month's name in this month's.
       // Token-free paths (including the empty drive-root default) are unchanged.
       const folderPath = resolveMonthlyFolderPath(source.folder_path, monthAnchor);
-      const file = await transport.getFile(source.drive_upn, folderPath, fileName);
+      folderPathResolved = folderPath;
+      let file = await transport.getFile(source.drive_upn, folderPath, fileName);
+
+      // ── ADR-0130 D9 — tolerant fallback ────────────────────────────────────
+      //
+      // An exact-name match against a human-named file is the wrong contract: only
+      // FOUR of the seven months on the live Woodland drive match the pattern. On a
+      // miss, list the folder and look for a single `.xlsm` carrying the year and a
+      // prefix of the month name, ignoring case, `_` and a `(n)` copy suffix.
+      // Exactly one candidate is the file; zero or more than one stays `not_found`
+      // AND keeps the listing, because a page that cannot say what it DID find is
+      // what let ADR-0102's folder defect hide for six weeks.
+      //
+      // Costs no extra Graph call on the happy path, and on a miss exactly one:
+      // `getFile` is itself implemented over `listFolder` in the Graph transport.
+      if (!file) {
+        const listing = await transport.listFolder(source.drive_upn, folderPath);
+        folderListing = listing.map((f) => f.name);
+        const { matched, candidates } = matchMonthlyFileTolerant(folderListing, monthAnchor);
+        if (matched !== null) {
+          file = listing.find((f) => f.name === matched) ?? null;
+          log(
+            'warn',
+            `[workbook-sync] run=${runId} site=${source.site_id}${tag} exact name "${fileName}" ` +
+              `not found; TOLERANT match used "${matched}" in "${folderPath}" (ADR-0130 D9)`,
+          );
+        } else if (candidates.length > 1) {
+          // Refusing on ambiguity is the point: silently preferring one of
+          // `MARCH … TEMPLATE …` and `MARCH …` would ingest a template into
+          // billing data.
+          log(
+            'warn',
+            `[workbook-sync] run=${runId} site=${source.site_id}${tag} AMBIGUOUS: ` +
+              `${candidates.length} candidate workbooks in "${folderPath}" — ` +
+              `${candidates.join(', ')}. Refusing to guess.`,
+          );
+        }
+      }
+      if (file) fileNameMatched = file.name;
       // B1 — two files in flight, two watermarks. Reading the wrong one would make
       // each poll invalidate the other's cTag (endless re-downloads) and, in the
       // other direction, let a grace read mark a genuinely-changed current-month
@@ -508,6 +578,8 @@ export async function syncOneSource(
         error,
         now: nowFn(),
         log,
+        folderPathResolved,
+        folderListing,
       });
 
   // Ledger row ALWAYS (mymrc_sync_runs discipline), including throw / fail-soft.
@@ -521,6 +593,9 @@ export async function syncOneSource(
         status,
         transport_mode: mode,
         file_name: fileName,
+        // ADR-0130 — WHERE it looked and WHAT it used, not merely what it expected.
+        folder_path_resolved: folderPathResolved,
+        file_name_matched: fileNameMatched,
         changes_detected: changesDetected,
         rows_upserted: rowsUpserted,
         rows_skipped_midedit: rowsSkippedMidedit,
@@ -593,6 +668,17 @@ interface HealthArgs {
   error: string | null;
   now: Date;
   log: SyncLogger;
+  /** ADR-0130 D10 — the folder actually asked for, so the page can name it. */
+  folderPathResolved?: string | null;
+  /**
+   * ADR-0130 D9 — every file name in that folder, captured on the miss.
+   *
+   * The page must be able to say what it DID find. ADR-0102's lesson was that
+   * collapsing two distinct causes into one empty list cost six weeks; a page that
+   * cannot show `SEPT` against `SEPTEMBER` repeats it, and this one did — for six
+   * days, while telling the reader to "check for a rename".
+   */
+  folderListing?: readonly string[] | null;
 }
 
 /**
@@ -625,6 +711,43 @@ interface HealthArgs {
  * process-local cooldown Map, because that Map is wiped by every container restart
  * — which is how a stuck refusal produced ~28 identical pages per business day.
  */
+/**
+ * The `not_found` half of the page body (ADR-0130 D9).
+ *
+ * The previous text was `"The file was not found — check for a rename, a typo, a
+ * stray copy, or a moved folder."` It was honest about the symptom and useless
+ * about the cause: those are the same four actions ADR-0102 §1 had already recorded
+ * as the WRONG place to look, and the reader could not tell `SEPT` from `SEPTEMBER`
+ * without opening SharePoint. Naming the resolved folder and listing what is
+ * actually in it turns the page into the diagnosis.
+ */
+function describeNotFound(args: HealthArgs): string {
+  const where = args.folderPathResolved
+    ? `Looked in "${args.folderPathResolved}". `
+    : 'Looked in the drive root. ';
+  const listing = args.folderListing;
+  if (listing === undefined || listing === null) {
+    return `The file was not found. ${where}`;
+  }
+  if (listing.length === 0) {
+    // A genuinely empty folder is a DIFFERENT finding from a folder full of files
+    // none of which matched — the distinction ADR-0102 lost.
+    return `The file was not found and the folder is EMPTY. ${where}`;
+  }
+  // Bounded: a folder with hundreds of archived months must not push a 1 KB body
+  // through the ntfy helper (publishNtfy truncates at 1024 bytes anyway, and a
+  // truncated listing that cuts off mid-name is worse than a counted one).
+  const MAX = 12;
+  const shown = listing.slice(0, MAX).join(', ');
+  const more = listing.length > MAX ? ` (+${listing.length - MAX} more)` : '';
+  return (
+    `The file was not found, and the tolerant matcher (ADR-0130 D9) found no single ` +
+    `candidate. ${where}That folder contains: ${shown}${more}. ` +
+    `Compare those names against the expected one above — an abbreviation, a copy ` +
+    `suffix, or the wrong month folder is visible right here without opening SharePoint. `
+  );
+}
+
 async function recordHealthAndAlarm(args: HealthArgs): Promise<boolean> {
   const { prisma, source, status, error, now, log } = args;
   const healthy = status === 'ok';
@@ -639,7 +762,7 @@ async function recordHealthAndAlarm(args: HealthArgs): Promise<boolean> {
   const readFailure = status === 'error' || status === 'forbidden';
   const cooledDown =
     source.last_alert_at === null ||
-    now.getTime() - source.last_alert_at.getTime() >= ALERT_COOLDOWN_MS;
+    now.getTime() - source.last_alert_at.getTime() >= alertCooldownFor(status);
   const shouldPage = !healthy && ((readFailure && failures === 1) || stale) && cooledDown;
 
   try {
@@ -672,13 +795,14 @@ async function recordHealthAndAlarm(args: HealthArgs): Promise<boolean> {
       `Site ${source.site_id}, file pattern "${source.naming_pattern}". ` +
       `${failures} consecutive failed poll(s); last successful read ` +
       `${lastSuccessAt === null ? 'NEVER' : `${days} day(s) ago`}. ` +
-      `${status === 'not_found' ? 'The file was not found — check for a rename, a typo, a stray copy, or a moved folder. ' : ''}` +
-      `Nothing has been written. Next page for this site in 24h at the earliest.`,
+      `${status === 'not_found' ? describeNotFound(args) : ''}` +
+      `Nothing has been written. Next page for this site in ` +
+      `${alertCooldownFor(status) / (60 * 60 * 1000)}h at the earliest.`,
     priority: 'high',
     tags: ['warning', 'workbook-sync', 'dr3-vision'],
     clickUrl: SYNC_CLICK_URL,
     fingerprint: `workbook-sync-${source.site_id}`,
-    cooldownMs: ALERT_COOLDOWN_MS,
+    cooldownMs: alertCooldownFor(status),
   }).catch((e: unknown) => {
     log('warn', `[workbook-sync] site=${source.site_id} page failed — ${describe(e)}`);
   });

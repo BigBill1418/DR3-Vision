@@ -36,7 +36,14 @@ function harness(over: Record<string, unknown> = {}) {
     { feed: 'hauls', status: 'ok', rowsListed: 3, detailsFetched: 1, site },
   ]);
   const checkDeadman = vi.fn<(a: { sites: string[] }) => Promise<undefined>>(async () => undefined);
+  // ADR-0130 — the worker registers the durable cooldown ledger before it pages.
+  // Recorded, not stubbed away: `registeredDb` is asserted below, so a future edit
+  // that drops the registration turns this suite RED instead of quietly restoring
+  // the hourly storm.
+  const pageSpy = vi.fn(async (a: PageCall): Promise<void> => void pageCalls.push(a));
+  const setCooldownDb = vi.fn();
   const mymrc = {
+    setCooldownDb,
     CredentialsNotConfiguredError,
     loadAdminCredentials: vi.fn(async () => ({ username: 'bill@svdp.us', password: 'pw' })),
     createPortalClient,
@@ -45,11 +52,18 @@ function harness(over: Record<string, unknown> = {}) {
     syncSite,
     checkDeadman,
     SITE_CODES: ['eugene', 'woodland'],
-    ntfyPager: { page: async (a: PageCall): Promise<void> => void pageCalls.push(a) },
+    // A vi.fn (not a bare arrow) so `invocationCallOrder` is comparable with
+    // `setCooldownDb`'s — vitest maintains ONE global invocation counter across
+    // spies, and comparing a spy's order against a hand-rolled counter compares
+    // two unrelated sequences.
+    ntfyPager: { page: pageSpy },
     ...over,
   };
   return {
-    run: (opts = {}) => runMymrcScrape({ mymrc, prisma: {}, launchBrowser, log: () => undefined, ...opts }),
+    run: (opts = {}) =>
+      runMymrcScrape({ mymrc, prisma: {}, launchBrowser, log: () => undefined, ...opts }),
+    setCooldownDb,
+    pageSpy,
     pageCalls,
     portalArgs,
     launchBrowser,
@@ -80,15 +94,46 @@ describe('resolveActiveSites — active recycler context (deadman false-green gu
   });
 
   it('falls back to the pilot default (never syncs nothing) when no valid token resolves', () => {
-    expect(resolveActiveSites({ envValue: 'atlantis', known: KNOWN, log: () => undefined })).toEqual([
-      'woodland',
-    ]);
+    expect(
+      resolveActiveSites({ envValue: 'atlantis', known: KNOWN, log: () => undefined }),
+    ).toEqual(['woodland']);
   });
 
   it('an explicit list overrides the env value', () => {
     expect(
-      resolveActiveSites({ explicit: ['eugene'], envValue: 'woodland', known: KNOWN, log: () => undefined }),
+      resolveActiveSites({
+        explicit: ['eugene'],
+        envValue: 'woodland',
+        known: KNOWN,
+        log: () => undefined,
+      }),
     ).toEqual(['eugene']);
+  });
+});
+
+describe('runMymrcScrape — ADR-0130 durable cooldown ledger', () => {
+  it('registers the DB-backed ledger BEFORE the first page can fire', async () => {
+    // The worker is a fresh child process every hour. Without this registration
+    // every cooldown resets to zero on every tick, which is exactly how the
+    // 24 h stale-mirror alert paged Bill 24x/day for four days. The D9 page
+    // below fires at the very first gate, so registration has to precede it.
+    const h = harness({
+      loadAdminCredentials: vi.fn(async () => {
+        throw new CredentialsNotConfiguredError('not configured');
+      }),
+    });
+    const prisma = { $executeRawUnsafe: async () => 1 };
+
+    await h.run({ prisma });
+
+    expect(h.setCooldownDb).toHaveBeenCalledTimes(1);
+    expect(h.setCooldownDb).toHaveBeenCalledWith(prisma);
+    // Ordering, not merely presence: a registration that lands after the page is
+    // indistinguishable from no registration at all for that page.
+    expect(h.pageSpy).toHaveBeenCalledTimes(1);
+    const registerOrder = h.setCooldownDb.mock.invocationCallOrder[0] ?? Infinity;
+    const firstPageOrder = h.pageSpy.mock.invocationCallOrder[0] ?? -Infinity;
+    expect(registerOrder).toBeLessThan(firstPageOrder);
   });
 });
 

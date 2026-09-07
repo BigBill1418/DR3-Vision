@@ -216,6 +216,9 @@ async function main() {
   const require = createRequire(import.meta.url);
   const mymrc = require(resolve(__dirname, '..', 'dist', 'mymrc'));
   const prisma = new PrismaClient();
+  // ADR-0130 — this is a ONE-SHOT process: without the durable cooldown ledger
+  // every page it publishes bypasses ADR-0037 entirely (a fresh empty Map per run).
+  mymrc.setCooldownDb(prisma);
   let code = 1;
   try {
     code = await runProcessedBridgeBackfill({ mymrc, prisma, probe: probeFloor, opts, log });

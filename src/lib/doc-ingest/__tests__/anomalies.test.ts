@@ -334,11 +334,55 @@ describe('paging policy (ADR-0037 5-question gate)', () => {
   });
 
   it('leaves every OTHER kind paging on the transition', async () => {
-    // The delay is a targeted grading change for one kind, not a global mute.
+    // The delay is a targeted grading change for two kinds, not a global mute.
     expect(anomalyPolicy('sweep_failed').pageAfterOccurrences).toBe(2);
+    expect(anomalyPolicy('discovery_probe_failed').pageAfterOccurrences).toBe(3);
     for (const kind of ['access_denied', 'aggregate_variance', 'download_failed'] as const) {
       expect(anomalyPolicy(kind).pageAfterOccurrences ?? 1).toBe(1);
     }
+  });
+
+  // ── ADR-0130 D11 / §6 — the split, graded ─────────────────────────────────
+
+  it('D11 — the probe failure and the real gap are graded APART', async () => {
+    // They shared one kind, one subject, one fingerprint and one occurrences
+    // counter, so neither could be graded without regrading the other. Every one of
+    // the eight `discovery_gap` pages in the live ledger was in fact a probe
+    // failure — a single blip that had already healed by the time Bill's phone
+    // buzzed (9 errored scans in 2,480 over 26 days on production 2026-09-07, each
+    // followed by a success).
+    const probe = anomalyPolicy('discovery_probe_failed');
+    expect(probe.priority).toBe('default');
+    expect(probe.pageAfterOccurrences).toBe(3); // ~45 min of genuine blindness
+    expect(probe.repageIntervalMs).toBe(6 * 60 * 60 * 1000);
+
+    const gap = anomalyPolicy('discovery_gap');
+    // Promoted from `default`. The old grade was reasoned for a kind that ALSO
+    // carried transient probe failures; isolated, a reachable document nothing is
+    // watching is actionable and cannot self-heal.
+    expect(gap.priority).toBe('high');
+    expect(gap.pageAfterOccurrences ?? 1).toBe(1); // pages on its leading edge
+    expect(gap.repageIntervalMs).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('D11 — a probe failure does not page on the first or second miss', async () => {
+    const db = makeFakePrisma();
+    const at = (n: number) => new Date(Date.UTC(2026, 8, 7, n, 0, 0));
+    const raise = (n: number) =>
+      raiseAnomaly(db as never, {
+        kind: 'discovery_probe_failed',
+        subject: 'discovery:reachability:probe',
+        detail: 'POST /search/query -> HTTP 500 InternalServerError',
+        now: at(n),
+      });
+
+    expect((await raise(1)).paged).toBe(false);
+    expect((await raise(2)).paged).toBe(false);
+    expect(publishNtfy).not.toHaveBeenCalled();
+    // The third CONSECUTIVE miss is ~45 minutes of blindness and does page.
+    expect((await raise(3)).paged).toBe(true);
+    expect(publishNtfy).toHaveBeenCalledOnce();
+    expect(vi.mocked(publishNtfy).mock.calls[0]![0].priority).toBe('default');
   });
 
   // ── ADR-0097 §2 — a structural limit is a tile, not a page ────────────────

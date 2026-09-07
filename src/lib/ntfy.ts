@@ -43,6 +43,7 @@
 // ────────────────────────────────────────────────────────────────────────
 
 import { toHeaderSafe } from './ntfy-header-safe';
+import { claimCooldown, releaseCooldown, __cooldownTesting } from './ntfy-cooldown-store';
 
 const PRIMARY_BASE_DEFAULT = 'https://ntfy.barnardhq.com';
 const FALLBACK_BASE = 'https://ntfy.sh';
@@ -141,19 +142,25 @@ export interface PublishNtfyResult {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// In-memory cooldown ledger (ADR-0037 §3)
+// Cooldown ledger (ADR-0037 §3) — DURABLE since ADR-0130
 // ────────────────────────────────────────────────────────────────────────
 //
-// One ledger per Node.js process. Multi-replica deployments would each
-// keep their own ledger, but DR3-Vision runs a single replica on
-// CHAD-HQ so this is sufficient. If we scale out, swap in a Redis
-// SETNX backend (CallVault's `services/ntfy.py` is the reference).
-
-const cooldownLedger = new Map<string, number>();
-
-// Eviction guard — bound the ledger size so a long-running process
-// can't accumulate fingerprints indefinitely. Tested with 10k boundary.
-const COOLDOWN_LEDGER_MAX = 10_000;
+// This used to be `const cooldownLedger = new Map<string, number>()` with the
+// note: "One ledger per Node.js process. Multi-replica deployments would each
+// keep their own ledger, but DR3-Vision runs a single replica on CHAD-HQ so
+// this is sufficient."
+//
+// The replica count was never the assumption that mattered. A ONE-SHOT process
+// gets an empty Map every time it starts, so the cooldown decayed to zero for
+// anything published from a per-tick worker or immediately after a deploy
+// recreated the containers. `dr3-vision-mymrc-scrape` spawns a fresh
+// `mymrc-scrape.mjs` child every hour, and the 24 h stale-mirror alert paged
+// Bill 24x/day for four days as a direct result.
+//
+// The ledger now lives in Postgres (`ntfy_cooldowns`), claimed atomically per
+// fingerprint. See `./ntfy-cooldown-store` for the mechanism, the alternatives
+// that were measured and rejected (Redis, a file on a shared volume), and the
+// in-process backstop that still applies when no database is registered.
 
 function fingerprintKey(topic: string, title: string, explicit: string | undefined): string {
   if (explicit) return explicit;
@@ -186,36 +193,6 @@ function fnv1a32(s: string): string {
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   return h.toString(16).padStart(8, '0');
-}
-
-function cooldownActive(key: string, now: number): boolean {
-  const expiresAt = cooldownLedger.get(key);
-  if (expiresAt === undefined) return false;
-  if (expiresAt <= now) {
-    cooldownLedger.delete(key);
-    return false;
-  }
-  return true;
-}
-
-function recordCooldown(key: string, now: number, cooldownMs: number): void {
-  if (cooldownLedger.size >= COOLDOWN_LEDGER_MAX) {
-    // Evict the oldest entries by re-walking. O(n) but n is bounded
-    // and this fires at most once per 10k publishes, so amortised cost
-    // is negligible.
-    const entries = [...cooldownLedger.entries()].sort((a, b) => a[1] - b[1]);
-    for (let i = 0; i < entries.length / 2; i++) {
-      const entry = entries[i];
-      if (entry) cooldownLedger.delete(entry[0]);
-    }
-  }
-  cooldownLedger.set(key, now + cooldownMs);
-}
-
-// Test seam — exposed only via `__testing` so production callers can't
-// reach it. Vitest uses this to reset state between tests.
-function clearCooldownLedger(): void {
-  cooldownLedger.clear();
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -417,7 +394,12 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
   const fp = fingerprintKey(args.topic, args.title, args.fingerprint);
   const now = Date.now();
 
-  if (cooldownActive(fp, now)) {
+  // ADR-0130 — CLAIM the window before sending, rather than checking then
+  // recording after. The claim is a single atomic statement, so two processes
+  // that wake on the same cron minute cannot both pass a check and both page.
+  // The claim is given back below if neither transport lands.
+  const claim = await claimCooldown(fp, cooldownMs, now);
+  if (!claim.claimed) {
     return { ok: true, outcome: 'cooldown-suppressed' };
   }
 
@@ -450,14 +432,14 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     deadline,
   );
   if (primaryOk) {
-    recordCooldown(fp, now, cooldownMs);
     return { ok: true, outcome: 'sent' };
   }
 
-  // Primary failed — fallback path. Per ADR-0037 §3 the fallback does
-  // NOT apply cooldowns, but we still record the cooldown on a
-  // successful fallback so a subsequent primary-recovered call doesn't
-  // double-page. Drops a redundant alert is preferable to spam.
+  // Primary failed — fallback path. Per ADR-0037 §3 the fallback path itself
+  // applies NO cooldown gate: a primary failure always falls through, and it
+  // does here because the claim was already won above. The claim covers the
+  // fallback send too, so a subsequent primary-recovered call doesn't
+  // double-page — dropping a redundant alert beats spamming Bill.
   const fbTopic = fallbackTopicFor(args.topic);
   if (!fbTopic) {
     logDrop({
@@ -466,6 +448,8 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
       reason: lastFailureReason,
       msg: '[ntfy] primary failed and NO fallback topic is registered - page dropped',
     });
+    // Nothing landed: give the window back so the next watchdog tick may retry.
+    await releaseCooldown(fp, claim.expiresAt);
     return { ok: false, outcome: 'dropped' };
   }
   const fallbackHeaders = buildHeaders({
@@ -485,7 +469,6 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     deadline,
   );
   if (fallbackOk) {
-    recordCooldown(fp, now, cooldownMs);
     return { ok: true, outcome: 'fallback-sent' };
   }
   logDrop({
@@ -494,6 +477,10 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     reason: lastFailureReason,
     msg: '[ntfy] primary AND fallback both failed - page dropped',
   });
+  // Neither transport landed. Release the claim — the ADR-0036 contract is that
+  // the caller "may retry on the next watchdog tick", and a claim held over a
+  // transient ntfy outage would silence the alert for its whole window.
+  await releaseCooldown(fp, claim.expiresAt);
   return { ok: false, outcome: 'dropped' };
 }
 
@@ -586,9 +573,14 @@ export const __testing = {
    * from the fleet registry — so nothing at runtime can notice it rotting.
    */
   fallbackTopicByPrimary: FALLBACK_TOPIC_BY_PRIMARY,
-  clearCooldownLedger,
-  cooldownActive: (key: string) => cooldownActive(key, Date.now()),
-  cooldownLedgerSize: () => cooldownLedger.size,
+  /**
+   * Reset the cooldown ledger between tests. Since ADR-0130 this also clears the
+   * registered durable backend, so a suite that does not register one gets the
+   * in-process backstop — the historical behaviour these tests were written for.
+   */
+  clearCooldownLedger: () => __cooldownTesting.reset(),
+  cooldownActive: (key: string) => __cooldownTesting.memoryActive(key),
+  cooldownLedgerSize: () => __cooldownTesting.memorySize(),
   /** Swap the retry-backoff sleep for a no-op (or a spy) in tests. */
   setSleep: (fn: (ms: number) => Promise<void>) => {
     sleep = fn;

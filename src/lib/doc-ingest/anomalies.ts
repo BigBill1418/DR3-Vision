@@ -65,6 +65,11 @@ interface AnomalyPolicy {
    * ledger — this just reads it.
    */
   pageAfterOccurrences?: number;
+  /**
+   * ADR-0130 §6 — how often an UNRESOLVED row RE-pages, when it differs from the
+   * module default of 24 h. The transition always pages; this only bounds the nag.
+   */
+  repageIntervalMs?: number;
 }
 
 /**
@@ -141,7 +146,49 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
   // nothing is degrading — the answer is a human deciding whether a document
   // belongs in the pipeline, which is a same-day question, not an hour-one one.
   // It routes to the SOURCES page because that is where registering one happens.
-  discovery_gap: { severity: 'warning', priority: 'default', page: SOURCES_PAGE_PATH },
+  // ADR-0130 D11/§6 — this is now the REAL gap ONLY: documents Vision can READ and
+  // is not WATCHING. The "probe could not run" half moved to
+  // `discovery_probe_failed` below.
+  //
+  // Regraded from `default` to `high`. The old `default` was reasoned as "nothing is
+  // broken and nothing is degrading — the answer is a human deciding whether a
+  // document belongs in the pipeline, which is a same-day question." That reasoning
+  // held while the kind ALSO carried transient probe failures, which are the thing
+  // that must not shout. Isolated, a real gap is a document that exists, is
+  // reachable, feeds nothing, and cannot self-heal — ADR-0037 Q1 yes, Q3 satisfied
+  // by construction. It routes to SOURCES because registering one happens there.
+  //
+  // Measured on production 2026-09-07: this has never fired. Every one of the eight
+  // `discovery_gap` pages in the ledger was a probe failure, and `gap_count` has been
+  // 0 with `reachable_count = watched_count = 11` on every successful scan since
+  // 2026-08-17. Promoting a signal that has never fired costs nothing today and is
+  // the correct grade when it does.
+  discovery_gap: {
+    severity: 'warning',
+    priority: 'high',
+    page: SOURCES_PAGE_PATH,
+    repageIntervalMs: 24 * 60 * 60 * 1000,
+  },
+  // ADR-0130 D11 — "the reachability probe could not RUN". Upstream and transient:
+  // `POST /search/query -> HTTP 500 InternalServerError`, and Microsoft's own message
+  // is "The call failed, please try again."
+  //
+  // Measured on production 2026-09-07: 9 errored scans out of 2,480 over 26 days
+  // (0.36%), and the next attempt after each failure succeeded. The probe runs every
+  // 15 minutes. Paging on the first miss fails ADR-0037 Q3 outright — and it did:
+  // all eight pages in the ledger were single blips that had already healed by the
+  // time Bill's phone buzzed.
+  //
+  // THREE consecutive misses is ~45 minutes of genuine blindness, which is a real
+  // finding. "Consecutive" is enforced by the resolve-on-success in
+  // `reachability.ts`, not by this number alone.
+  discovery_probe_failed: {
+    severity: 'warning',
+    priority: 'default',
+    page: HEALTH_PAGE_PATH,
+    pageAfterOccurrences: 3,
+    repageIntervalMs: 6 * 60 * 60 * 1000,
+  },
   // ADR-0112. The probe RAN, said zero, and Vision was reading live documents
   // at the same moment. Graded like `absorption_empty` and for the identical
   // reason: a silent zero is the failure this module keeps re-learning, and the
@@ -343,9 +390,9 @@ async function maybePage(
   // the second failure page immediately rather than waiting out 24 hours.
   if (anomaly.occurrences < (policy.pageAfterOccurrences ?? 1)) return false;
 
+  const repageMs = policy.repageIntervalMs ?? ANOMALY_REPAGE_INTERVAL_MS;
   const dueForRepage =
-    anomaly.last_paged_at === null ||
-    now.getTime() - anomaly.last_paged_at.getTime() >= ANOMALY_REPAGE_INTERVAL_MS;
+    anomaly.last_paged_at === null || now.getTime() - anomaly.last_paged_at.getTime() >= repageMs;
   if (!raised && !dueForRepage) return false;
 
   const result = await publishNtfy({

@@ -68,6 +68,8 @@ function fakePrisma(priorFailures = 0) {
 function harness(prisma: unknown, opts: { launchError?: Error } = {}) {
   const pageCalls: PageCall[] = [];
   const mymrc = {
+    // ADR-0130 — durable cooldown ledger registration (see mymrc-scrape.mjs).
+    setCooldownDb: vi.fn(),
     CredentialsNotConfiguredError: class extends Error {},
     loadAdminCredentials: vi.fn(async () => ({ username: 'admin@example.test', password: 'pw' })),
     // The session never starts — the incident's shape.

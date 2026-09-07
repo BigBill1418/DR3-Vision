@@ -1406,9 +1406,18 @@ enum DocIngestAnomalyKind {
   /// Vision can READ documents in scope that it is not WATCHING. The one guard
   /// the discovery layer never had: `sharedWithMe` under-reported for 902
   /// consecutive sweeps and no surface compared its answer against anything.
-  /// Also raised when the probe itself cannot run — "we could not look" must
-  /// never be recorded as "there is no gap".
+  /// ADR-0130 D11 — this is the REAL gap only. It used to ALSO be raised when the
+  /// probe itself could not run, which put two findings with opposite urgencies on
+  /// one fingerprint and one occurrences counter. "We could not look" is now
+  /// `discovery_probe_failed`; "we looked and there is a hole" is this.
   discovery_gap
+  /// ADR-0130 D11 — the reachability probe could not RUN (`POST /search/query`
+  /// returned HTTP 500, or the call was aborted). "We could not look" must never be
+  /// recorded as "there is no gap" — and must not page on its first miss either:
+  /// measured on production, 0.36% of scans error and the next one succeeds. Pages
+  /// only after three CONSECUTIVE failures, which the resolve-on-success in
+  /// `reachability.ts` is what makes true.
+  discovery_probe_failed
   /// ADR-0112 — the probe SUCCEEDED and returned zero documents while Vision was
   /// demonstrably reading live ones in the same sweep. A separate kind from
   /// `discovery_gap` because it is a different question with a different answer:
@@ -5533,7 +5542,14 @@ model WorkbookSyncRun {
   finished_at          DateTime?
   status               WorkbookSyncStatus
   transport_mode       WorkbookSyncTransportMode
-  file_name            String? // the month's file name resolved this poll
+  file_name            String? // the month's file name the PATTERN predicted this poll
+  /// ADR-0130 D10 — the folder the transport actually asked for, after token
+  /// expansion. The September 2026 outage was invisible for six days because
+  /// nothing recorded which folder had been looked in.
+  folder_path_resolved String?
+  /// ADR-0130 D9 — the file name actually USED, which is not always the one the
+  /// pattern predicted (`SEPT …` vs `SEPTEMBER …`). NULL when nothing was read.
+  file_name_matched    String?
   changes_detected     Boolean                   @default(false)
   rows_upserted        Int                       @default(0)
   rows_skipped_midedit Int                       @default(0)
@@ -6782,4 +6798,38 @@ model EodDayClose {
   @@unique([site_id, close_date])
   @@index([site_id, close_date])
   @@map("eod_day_close")
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ADR-0130 — durable alert cooldown ledger
+// ────────────────────────────────────────────────────────────────────────
+
+/// The ADR-0037 per-fingerprint alert cooldown (ADR-0130 D1), moved out of a
+/// per-process `Map` and into the one place every publisher can already reach.
+///
+/// Read and written ONLY through `src/lib/mymrc/cooldown-store.ts` (app-facing
+/// name: `src/lib/ntfy-cooldown-store.ts`), in raw SQL — the claim is a single
+/// `INSERT … ON CONFLICT DO UPDATE … WHERE expires_at <= $now` whose affected-row
+/// count IS the verdict (D2). Prisma's typed API cannot express a conditional
+/// upsert in one statement, and a check-then-write reintroduces exactly the race
+/// the Map was hiding: the hourly cron, the long-lived app and a manual admin
+/// re-run are three writers, not one.
+///
+/// Ephemeral operational state, NOT an audit surface: hard rule #6 (append-only,
+/// retained indefinitely) governs `audit_log`, not this. Rows are reaped once they
+/// are more than 7 days past expiry.
+model AlertCooldown {
+  /// Caller-owned ADR-0037 fingerprint (e.g. `mymrc-stale-mirror:woodland:processed`),
+  /// or the FNV-1a hash of `topic` + `title` when the caller supplied none.
+  key          String   @id
+  /// When this alert may page again. Timestamptz (the repo otherwise defaults to
+  /// timestamp(3)) because it is a bare instant compared across processes.
+  expires_at   DateTime @db.Timestamptz(3)
+  /// ADR-0130 D4 — the instrument. A row that records how often a fingerprint has
+  /// fired is what makes the next ADR-0037 re-grade evidence-based.
+  last_sent_at DateTime @db.Timestamptz(3)
+  send_count   Int      @default(1)
+
+  @@index([expires_at])
+  @@map("alert_cooldowns")
 }

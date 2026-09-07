@@ -24,6 +24,7 @@ import {
   docIngestDiscoveryGapWarning,
   runReachabilityScan,
   REACHABILITY_SUBJECT,
+  REACHABILITY_PROBE_SUBJECT,
 } from '../reachability';
 
 const NOW = new Date('2026-08-07T20:00:00Z');
@@ -338,7 +339,10 @@ describe('runReachabilityScan — the live 2026-08-07 measurement', () => {
     });
     expect(res.gap).toHaveLength(0);
     expect(store.anomalies).toHaveLength(0);
-    expect(store.resolved).toEqual([{ kind: 'discovery_gap', subject: REACHABILITY_SUBJECT }]);
+    expect(store.resolved).toContainEqual({
+      kind: 'discovery_gap',
+      subject: REACHABILITY_SUBJECT,
+    });
   });
 
   it('records the EXACT scope that produced the numbers', async () => {
@@ -396,8 +400,34 @@ describe('runReachabilityScan — "we could not look" is never "there is no gap"
     expect(store.scans[0]?.['error']).toContain('503');
 
     expect(store.anomalies).toHaveLength(1);
-    expect(store.anomalies[0]?.kind).toBe('discovery_gap');
+    // ADR-0130 D11 — its OWN kind and its OWN subject, not `discovery_gap`.
+    // "we could not look" and "there is a hole" are different findings with
+    // different urgencies: one self-heals in fifteen minutes 99.6% of the time,
+    // the other is a reachable document nothing is watching and cannot self-heal.
+    // Sharing a kind meant sharing one fingerprint and one `occurrences` counter,
+    // so neither could be graded without regrading the other.
+    expect(store.anomalies[0]?.kind).toBe('discovery_probe_failed');
+    expect(store.anomalies[0]?.subject).toBe(REACHABILITY_PROBE_SUBJECT);
     expect(store.resolved).toHaveLength(0);
+  });
+
+  it('RESOLVES the probe-failure row on the next successful scan (D11)', async () => {
+    // This is what makes `pageAfterOccurrences: 3` mean three CONSECUTIVE failures
+    // rather than three ever. `occurrences` has no decrement — the counter only
+    // resets because the open row is closed. Without this resolve, three scattered
+    // blips across a month would page as if they were 45 minutes of blindness.
+    //
+    // Measured on production 2026-09-07: 9 errored scans out of 2,480 over 26 days
+    // (0.36%), and every single one was followed by a success. Under the old rule
+    // each of those paged; under this one, none of them would have.
+    await runReachabilityScan(fakePrisma(), searchReturning(liveReachable()), {
+      now: NOW,
+      scope: SCOPE,
+    });
+    expect(store.resolved).toContainEqual({
+      kind: 'discovery_probe_failed',
+      subject: REACHABILITY_PROBE_SUBJECT,
+    });
   });
 });
 
@@ -569,7 +599,14 @@ describe('runReachabilityScan — a zero that contradicts the watched set is not
     expect(res.error).toBeNull();
     expect(res.reachable).toBe(0);
     expect(store.anomalies).toHaveLength(0);
-    expect(store.resolved).toEqual([{ kind: 'discovery_gap', subject: REACHABILITY_SUBJECT }]);
+    // A successful scan closes BOTH standing conditions: the gap row (there is no
+    // gap) and the ADR-0130 D11 probe-failure row (the probe demonstrably ran).
+    // The second is what makes `pageAfterOccurrences: 3` mean three CONSECUTIVE
+    // failures rather than three ever.
+    expect(store.resolved).toEqual([
+      { kind: 'discovery_probe_failed', subject: REACHABILITY_PROBE_SUBJECT },
+      { kind: 'discovery_gap', subject: REACHABILITY_SUBJECT },
+    ]);
   });
 
   it('tells the DIGEST the figure is unverified, rather than staying silent', async () => {

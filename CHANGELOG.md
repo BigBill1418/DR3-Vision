@@ -9,6 +9,186 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-07 — The cooldown that died with the process (ADR-0130)
+
+Bill: "tons of alerts about the scraper and data failures via ntfy." Two identical
+`high` pages every hour, on the hour, for four days. The alert was true; the
+suppression was never enforced. This entry is the CODE half of ADR-0130 (D1–D5 and
+the §6 grading matrix); the diagnosis of the three underlying data failures and
+D6–D11 live in the ADR.
+
+**Root cause.** The ADR-0037 cooldown ledger was a module-scope `Map`, with the
+assumption written down in `src/lib/ntfy.ts`: _"One ledger per Node.js process…
+DR3-Vision runs a single replica on CHAD-HQ so this is sufficient. If we scale out,
+swap in a Redis SETNX backend."_ The replica count was never the load-bearing part.
+`dr3-vision-mymrc-scrape` is a cron HOST that spawns `scripts/mymrc-scrape.mjs` as
+a **fresh child process every hour** and reaps it — verified in the container's own
+log (`spawning /app/scripts/mymrc-scrape.mjs` → `scrape exit code 0`, hourly). A new
+process gets a new empty `Map`, so the 24 h `stale_mirror` window suppressed nothing.
+Measured from ntfy history, the gaps between consecutive
+`mymrc-stale-mirror:woodland:processed` pages were 3601/3604/3595/3595/3604/3603/
+3601/3593 seconds — the cron period, exactly. The same class hits every publisher on
+a deploy: `swarmpilot_deployer` recreates ~19 containers and every in-memory ledger
+is wiped at once.
+
+- **`alert_cooldowns` + migration `20260859` (D1)** — the ledger moved to Postgres.
+  The claim is ONE statement, `INSERT … ON CONFLICT DO UPDATE … WHERE expires_at <= $now`,
+  whose affected-row count IS the verdict (D2), so the hourly cron, the long-lived
+  app and a manual admin re-run — three writers, not one — cannot all pass a check
+  and all page. `expires_at`/`last_sent_at` are `TIMESTAMPTZ(3)` (the repo otherwise
+  defaults to `timestamp(3)`) for the same reason `users.sessions_invalidated_at` is:
+  a bare instant compared across processes. `send_count` + `last_sent_at` (D4) make
+  the next re-grade read rows instead of guessing. Rows past 7 days' expiry are
+  reaped on a throttled per-process pass.
+- **Postgres over Redis or a file, measured on CHAD-HQ 2026-09-07.** Six Redis
+  containers run on that host and none is reachable — DR3-Vision joins only its own
+  bridge `dr3-vision_dr3net`. `docker-compose.yml` declares two volumes and neither
+  is mounted into more than one alerting container, so a file ledger would be
+  per-container: the same defect with a longer TTL.
+- **`src/lib/mymrc/cooldown-store.ts`** — the ONE implementation, re-exported as
+  `src/lib/ntfy-cooldown-store.ts`. Forced under `mymrc/` for the same reason
+  `header-safe.ts` is (ADR-0019.5): `tsconfig.mymrc.json` pins
+  `rootDir: ./src/lib/mymrc`, so the alias-less bundle cannot import above it. Zero
+  imports; the client is INJECTED (D5) through a structural type with ONE required
+  method, so a client that cannot run the claim fails to compile at the registration
+  site rather than degrading silently.
+- **Claim-then-release, not check-then-record.** The ADR-0036 contract that a
+  `dropped` publish (primary AND fallback failed) may be retried on the next tick is
+  preserved by RELEASING the claim on a drop; without it one transient ntfy outage
+  would silence an alert for its whole window. The fallback leg still applies no
+  cooldown gate of its own (ADR-0037 §3), and `cooldownMs: 0` still never suppresses
+  — `doc-ingest/reauth.ts`, `doc-ingest/anomalies.ts` and `workbook-sync/engine.ts`
+  each hit this defect independently and each built its OWN durable latch in Postgres
+  (`reauth_paged_at`, `last_paged_at`, `workbook_sources.last_alert_at`), passing
+  `cooldownMs: 0` deliberately. ADR-0130 generalises their pattern; a real-DB test
+  pins that it does not break the three that got there first.
+- **A ledger failure sends (D3).** A DB error degrades to the in-process map for
+  that call and logs a `level:50` line. An alert path is never silenced by the
+  failure of its own noise-suppression machinery.
+- **Registered at every composition root that publishes** — `src/instrumentation.ts`
+  (the whole Next app, before the boot publish), `scripts/mymrc-scrape.mjs` (before
+  the D9 credential gate, itself one of the hourly re-firing pages), and the five
+  one-shot MyMRC CLIs. Unconditional, and an unregistered process logs a `level:40`
+  line naming the degradation — shipped-disabled must not look identical to
+  shipped-working.
+- **ADR-0130 §6 grading matrix applied.** Every MyMRC alert was `high` / 30 min,
+  a grade nobody had re-examined since ADR-0038 and one that was nominal anyway.
+  Now per-kind: `auth_failed` high/6 h, `contract_drift` high/24 h, `zero_anomaly`
+  high/12 h, `deadman` high/12 h (was a 6 h override), `stale_mirror` **default**/24 h,
+  `dateless_hauls` **default**/24 h, `error` **default**/6 h. `PageAlert` gained an
+  optional `priority` override because two matrix rows are condition-dependent, not
+  kind-dependent (D6's ≥5-business-day escalation, and `error`'s promote-after-3).
+  `FRESHNESS_COOLDOWN_MS` is now DERIVED from the matrix row, so the grade and the
+  code cannot drift apart. Workbook sync splits its window by status: `forbidden`
+  re-pages at 12 h (one action, a minute long, nothing ingests until it happens),
+  `not_found` keeps 24 h (someone has to go looking for the file). Nothing publishes
+  `urgent`, and a test asserts it.
+- **Tests.** `ntfy-cooldown-restart.test.ts` simulates a process restart with
+  `vi.resetModules()` — a fresh module graph is what a new process gets — and carries
+  a permanent NEGATIVE CONTROL asserting the in-memory ledger DOES lose the cooldown;
+  without it the durable test could pass for an unrelated reason. The SQL claims are
+  proven against a REAL Postgres in `ntfy-cooldown-store.db.test.ts` (picked up by
+  CI's existing `db.test.ts` path filter): 24 hourly ticks yielding exactly one claim,
+  10 concurrent claimers yielding exactly one winner, an inclusive expiry boundary,
+  release-guarded-on-expiry, and `send_count` not inflating on a refusal.
+  `mymrc-scrape-d9.test.ts` asserts the registration happens BEFORE the first page can
+  fire, by spy invocation order.
+
+### The four condition changes (D6, D8, D9/D10, D11) — same day, on Bill's approval
+
+D1–D5 stopped the storm's DELIVERY. These fix what was being delivered: two of the
+three underlying conditions were not what their page said they were.
+
+- **D6 — freshness is measured in BUSINESS DAYS, not calendar hours.**
+  `DEFAULT_MAX_AGE_MS = 96h` was justified as "clears a normal weekend plus a
+  holiday Monday without firing." It does not. The `processed` feed carries exactly
+  one row per business day, day D lands at D+1 (D+3 across a weekend), and
+  `entry_date` is noon-anchored — so an ordinary Monday peaks at 83–99 h against a
+  96 h line. Whether Bill's phone rang was decided by what time on Saturday MyMRC
+  posted Friday's row: **three false pages in thirty-eight days against one true
+  one.** Replayed hour-by-hour against production `first_seen_at` over the same 38
+  days, `> 2 business days` fires **once**, on the real nine-day freeze — and is
+  FASTER on a real one (three business days behind is reached on the Friday of a
+  Wednesday freeze; 96 h waits for the fourth calendar day). New
+  `src/lib/mymrc/business-days.ts`, zero imports, Pacific-anchored.
+- **The holiday list already existed and is not the federal set.** `site_holidays`
+  is populated in production for both sites across 2026–2027 and already contains
+  2026-09-07 Labor Day; it backs the AP escalation clock, the throughput-gap
+  watchdog, the audit sweep and the bonus EOD check. It holds the **six** closures
+  Bill confirmed (charter Q19, `prisma/seed/README.md`), not eleven — and six is
+  correct here: marking a day the floor works as a non-business day would
+  under-count the deficit and delay a real freeze. A negative-control test pins
+  that dropping the list makes Labor Day a false page again.
+- **D6 was NOT applied to two downstream guards.** `cor/inbound-gate.ts` and
+  `loads/eod-inventory.ts` imported `DEFAULT_MAX_AGE_MS` so the three could not
+  drift. Converting them would silently re-decide a `409` that blocks a COR from
+  being filed. Both now carry their own explicit calendar constant with the
+  decoupling stated and a test pinning it; behaviour is unchanged. The conversion is
+  probably right and is Bill's call — `docs/OPEN-ITEMS.md` BR-9.
+- **D8 — one condition pages once.** `processed` and `outbound` freeze together
+  because they are one upstream stoppage; the per-feed fingerprint made that two
+  identical pages an hour. Fingerprint is now `mymrc-stale-mirror:<site>` and the
+  message names the stale feeds. The alert envelope deliberately carries no `feed`,
+  because the ` [<feed>]` title suffix would be lying about the other one. Escalates
+  to `high` at ≥5 business days via the `priority` override. The old ledger keys
+  orphan harmlessly — the D1 reaper clears them at 7 days past expiry.
+- **D9 — the tolerant matcher.** Only **4 of the 7** monthly workbooks on the live
+  Woodland drive match `{MONTH} {YEAR} DAILY LOG WOODLAND.xlsm`. `SEPT 2026 DAILY
+LOG WOODLAND.xlsm` is what cost 337 — now **393** — consecutive failed polls while
+  the floor kept filling the file in. On an exact-name miss the engine lists the
+  folder and looks for a single `.xlsm` carrying the year and a ≥3-char prefix of
+  the month name, ignoring case, `_` and a `(n)` copy suffix, matching whole TOKENS
+  so `JUNK` does not satisfy June. Exactly one candidate is used; **zero or more
+  than one stays `not_found`** — refusing to choose between `MARCH … TEMPLATE …` and
+  `MARCH …` is the point, since guessing would ingest a template into billing data.
+  Costs no extra Graph call on the happy path (`getFile` is itself built on
+  `listFolder`). Unit-tested against all seven real names. Deliberately a NEW
+  function: `fileNameMatchesPattern` stays strict because `archive.ts` decides what
+  to archive with it.
+- **The `not_found` page now lists the folder.** The old text — "check for a
+  rename, a typo, a stray copy, or a moved folder" — named the four actions ADR-0102
+  §1 had already recorded as the wrong place to look, and could not distinguish an
+  empty folder from a full one. It now names the resolved folder and its contents,
+  so `SEPT` is visible against `SEPTEMBER` without opening SharePoint.
+- **D10 — the folder pattern is re-tokenised in production, by migration.** The live
+  row still literally held `…/2026 Daily Logs/August 2026 Woodland`: ADR-0102 §5
+  specified the tokenised value, `resolveMonthlyFolderPath` implements it correctly,
+  and a token-free string simply comes back unchanged. **The code shipped; the row
+  never moved** — the second incident in this repo whose root cause is "the ADR
+  shipped, the data did not" (P-63). A runbook step would have been the third, so
+  the fix is expressed as data in
+  `20260860_adr0130_workbook_resolved_folder`: conservative, idempotent, and only
+  touching rows with no `{`. Replayed against the exact production string on a
+  throwaway Postgres — it produces ADR-0102 §5's value verbatim, is a no-op on a
+  second run, and leaves a drive-root row and "Augusta Operations" untouched. Both
+  admin routes now 422 the shape on save. `workbook_sync_runs` gained
+  `folder_path_resolved` and `file_name_matched`, so a future reader can see where
+  the transport looked and what it actually used.
+- **D11 — the doc-ingest condition is split.** `discovery_gap` carried two findings
+  on one enum member and one subject, so they shared a fingerprint and an
+  `occurrences` counter and neither could be graded without regrading the other.
+  Verified read-only on production: **every one of the eight `discovery_gap` pages
+  was a probe failure**, all resolved, all `occurrences = 1` — 9 errored scans out
+  of 2,480 over 26 days (0.36%), each followed by a success on the next 15-minute
+  tick. That fails ADR-0037 Q3 outright. "The probe could not run" is now
+  `discovery_probe_failed` on its own subject, `default`, paging only after **3
+  consecutive** misses (~45 min of real blindness) with a 6 h repage; the real gap
+  keeps `discovery_gap` and is promoted to `high` on its leading edge with 24 h.
+  `AnomalyPolicy` gained a per-kind `repageIntervalMs`. **"Consecutive" needed a
+  resolve, not just a counter** — `occurrences` has no decrement and only resets when
+  the open row closes, so a successful scan now resolves the probe-failure row; a
+  falsification run confirms removing it turns the suite red. No backfill: there is
+  no OPEN row to re-key, and historical rows keep the kind the system actually
+  believed at the time.
+
+**Residual (reported, not changed):** `scripts/bonus-eod-check.mjs` hand-rolls its own
+ntfy publish with no cooldown ledger at all — its `X-Dedup-Id` header is decorative
+(ntfy does not honour it). Not storm-capable today: a long-running loop, one fire per
+Pacific day, per-day fingerprint. Wiring it would add a `dist/` build dependency to a
+script deliberately kept free of one. ADR-0130 D6–D11 (business-day freshness, one
+page per site, the doc-ingest probe/gap split, the workbook folder-pattern guard)
+remain unimplemented — they change detection CONDITIONS, not grades.
+
 ## 2026-08-27 — The mail that left by hand, and the roster the warning ignored (ADR-0129)
 
 The first live ADR-0126 digest surfaced its own backlog and one false name,

@@ -16,6 +16,8 @@ import {
 import { FakePrisma, dec } from './__tests__/fake-prisma';
 
 const JUNE = () => new Date('2026-06-15T18:00:00Z'); // June (PDT)
+/** A zero-byte stand-in — these cases never get as far as parsing. */
+const EMPTY = new Uint8Array();
 const JUNE_FILE = 'JUNE 2026 DAILY LOG WOODLAND.xlsm';
 
 async function juneFile(ctag = 'ctag-v1'): Promise<MockFileSpec> {
@@ -558,8 +560,93 @@ describe('the health watermark and the graded alarm (ADR-0037)', () => {
     expect(publishNtfy).toHaveBeenCalledOnce();
     const call = vi.mocked(publishNtfy).mock.calls[0]![0];
     expect(call.priority).toBe('high');
-    expect(call.body).toMatch(/rename, a typo, a stray copy/);
+    // ADR-0130 D9 — the page names WHERE it looked and says the folder is empty.
+    // The old text ("check for a rename, a typo, a stray copy, or a moved folder")
+    // listed the same four actions ADR-0102 §1 had already recorded as the wrong
+    // place to look, and could not distinguish an empty folder from a full one.
+    expect(call.body).toMatch(/folder is EMPTY/);
+    expect(call.body).not.toMatch(/rename, a typo, a stray copy/);
     expect(source.last_alert_at).toEqual(JUNE());
+  });
+
+  it('D9 — a tolerantly-named workbook is READ, and the ledger records the real name', async () => {
+    // The live September shape, replayed on June: the file is present, the floor
+    // has been filling it in, and only the NAME differs from the pattern. Before
+    // ADR-0130 this was 393 consecutive `not_found` polls.
+    const db = new FakePrisma();
+    db.seedSource();
+    const bytes = await buildFixtureWorkbookBytes();
+    const transport = mockFilesTransport({
+      files: [{ id: 'f-tol', name: 'JUN_2026 DAILY LOG WOODLAND(2).xlsm', ctag: 'c1', bytes }],
+    });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    expect(res.results[0]!.status).toBe('ok');
+    expect(res.results[0]!.rowsUpserted).toBeGreaterThan(0);
+    expect(publishNtfy).not.toHaveBeenCalled();
+
+    const run = db.syncRuns[0]!;
+    // `file_name` stays the EXPECTATION; `file_name_matched` is what was used.
+    expect(run['file_name']).toBe(JUNE_FILE);
+    expect(run['file_name_matched']).toBe('JUN_2026 DAILY LOG WOODLAND(2).xlsm');
+  });
+
+  it('D10 — every run records the RESOLVED folder path, not just the pattern', async () => {
+    // The September outage was invisible for six days because nothing recorded
+    // which folder the transport had asked for. A reader could not see that it was
+    // still asking for August.
+    const db = new FakePrisma();
+    db.seedSource({
+      folder_path:
+        'DR3/Woodland/Woodland Operations/{YEAR} Daily Logs/{MONTH_TITLE} {YEAR} Woodland',
+    });
+    const transport = mockFilesTransport({ files: [await juneFile()] });
+
+    await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    expect(db.syncRuns[0]!['folder_path_resolved']).toBe(
+      'DR3/Woodland/Woodland Operations/2026 Daily Logs/June 2026 Woodland',
+    );
+  });
+
+  it('D9 — the not_found page LISTS the folder so SEPT vs SEPTEMBER is visible', async () => {
+    // The live September state: the file is right there, named `SEPT`, and the page
+    // said "check for a rename" for six days without ever showing the name.
+    const db = new FakePrisma();
+    db.seedSource({ last_success_at: new Date('2026-06-01T00:00:00Z') });
+    // Two candidates ⇒ deliberately ambiguous ⇒ not_found WITH the listing.
+    const transport = mockFilesTransport({
+      files: [
+        { id: 'f1', name: 'JUNE 2026 DAILY LOG WOODLAND(1).xlsm', ctag: 'c1', bytes: EMPTY },
+        { id: 'f2', name: 'JUNE 2026 DAILY LOG TEMPLATE WOODLAND.xlsm', ctag: 'c2', bytes: EMPTY },
+      ],
+    });
+
+    const res = await runWorkbookSyncPoll({
+      prisma: db.asClient(),
+      transport,
+      allowNonGraphWrites: true,
+      now: JUNE,
+    });
+
+    expect(res.results[0]!.status).toBe('not_found');
+    const call = vi.mocked(publishNtfy).mock.calls[0]![0];
+    expect(call.body).toContain('JUNE 2026 DAILY LOG WOODLAND(1).xlsm');
+    expect(call.body).toContain('JUNE 2026 DAILY LOG TEMPLATE WOODLAND.xlsm');
+    // Refusing to guess between a copy and a template is the point — picking one
+    // would ingest a template into billing data.
+    expect(res.results[0]!.rowsUpserted).toBe(0);
   });
 
   it('pages ONCE per site per day, not once per poll — the refusal flood', async () => {
@@ -590,6 +677,47 @@ describe('the health watermark and the graded alarm (ADR-0037)', () => {
 
     expect(db.pud).toHaveLength(0);
     expect(publishNtfy).toHaveBeenCalledOnce();
+  });
+
+  it('ADR-0130 §6 — a 403 re-pages at 12h; a not_found waits the full 24h', async () => {
+    // Both are silent data loss, but they differ on ADR-0037 Q1. `forbidden` has
+    // ONE action that takes a minute (re-grant Files.Read.All) and nothing ingests
+    // until it happens; `not_found` needs a person to go looking for a renamed or
+    // moved file, which is a working-hours task. Same fingerprint, different nag
+    // rate — so the window has to be chosen by STATUS, not by the site.
+    const at13h = (base: Date) => new Date(base.getTime() + 13 * 60 * 60 * 1000);
+    // `publishNtfy` is imported as its declared type, so reach the spy through
+    // vi.mocked() rather than asserting `.mock` on the function type.
+    const pager = vi.mocked(publishNtfy);
+
+    const forbiddenDb = new FakePrisma();
+    forbiddenDb.seedSource();
+    for (const at of [JUNE(), at13h(JUNE())]) {
+      await runWorkbookSyncPoll({
+        prisma: forbiddenDb.asClient(),
+        transport: mockFilesTransport({ forbidden: true }),
+        allowNonGraphWrites: true,
+        now: () => at,
+      });
+    }
+    expect(publishNtfy).toHaveBeenCalledTimes(2);
+    expect(pager.mock.calls[0]?.[0]).toMatchObject({ cooldownMs: 12 * 60 * 60 * 1000 });
+
+    pager.mockClear();
+
+    // The SAME 13-hour gap, on a missing file, must page only once.
+    const notFoundDb = new FakePrisma();
+    notFoundDb.seedSource();
+    for (const at of [JUNE(), at13h(JUNE())]) {
+      await runWorkbookSyncPoll({
+        prisma: notFoundDb.asClient(),
+        transport: mockFilesTransport({ files: [] }),
+        allowNonGraphWrites: true,
+        now: () => at,
+      });
+    }
+    expect(publishNtfy).toHaveBeenCalledOnce();
+    expect(pager.mock.calls[0]?.[0]).toMatchObject({ cooldownMs: 24 * 60 * 60 * 1000 });
   });
 
   it('pages again once the 24h window has passed and the failure persists', async () => {

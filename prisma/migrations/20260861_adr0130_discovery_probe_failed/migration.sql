@@ -1,0 +1,37 @@
+-- ADR-0130 D11 — "the probe could not run" becomes its own condition.
+--
+-- `discovery_gap` carried TWO findings on ONE enum member and ONE subject
+-- (`discovery:reachability`), which meant one fingerprint and one `occurrences`
+-- counter for both:
+--
+--   (a) the reachability probe could not RUN — `POST /search/query` returned HTTP
+--       500 / was aborted. Upstream, transient, and self-healing: measured on
+--       production 2026-09-07, 9 errored scans out of 2,480 over 26 days (0.36%),
+--       every one followed by a success on the next 15-minute tick.
+--   (b) a REAL gap — documents Vision can read that nothing is watching. Actionable,
+--       and it cannot self-heal.
+--
+-- Sharing a row made them impossible to grade apart: a probe failure bumped the gap
+-- row, a successful scan carrying a gap did not resolve the failure row, and either
+-- could page as the other. Every one of the eight `discovery_gap` pages in the live
+-- ledger was in fact (a) — a single blip that had already healed by the time the
+-- phone buzzed, which fails ADR-0037 Q3 (has the system tried to self-heal first?).
+--
+-- After this: (a) is `discovery_probe_failed` on subject
+-- `discovery:reachability:probe`, priority `default`, and pages only after THREE
+-- consecutive misses (~45 minutes of genuine blindness). (b) keeps `discovery_gap`
+-- and is regraded to `high` on its leading edge.
+--
+-- NO DATA BACKFILL, deliberately. Verified read-only on production 2026-09-07: every
+-- `discovery_gap` row is `status = 'resolved'` (8 rows, all probe failures, all
+-- `occurrences = 1`) and there is no OPEN row to re-key. The historical rows keep
+-- their original kind, which is the truthful record of what the system believed at
+-- the time; rewriting them would make the ledger claim a distinction the code did
+-- not yet draw.
+--
+-- `ALTER TYPE ... ADD VALUE` cannot run in the same transaction as a statement that
+-- USES the new value. Prisma's migration runner executes statements separately and
+-- this file adds a value only, so it is safe — same shape as
+-- `20260850_adr0112_discovery_probe_contradiction`.
+
+ALTER TYPE "DocIngestAnomalyKind" ADD VALUE IF NOT EXISTS 'discovery_probe_failed';

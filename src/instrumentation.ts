@@ -4,12 +4,14 @@
 //   1. (Node) GlitchTip/Sentry server-runtime init — error reporting (ADR-0022 §2).
 //   2. (Node) OpenTelemetry NodeSDK — traces to Tempo (ADR-0022 §1), gated on
 //      TEMPO_ENDPOINT so it no-ops cleanly in dev / when unset (fail-open).
-//   3. (Node) Publish `[DR3-Vision] Container started` to `dr3-vision-container`
+//   3. (Node) Register the Postgres-backed ntfy cooldown ledger (ADR-0130) —
+//      before any publish, or this process's cooldowns die with the process.
+//   4. (Node) Publish `[DR3-Vision] Container started` to `dr3-vision-container`
 //      (30-min cooldown so a crashloop doesn't spam Bill's phone).
-//   4. (Node) Wire `uncaughtException` / `unhandledRejection` → ntfy publish with a
+//   5. (Node) Wire `uncaughtException` / `unhandledRejection` → ntfy publish with a
 //      30-min per-fingerprint cooldown. (GlitchTip captures these too; the two
 //      gate independently per ADR-0022 §2.)
-//   5. (Edge) GlitchTip/Sentry edge-runtime init.
+//   6. (Edge) GlitchTip/Sentry edge-runtime init.
 //
 // The hook is invoked once per Node.js process. We guard the edge runtime (no
 // signal hooks there) and dev-mode HMR re-instantiation (which would stack
@@ -36,6 +38,20 @@ export async function register(): Promise<void> {
 
   // ─── OpenTelemetry (traces → Tempo) ────────────────────────────────────
   await initOpenTelemetry();
+
+  // ─── ADR-0130: point the ntfy cooldown ledger at Postgres ──────────────
+  //
+  // MUST run before the first publish below. Without it every publisher in this
+  // process falls back to the in-process map, and every alert condition that is
+  // still true re-pages on the next container recreation — which is every deploy,
+  // since swarmpilot_deployer recreates ~19 containers at once. The store emits a
+  // `level:40` line naming the degradation if this is ever skipped, so a missing
+  // registration shows up in Loki rather than passing for healthy.
+  {
+    const { setCooldownDb } = await import('@/lib/ntfy-cooldown-store');
+    const { prisma } = await import('@/lib/prisma');
+    setCooldownDb(prisma);
+  }
 
   // ─── ntfy boot publish + uncaught handlers (existing behavior) ──────────
   const { publishContainerStart, publishUnhandledError } = await import('@/lib/ntfy');

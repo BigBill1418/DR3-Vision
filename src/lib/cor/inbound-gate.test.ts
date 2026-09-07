@@ -38,10 +38,12 @@ import {
 
 const INCIDENT_NOW = new Date('2026-07-30T20:00:00Z');
 const FROZEN_DELIVERED_MAX = new Date('2026-07-21T12:00:00Z');
+/** The site closure list (unused by this gate — see the note below). */
+const HOLIDAYS: ReadonlySet<string> = new Set(['2026-07-03', '2026-09-07']);
 
 describe('assertInboundFreshnessForCor (pure) — the 2026-07 incident fixture', () => {
   it('REFUSES on the exact incident state: delivered frozen 07-21, filing on 07-30', () => {
-    const f = assessFreshness('hauls', FROZEN_DELIVERED_MAX, INCIDENT_NOW);
+    const f = assessFreshness('hauls', FROZEN_DELIVERED_MAX, INCIDENT_NOW, HOLIDAYS);
     expect(f.stale).toBe(true);
     expect(() => assertInboundFreshnessForCor(f)).toThrowError(CorInboundStaleError);
     try {
@@ -56,12 +58,33 @@ describe('assertInboundFreshnessForCor (pure) — the 2026-07 incident fixture',
   });
 
   it('passes when the newest delivered haul is within the freshness threshold', () => {
-    const f = assessFreshness('hauls', new Date('2026-07-29T12:00:00Z'), INCIDENT_NOW);
+    const f = assessFreshness('hauls', new Date('2026-07-29T12:00:00Z'), INCIDENT_NOW, HOLIDAYS);
     expect(() => assertInboundFreshnessForCor(f)).not.toThrow();
   });
 
+  it('gates on CALENDAR age, not on the D6 business-day verdict', () => {
+    // ADR-0130 D6 moved the mirror-freshness PAGER to business days. This gate was
+    // deliberately left on calendar hours (COR_INBOUND_STALE_MS): it is a 409 that
+    // blocks a billing document, and re-deciding that threshold is not something a
+    // notification-noise ADR gets to do implicitly.
+    //
+    // A Monday where the two verdicts DISAGREE, which is exactly the shape that
+    // false-paged three times: newest delivered Thu 2026-09-03, filing Mon
+    // 2026-09-07 (Labor Day). One business day behind — the pager stays quiet — but
+    // 105 calendar hours, so this gate still refuses, as it did before ADR-0130.
+    const f = assessFreshness(
+      'hauls',
+      new Date('2026-09-03T12:00:00Z'),
+      new Date('2026-09-07T21:00:00Z'),
+      new Set(['2026-09-07']),
+    );
+    expect(f.stale).toBe(false); // D6: not stale
+    expect(f.ageMs).toBeGreaterThan(96 * 3_600_000); // calendar: past the gate
+    expect(() => assertInboundFreshnessForCor(f)).toThrowError(CorInboundStaleError);
+  });
+
   it('an empty mirror is bootstrap, not stale (assessFreshness contract)', () => {
-    const f = assessFreshness('hauls', null, INCIDENT_NOW);
+    const f = assessFreshness('hauls', null, INCIDENT_NOW, HOLIDAYS);
     expect(() => assertInboundFreshnessForCor(f)).not.toThrow();
   });
 });

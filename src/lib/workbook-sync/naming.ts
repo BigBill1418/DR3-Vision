@@ -133,3 +133,122 @@ export function yearMonthKeyFromFileName(pattern: string, fileName: string): str
 export function fileNameMatchesPattern(pattern: string, fileName: string): boolean {
   return yearMonthKeyFromFileName(pattern, fileName) !== null;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// ADR-0130 D9 — the tolerant matcher
+// ────────────────────────────────────────────────────────────────────────────
+//
+// An exact-name match against a human-named file is the wrong contract. Of the
+// seven months on the live Woodland drive (enumerated read-only through the Graph
+// transport, 2026-09-07), only FOUR match `{MONTH} {YEAR} DAILY LOG WOODLAND.xlsm`:
+//
+//   MARCH_2026 DAILY LOG TEMPLATE WOODLAND.xlsm   underscore + an extra word
+//   APRIL 2026 DAILY LOG WOODLAND.xlsm            ok
+//   MAY 2026 DAILY LOG WOODLAND(1).xlsm           a `(1)` copy suffix
+//   JUNE / JULY / AUGUST …                        ok
+//   SEPT 2026 DAILY LOG WOODLAND.xlsm             abbreviated month
+//
+// Four of seven is not a naming convention; it is a coincidence that held four
+// times. `SEPT` is what cost 337 consecutive failed polls while the floor kept
+// filling the file in.
+//
+// This is a SEPARATE function from `fileNameMatchesPattern` on purpose. That one
+// is the STRICT pattern match and `archive.ts` uses it to decide which files in a
+// folder are monthly workbooks worth archiving; loosening it there would change
+// archival behaviour as a side effect of fixing discovery.
+
+/** Minimum month-prefix length. All twelve 3-letter month prefixes are unique. */
+const MIN_MONTH_PREFIX = 3;
+
+/**
+ * Normalise a file name for tolerant comparison: lowercase, `_` as a space, and a
+ * trailing ` (n)` / `(n)` copy suffix removed from the stem.
+ */
+function normaliseForMatch(fileName: string): { stem: string; ext: string } {
+  const trimmed = fileName.trim();
+  const dot = trimmed.lastIndexOf('.');
+  const ext = dot < 0 ? '' : trimmed.slice(dot).toLowerCase();
+  const rawStem = dot < 0 ? trimmed : trimmed.slice(0, dot);
+  const stem = rawStem
+    .toLowerCase()
+    .replace(/\s*\(\d+\)\s*$/, '') // ` (1)` / `(1)` copy suffix
+    .replace(/_/g, ' ')
+    .trim();
+  return { stem, ext };
+}
+
+/** Alphanumeric tokens of a normalised stem. */
+function tokens(stem: string): string[] {
+  return stem.split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+export interface TolerantMonthlyMatch {
+  /** The single matching file name, or null when zero or more than one matched. */
+  matched: string | null;
+  /** Every candidate considered a match — 0, 1, or the ambiguous set. */
+  candidates: string[];
+}
+
+/**
+ * Find THE `.xlsm` in `fileNames` that is this month's workbook, tolerantly.
+ *
+ * A candidate is an `.xlsm` whose name carries the 4-digit year as a token AND a
+ * token that is a prefix (>= 3 chars) of the month name — ignoring case, `_`, and a
+ * trailing copy suffix. Matching a whole TOKEN rather than a substring is what keeps
+ * `JUNK 2026 …` from satisfying June.
+ *
+ * Exactly one candidate ⇒ that file. Zero or more than one ⇒ `matched: null`, and
+ * the caller reports `not_found` WITH the folder listing. Refusing on ambiguity is
+ * the point: silently preferring one of `MARCH … TEMPLATE …` and `MARCH …` would
+ * ingest a template into billing data.
+ *
+ * Anchored on the PACIFIC month of `at`, like every other rollover here.
+ */
+export function matchMonthlyFileTolerant(
+  fileNames: readonly string[],
+  at: Date,
+): TolerantMonthlyMatch {
+  const { year, month0 } = pacificYearMonth(at);
+  const monthLower = MONTHS_UPPER[month0]!.toLowerCase();
+  const yearToken = String(year);
+
+  const candidates = fileNames.filter((name) => {
+    const { stem, ext } = normaliseForMatch(name);
+    if (ext !== '.xlsm') return false;
+    const tk = tokens(stem);
+    if (!tk.includes(yearToken)) return false;
+    return tk.some(
+      (t) =>
+        t.length >= MIN_MONTH_PREFIX && t.length <= monthLower.length && monthLower.startsWith(t),
+    );
+  });
+
+  return { matched: candidates.length === 1 ? candidates[0]! : null, candidates: [...candidates] };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ADR-0130 D10 — the untokenised-folder guard
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * True when `folderPath` names a month literally but carries no `{…}` token.
+ *
+ * That shape is a latent time-bomb: correct this month, silently wrong the next.
+ * It is not hypothetical — the live Woodland row held
+ * `…/2026 Daily Logs/August 2026 Woodland` with the month already expanded, so when
+ * the file name rolled to SEPTEMBER on 2026-09-01 the transport went on asking for
+ * September's file inside August's folder. ADR-0102 §5 specified the tokenised
+ * value and `resolveMonthlyFolderPath` implements it correctly — a string with no
+ * tokens simply comes back unchanged. The code shipped; the row never moved.
+ *
+ * Any `{` is treated as intentional tokenisation, so this only flags the fully
+ * token-free case. Whole-word match so "Augusta Operations" is not a month.
+ */
+export function folderPathHasUntokenisedMonth(folderPath: string): boolean {
+  if (folderPath.includes('{')) return false;
+  const words = folderPath
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+  return MONTHS_UPPER.some((m) => words.includes(m.toLowerCase()));
+}

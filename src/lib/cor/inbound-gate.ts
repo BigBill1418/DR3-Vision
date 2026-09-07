@@ -21,11 +21,30 @@
 // `assessFreshness`); the D2.1/D3 reconcile tripwire still governs that case.
 
 import { prisma } from '@/lib/prisma';
-import {
-  DEFAULT_MAX_AGE_MS,
-  measureFeedFreshness,
-  type FeedFreshness,
-} from '@/lib/mymrc/freshness';
+import { measureFeedFreshness, type FeedFreshness } from '@/lib/mymrc/freshness';
+
+/**
+ * How stale the delivered-hauls feed may be before a COR is refused, in CALENDAR
+ * hours.
+ *
+ * This was `DEFAULT_MAX_AGE_MS` imported from the MyMRC freshness guard. ADR-0130
+ * D6 changed THAT guard to measure in business days, because a feed carrying one
+ * row per business day cannot be graded in calendar hours without false-paging on
+ * ordinary Mondays. This gate was deliberately NOT converted with it, and the
+ * number is restated here rather than re-imported so the decoupling is visible:
+ *
+ *   - D6 decided the units of the PAGER. It said nothing about this gate, which is
+ *     a 409 that blocks a billing document from being filed. Silently re-deciding a
+ *     billing-adjacent refusal threshold on the back of a notification-noise ADR is
+ *     not a change to make without its own decision.
+ *   - The conversion is probably right and probably makes this gate STRICTLY
+ *     better: under calendar hours this refuses to file a COR on an ordinary Monday
+ *     for the same reason the pager false-fired on one. Recorded as a follow-on in
+ *     `docs/OPEN-ITEMS.md` rather than done here.
+ *
+ * Until then this gate behaves exactly as it did before ADR-0130.
+ */
+export const COR_INBOUND_STALE_MS = 96 * 60 * 60 * 1000;
 
 /** The delivered-hauls feed is stale — refuse to derive a COR figure from it. */
 export class CorInboundStaleError extends Error {
@@ -62,7 +81,10 @@ export class CorLedgerNegativeError extends Error {
  * to 08-10 MUST refuse).
  */
 export function assertInboundFreshnessForCor(f: FeedFreshness): void {
-  if (!f.stale) return;
+  // `f.stale` is the ADR-0130 D6 BUSINESS-DAY verdict; this gate deliberately keeps
+  // the calendar-hour one (see COR_INBOUND_STALE_MS). An empty mirror carries a null
+  // age and is bootstrap, not stale — unchanged.
+  if (f.ageMs === null || f.ageMs <= COR_INBOUND_STALE_MS) return;
   throw new CorInboundStaleError({
     newest: f.newest ? f.newest.toISOString().slice(0, 10) : null,
     ageDays: f.ageMs !== null ? f.ageMs / 86_400_000 : null,
@@ -76,12 +98,7 @@ export async function assertCorInboundFresh(now: Date = new Date()): Promise<voi
   // corrected 2026-07-31 for rows, re-keyed 2026-08-10 per ADR-0089 D3) — the SAME
   // key the inbound bridge aggregates on, which is exactly the signal that feeds
   // the COR's inventory figure. This gate inherits both fixes with no code here.
-  const f = await measureFeedFreshness({
-    prisma,
-    feed: 'hauls',
-    now,
-    maxAgeMs: DEFAULT_MAX_AGE_MS,
-  });
+  const f = await measureFeedFreshness({ prisma, feed: 'hauls', now });
   assertInboundFreshnessForCor(f);
 }
 

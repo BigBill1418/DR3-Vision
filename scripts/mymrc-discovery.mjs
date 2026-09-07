@@ -49,6 +49,9 @@ const disc = require(resolve(MYMRC_DIST, 'discovery.js'));
 const store = require(resolve(MYMRC_DIST, 'credential-store.js'));
 const portal = require(resolve(MYMRC_DIST, 'portal-client.js'));
 const ntfy = require(resolve(MYMRC_DIST, 'ntfy.js'));
+// ADR-0130 — the durable cooldown ledger. Required directly (not via the index
+// barrel) to match how this script loads every other mymrc module.
+const cooldownStore = require(resolve(MYMRC_DIST, 'cooldown-store.js'));
 const { LOGIN_URL, AUTHED_HOME_URL, PORTAL_ORIGIN, OBJECT_NAV_SLUGS } = require(
   resolve(MYMRC_DIST, 'selectors.js'),
 );
@@ -195,6 +198,8 @@ async function main() {
   }
 
   const prisma = new PrismaClient();
+  // ADR-0130 — one-shot process: without this the ADR-0037 cooldown is a no-op.
+  cooldownStore.setCooldownDb(prisma);
   let creds;
   try {
     creds = await store.getMymrcCredentials(prisma);

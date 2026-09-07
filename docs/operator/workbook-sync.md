@@ -59,13 +59,50 @@ Ledger semantics:
   empty; skipped this poll, retried next, **no alert** (D11, eventual consistency).
 - `rows_overwritten > 0` — a Vision-captured day was overwritten by the workbook;
   each carries an audit row (`table_name=processed_units_daily`, `vision_overwrite=true`).
-- `status=not_found` — the current month's file does not exist yet (e.g. the 1st of
-  a new month before Janette creates it). A clean no-op.
+- `status=not_found` — nothing matched in the resolved folder. On the 1st of a new
+  month, before the file is created, this is a clean no-op. **After the first few
+  days of a month it is not** — see "when `not_found` persists" below.
 - `status=forbidden` — see the 403 symptom above.
 
 The monthly file **rolls over automatically** (D5): the source's naming pattern
 (`{MONTH} {YEAR} DAILY LOG WOODLAND.xlsm`) is expanded against the current Pacific
 month each poll, so on 8/1 it switches to August's file with no config change.
+**The FOLDER rolls over the same way and only if `folder_path` still contains its
+tokens** (ADR-0102) — `…/{YEAR} Daily Logs/{MONTH_TITLE} {YEAR} Woodland`.
+
+## When `not_found` persists
+
+Two independent defects produce an identical `not_found`, **either one is enough
+on its own**, and the page's old advice ("check for a rename, a typo, a stray
+copy, a moved folder") sends you looking at the wrong end. Both have now happened
+to this source — ADR-0102 (2026-08-12) and again ADR-0130 §4 (2026-09-07). Work
+them in this order:
+
+1. **Is the resolved FOLDER this month's?** Read `folder_path` on the source. If
+   it contains a literal month name (`August 2026 Woodland`) instead of
+   `{MONTH_TITLE}`, the expansion is a no-op and the sync is asking for this
+   month's file inside last month's folder. It was correct for exactly one month
+   and is silently wrong forever after. Re-tokenise the row.
+2. **Is the file named what the pattern says?** Enumerate the resolved folder
+   before assuming the file is missing — the `not_found` page now lists the folder
+   contents for exactly this reason. Real names seen on this drive:
+   `MARCH_2026 DAILY LOG TEMPLATE WOODLAND.xlsm`,
+   `MAY 2026 DAILY LOG WOODLAND(1).xlsm`, `SEPT 2026 DAILY LOG WOODLAND.xlsm` —
+   **3 of 7 months did not match the pattern.** The tolerant matcher (ADR-0130 D9)
+   absorbs case, `_`, a `(n)` copy suffix and a month-name prefix; anything past
+   that needs the file renamed at the source.
+3. **Only then** is it a genuinely absent file, and only then does anyone need to
+   be asked to create it.
+
+The check is read-only and takes one call — list
+`…/{YEAR} Daily Logs/{MONTH_TITLE} {YEAR} Woodland` through the same Graph
+transport the sync uses. Six weeks were lost in 2026-07/08 to not making it
+(ADR-0102 §1), and six days in 2026-09 to the same omission.
+
+> **What `consecutive_failures` does and does not tell you.** It counts polls, not
+> days — 337 of them is under six days at a 10-minute cadence during business
+> hours. It says the condition is unbroken, never how long it has been true. Read
+> `last_success_at` for that.
 
 ## Cutover (stop sync + archive)
 

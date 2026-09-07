@@ -171,6 +171,16 @@ export async function recordSessionFailure({
  * Returns the process exit code; the caller owns `process.exit`.
  */
 export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn = log, activeSites }) {
+  // ── ADR-0130: the cooldown ledger, FIRST ────────────────────────────────
+  //
+  // This worker is a fresh child process every hour (`mymrc-cron.mjs` spawns it
+  // and reaps it), so the module-scope cooldown Map that used to back ADR-0037
+  // started empty on every tick and a 24 h cooldown suppressed nothing. That is
+  // why Bill got two identical pages every hour on the hour for four days.
+  // Registering the DB-backed ledger BEFORE the D9 gate matters: the D9 page below
+  // is one of the alerts that would otherwise re-fire hourly forever.
+  mymrc.setCooldownDb(prisma);
+
   // ── D9 credential gate (ADR-0057 D9) — assert BEFORE any browser launch ──
   let creds;
   try {

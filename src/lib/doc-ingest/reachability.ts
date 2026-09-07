@@ -43,6 +43,22 @@ import { sourceKey } from './discovery';
 export const REACHABILITY_SUBJECT = 'discovery:reachability';
 
 /**
+ * ADR-0130 D11 — the "probe could not RUN" condition, on its OWN subject.
+ *
+ * It used to raise `discovery_gap` on {@link REACHABILITY_SUBJECT}, i.e. the same
+ * fingerprint and the same `occurrences` row as a real gap. That made the two
+ * impossible to grade apart: a probe failure bumped the gap row, a successful scan
+ * with a gap did not resolve the failure row, and either could page as the other.
+ *
+ * They are different findings. A probe failure is upstream and transient —
+ * measured on production 2026-09-07, 9 errored scans in 2,480 over 26 days (0.36%),
+ * every one followed by a success on the next 15-minute tick. It fails ADR-0037 Q3
+ * (has the system tried to self-heal?) on its first miss. A real gap is a reachable
+ * document nothing is watching: actionable, and it cannot self-heal.
+ */
+export const REACHABILITY_PROBE_SUBJECT = 'discovery:reachability:probe';
+
+/**
  * ADR-0112 — the subject for "the probe answered zero and the answer cannot be
  * true". A SEPARATE subject as well as a separate kind, so that clearing the
  * contradiction never touches a standing gap alert and vice versa.
@@ -140,9 +156,11 @@ export async function runReachabilityScan(
         error: reason,
       },
     });
+    // ADR-0130 D11 — its own kind and subject, so `pageAfterOccurrences: 3` counts
+    // probe failures and nothing else.
     const res = await raiseAnomaly(prisma, {
-      kind: 'discovery_gap',
-      subject: REACHABILITY_SUBJECT,
+      kind: 'discovery_probe_failed',
+      subject: REACHABILITY_PROBE_SUBJECT,
       detail: reason,
       context: { scope },
       now,
@@ -323,6 +341,25 @@ export async function runReachabilityScan(
       where: { id: { in: staleScans.map((s) => s.id) } },
     });
   }
+
+  // ── ADR-0130 D11 — the probe RAN, so any open probe-failure row is closed ──
+  //
+  // This resolve is what gives `pageAfterOccurrences: 3` its meaning. `occurrences`
+  // has no decrement; the counter only returns to 1 because the OPEN row is closed
+  // and the next raise inserts a fresh one. So "3 occurrences" equals "3 CONSECUTIVE
+  // failures" only if a success closes the row. Without this line, three unrelated
+  // blips a month apart would page as though they were 45 minutes of blindness.
+  //
+  // Deliberately BEFORE the gap branch and outside it: reaching this point means the
+  // search returned, which is the whole claim the probe-failure row makes. Whether
+  // there is also a gap is a different question with its own row.
+  await resolveAnomaly(
+    prisma,
+    'discovery_probe_failed',
+    REACHABILITY_PROBE_SUBJECT,
+    `The reachability probe ran (${byKey.size} document(s) in scope).`,
+    now,
+  );
 
   let anomaliesRaised = 0;
   if (gap.length > 0) {

@@ -45,7 +45,6 @@ import {
   anchorFlowBounds,
 } from '@/lib/inventory/running-balance';
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
-import { DEFAULT_MAX_AGE_MS } from '@/lib/mymrc/freshness';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
@@ -53,19 +52,24 @@ export const DEFAULT_EOD_INVENTORY_STALE_DAYS = 14;
 
 /**
  * How stale the INBOUND feed may get before the rendered figure carries a
- * why-suspect flag (handoff #270 §4b), in whole days.
+ * why-suspect flag (handoff #270 §4b), in whole CALENDAR days.
  *
- * Derived from `DEFAULT_MAX_AGE_MS` rather than chosen here, so this and the
- * mirror-freshness pager cannot drift into disagreeing about when intake has
- * stopped. That constant is 96h for a reason worth not re-deciding: it clears a
- * normal weekend plus a holiday Monday without crying wolf, while catching the
- * nine-day Woodland freeze on day four instead of never.
+ * This used to be `Math.round(DEFAULT_MAX_AGE_MS / 86_400_000)` — derived from the
+ * MyMRC freshness pager's 96 h so the two "cannot drift into disagreeing about when
+ * intake has stopped." ADR-0130 D6 moved THAT guard to business days, because a feed
+ * carrying one row per business day cannot be graded in calendar hours: it
+ * false-paged on three ordinary Mondays in thirty-eight days.
+ *
+ * The number is restated here rather than re-derived, so the decoupling is visible
+ * instead of implied. This flag is a rendering hint on an operator figure, not the
+ * pager, and converting it is its own (probably correct) decision — recorded as a
+ * follow-on in `docs/OPEN-ITEMS.md`. Behaviour is unchanged from before ADR-0130.
  *
  * Deliberately much tighter than the 14-day ANCHOR window. They measure different
  * things: an anchor is allowed to age while daily flows keep the balance honest,
  * but intake stopping for four days IS the thing that makes the balance dishonest.
  */
-export const INBOUND_STALE_DAYS = Math.round(DEFAULT_MAX_AGE_MS / 86_400_000);
+export const INBOUND_STALE_DAYS = 4;
 
 /**
  * The configured freshness window. Read at call time (not module load) so the

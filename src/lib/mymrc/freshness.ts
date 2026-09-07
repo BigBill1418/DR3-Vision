@@ -29,21 +29,50 @@
 // Bundle constraint: compiles standalone via tsconfig.mymrc.json — no `@/…`.
 
 import type { PrismaClient } from '@prisma/client';
-import type { Pager } from './ntfy';
+import { businessDaysBetween, pacificDayISO } from './business-days';
+import { GRADE_BY_KIND, type Pager } from './ntfy';
 import type { FeedName, SiteCode } from './types';
 
 export type Logger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: Logger = () => undefined;
 
 /**
- * How far the newest mirrored record may lag before the mirror is stale.
- * 96h clears a normal weekend plus a holiday Monday without firing, while still
- * catching the 9-day freeze on day 4 rather than never.
+ * How far behind the newest mirrored record may fall before the mirror is stale,
+ * in BUSINESS DAYS (ADR-0130 D6).
+ *
+ * This was `DEFAULT_MAX_AGE_MS = 96h`, justified as "96h clears a normal weekend
+ * plus a holiday Monday without firing." Measured against the live mirror over
+ * 2026-07-31 -> 2026-09-07, it does not. The `processed` feed carries exactly ONE
+ * row per business day, day D lands at D+1 (D+3 across a weekend) and `entry_date`
+ * is noon-anchored, so an ordinary Monday peaks at 83-99 h against a 96 h line.
+ * Whether Bill's phone rang on a given Monday was decided by what time on Saturday
+ * MyMRC posted Friday's row: THREE false pages in thirty-eight days against one
+ * true one. That is a units problem, not a tuning problem.
+ *
+ * Replayed hour-by-hour against production `first_seen_at` over the same 38 days,
+ * ">2 business days" fires exactly ONCE — on the real nine-day freeze — and it is
+ * also FASTER on a real freeze: three business days behind is reached on the Friday
+ * of a Wednesday freeze, where 96 h waits for the fourth calendar day.
  */
-export const DEFAULT_MAX_AGE_MS = 96 * 60 * 60 * 1000;
+export const DEFAULT_MAX_BUSINESS_DAYS = 2;
 
-/** Page at most once per site+feed per day (ADR-0037 Q4). */
-export const FRESHNESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+/**
+ * At or beyond this many business days behind, the page escalates from `default`
+ * to `high` (ADR-0130 §6). Nine business days was the real outage; three is a long
+ * weekend plus a slow Monday and does not deserve a `high`.
+ */
+export const ESCALATE_BUSINESS_DAYS = 5;
+
+/**
+ * Page at most once per site+feed per day (ADR-0037 Q4).
+ *
+ * DERIVED from the ADR-0130 §6 grading matrix rather than restated, so the
+ * threshold cannot drift away from the grade the ADR records. Before ADR-0130 this
+ * number was nominal: the cooldown lived in a per-process `Map` and this module is
+ * called from a worker that is a FRESH PROCESS every hour, so 24 h suppressed
+ * nothing and this alert paged Bill 24x/day for four days.
+ */
+export const FRESHNESS_COOLDOWN_MS = GRADE_BY_KIND.stale_mirror.cooldownMs;
 
 /**
  * The BUSINESS date each feed is measured on — the date the source assigns to
@@ -86,8 +115,19 @@ export interface FeedFreshness {
   feed: FeedName;
   /** Newest business date held for this feed, or null when the mirror is empty. */
   newest: Date | null;
-  /** How far behind `now` that date is, in ms. Negative for future-dated feeds. */
+  /**
+   * How far behind `now` that date is, in ms. Negative for future-dated feeds.
+   * RETAINED for the operator-facing message and for diagnosis — it is no longer
+   * what decides staleness (ADR-0130 D6). Reporting the calendar age next to the
+   * business-day count is what lets a reader see "105 h, but one business day".
+   */
   ageMs: number | null;
+  /**
+   * Business days between the newest record's day and today (exclusive of the
+   * record's own day, inclusive of today). Null when the mirror is empty. THIS is
+   * the number the threshold is applied to.
+   */
+  businessDaysBehind: number | null;
   stale: boolean;
 }
 
@@ -137,11 +177,21 @@ export function assessFreshness(
   feed: FeedName,
   newest: Date | null,
   now: Date,
-  maxAgeMs: number = DEFAULT_MAX_AGE_MS,
+  holidays: ReadonlySet<string>,
+  maxBusinessDays: number = DEFAULT_MAX_BUSINESS_DAYS,
 ): FeedFreshness {
-  if (newest === null) return { feed, newest: null, ageMs: null, stale: false };
+  if (newest === null) {
+    return { feed, newest: null, ageMs: null, businessDaysBehind: null, stale: false };
+  }
   const ageMs = now.getTime() - newest.getTime();
-  return { feed, newest, ageMs, stale: ageMs > maxAgeMs };
+  // Both sides reduced to a Pacific calendar day before counting. `entry_date` is
+  // stored noon-anchored precisely so its day is unambiguous in either zone.
+  const businessDaysBehind = businessDaysBetween(
+    pacificDayISO(newest),
+    pacificDayISO(now),
+    holidays,
+  );
+  return { feed, newest, ageMs, businessDaysBehind, stale: businessDaysBehind > maxBusinessDays };
 }
 
 /** Measure one feed's freshness against the live mirror. */
@@ -149,17 +199,74 @@ export async function measureFeedFreshness(args: {
   prisma: PrismaClient;
   feed: FeedName;
   now?: Date;
-  maxAgeMs?: number;
+  holidays?: ReadonlySet<string>;
+  maxBusinessDays?: number;
 }): Promise<FeedFreshness> {
   const now = args.now ?? new Date();
+  const holidays = args.holidays ?? (await fleetWideHolidays(args.prisma));
   const newest = await newestBusinessDate(args.prisma, args.feed);
-  return assessFreshness(args.feed, newest, now, args.maxAgeMs ?? DEFAULT_MAX_AGE_MS);
+  return assessFreshness(
+    args.feed,
+    newest,
+    now,
+    holidays,
+    args.maxBusinessDays ?? DEFAULT_MAX_BUSINESS_DAYS,
+  );
+}
+
+/**
+ * The Pacific day keys on which EVERY active site is closed (ADR-0130 D6).
+ *
+ * `site_holidays` is the operator-owned closure list that already backs the AP
+ * escalation clock, the throughput-gap watchdog, the audit sweep and the bonus EOD
+ * check — so this guard gets the operator's calendar for free rather than inventing
+ * a second one. It holds the SIX closures Bill confirmed for both sites (charter
+ * Q19, `prisma/seed/README.md`): New Year's, Memorial, Independence, Labor,
+ * Thanksgiving, Christmas. That is deliberately NOT the eleven US federal holidays
+ * — it is the days DR3 is shut. A day the floor works must count as a business day,
+ * or a real freeze takes an extra day to surface.
+ *
+ * FLEET-WIDE (observed at every site), matching `@/lib/ap/business-clock.ts`'s rule
+ * and for the same reason in the same direction: skipping a day only when nobody is
+ * working is the conservative choice, because marking a day closed makes this guard
+ * QUIETER. Both sites currently carry identical rows, so this is a no-op today and
+ * a safeguard if they ever diverge.
+ *
+ * Fails OPEN to an empty set: if the query throws, every weekday counts and the
+ * guard is merely more eager — never silently disabled.
+ */
+export async function fleetWideHolidays(prisma: PrismaClient): Promise<ReadonlySet<string>> {
+  try {
+    const siteCount = await prisma.site.count();
+    if (siteCount === 0) return new Set();
+    const rows = await prisma.siteHoliday.findMany({
+      select: { holiday_date: true, site_id: true },
+    });
+    const bySite = new Map<string, Set<string>>();
+    for (const r of rows) {
+      // `holiday_date` is a `@db.Date`; its UTC components ARE the calendar day.
+      const key = r.holiday_date.toISOString().slice(0, 10);
+      if (!bySite.has(key)) bySite.set(key, new Set());
+      bySite.get(key)!.add(r.site_id);
+    }
+    const out = new Set<string>();
+    for (const [day, sites] of bySite) if (sites.size >= siteCount) out.add(day);
+    return out;
+  } catch {
+    return new Set();
+  }
 }
 
 function describeAge(f: FeedFreshness): string {
   if (f.newest === null || f.ageMs === null) return 'mirror empty';
   const days = f.ageMs / 86_400_000;
-  return `newest ${FRESHNESS_COLUMN[f.feed]}=${f.newest.toISOString().slice(0, 10)} (${days.toFixed(1)}d behind)`;
+  // BOTH numbers. The business-day count is what DECIDED; the calendar age is what a
+  // reader would otherwise compute in their head and get a different answer from —
+  // "105 h behind" and "1 business day behind" are the same Monday.
+  return (
+    `newest ${FRESHNESS_COLUMN[f.feed]}=${f.newest.toISOString().slice(0, 10)} ` +
+    `(${f.businessDaysBehind ?? '?'} business day(s) behind, ${days.toFixed(1)}d calendar)`
+  );
 }
 
 /**
@@ -173,12 +280,17 @@ export async function checkMirrorFreshness(args: {
   feeds?: readonly FeedName[];
   pager: Pager;
   now?: Date;
-  maxAgeMs?: number;
+  holidays?: ReadonlySet<string>;
+  maxBusinessDays?: number;
   log?: Logger;
 }): Promise<FeedFreshness[]> {
   const log = args.log ?? noopLog;
   const now = args.now ?? new Date();
   const feeds = args.feeds ?? (['hauls', 'processed', 'outbound'] as const);
+  const maxBusinessDays = args.maxBusinessDays ?? DEFAULT_MAX_BUSINESS_DAYS;
+  // Read ONCE per check, not once per feed per site — the closure list is the same
+  // for every measurement in this run.
+  const holidays = args.holidays ?? (await fleetWideHolidays(args.prisma));
   const out: FeedFreshness[] = [];
 
   for (const feed of feeds) {
@@ -186,37 +298,71 @@ export async function checkMirrorFreshness(args: {
       prisma: args.prisma,
       feed,
       now,
-      ...(args.maxAgeMs === undefined ? {} : { maxAgeMs: args.maxAgeMs }),
+      holidays,
+      maxBusinessDays,
     });
     out.push(f);
-    if (!f.stale) {
-      log('info', `mymrc-freshness: ${feed} ok — ${describeAge(f)}`);
-      continue;
-    }
-    log('error', `mymrc-freshness: ${feed} STALE — ${describeAge(f)}`);
-    // The mirror is global (the list pass is not login-scoped), but the alert
-    // envelope is per-site so the fingerprint matches the rest of ADR-0038.
-    for (const site of args.sites) {
-      await args.pager
-        .page({
-          kind: 'stale_mirror',
-          site,
-          feed,
-          message:
-            `The MyMRC ${feed} mirror has stopped advancing: ${describeAge(f)}. ` +
-            `Hourly runs may still be reporting ok — freshness is measured on the ` +
-            `record's own ${FRESHNESS_COLUMN[feed]}, not on the sync's status. ` +
-            `Run the bounded catch-up (docs/operator/mymrc-ingestion.md) if this does not clear.`,
-          fingerprint: freshnessFingerprint(site, feed),
-          cooldownMs: FRESHNESS_COOLDOWN_MS,
-        })
-        .catch(() => undefined);
-    }
+    log(
+      f.stale ? 'error' : 'info',
+      `mymrc-freshness: ${feed} ${f.stale ? 'STALE' : 'ok'} — ${describeAge(f)}`,
+    );
+  }
+
+  // ── ADR-0130 D8 — one condition pages once ────────────────────────────────
+  //
+  // This used to page per site AND per feed. `processed` and `outbound` freeze
+  // together because they are ONE upstream stoppage — the same person stops posting
+  // to the same portal — so the per-feed fingerprint turned one condition into two
+  // identical `high` pages an hour. ADR-0037 Q4 is "deduplicated against root
+  // cause"; the root cause is the site's mirror, not each feed in it.
+  //
+  // The `feed` field is deliberately LEFT OFF the alert envelope: it drives the
+  // ` [<feed>]` title suffix, and a combined page that named one feed would be
+  // lying about the other. The stale feeds are named in the message instead.
+  const stale = out.filter((f) => f.stale);
+  if (stale.length === 0) return out;
+
+  const worst = Math.max(...stale.map((f) => f.businessDaysBehind ?? 0));
+  const feedList = stale.map((f) => f.feed).join(', ');
+  const detail = stale.map((f) => `${f.feed}: ${describeAge(f)}`).join('; ');
+
+  // The mirror is global (the list pass is not login-scoped), but the alert envelope
+  // is per-site so the fingerprint matches the rest of ADR-0038.
+  for (const site of args.sites) {
+    await args.pager
+      .page({
+        kind: 'stale_mirror',
+        site,
+        message:
+          `The MyMRC mirror has stopped advancing for: ${feedList}. ${detail}. ` +
+          `Measured in BUSINESS DAYS (Mon-Fri minus the site_holidays closures), not ` +
+          `calendar hours — a feed that only advances on business days cannot be ` +
+          `measured in calendar time, and the calendar rule false-paged on three ` +
+          `ordinary Mondays. Threshold is more than ${maxBusinessDays} business days ` +
+          `behind. Hourly runs may still be reporting ok — freshness is measured on ` +
+          `the record's own business date, not on the sync's status. Run the bounded ` +
+          `catch-up (docs/operator/mymrc-ingestion.md) if this does not clear.`,
+        fingerprint: freshnessFingerprint(site),
+        cooldownMs: FRESHNESS_COOLDOWN_MS,
+        // §6 — `default` normally; `high` once this is unmistakably an outage
+        // rather than a slow week. `exactOptionalPropertyTypes` forbids passing
+        // `undefined` explicitly, hence the spread.
+        ...(worst >= ESCALATE_BUSINESS_DAYS ? { priority: 'high' as const } : {}),
+      })
+      .catch(() => undefined);
   }
   return out;
 }
 
-/** Canonical fingerprint for the staleness page (one per site+feed). */
-export function freshnessFingerprint(site: string, feed: FeedName): string {
-  return `mymrc-stale-mirror:${site}:${feed}`;
+/**
+ * Canonical fingerprint for the staleness page — one per SITE (ADR-0130 D8).
+ *
+ * Was `mymrc-stale-mirror:<site>:<feed>`. Changing the shape orphans the old keys in
+ * `alert_cooldowns`; that needs no migration, because the ADR-0130 reaper deletes
+ * rows more than seven days past expiry and nothing ever reads them again. The first
+ * page under the new key fires immediately rather than inheriting the old window,
+ * which is the behaviour we want: one clean page, then daily.
+ */
+export function freshnessFingerprint(site: string): string {
+  return `mymrc-stale-mirror:${site}`;
 }

@@ -15,7 +15,7 @@ import { AuthFailedError, PortalContractDriftError, type PortalClient } from './
 import { FEED_NAMES } from './types';
 import { mapHaulRecord, mapOutboundRecord, mapProcessedRecord } from './mappers';
 import { measureFeedFreshness } from './freshness';
-import { fingerprint, ntfyPager, type Pager } from './ntfy';
+import { fingerprint, GRADE_BY_KIND, ntfyPager, type Pager } from './ntfy';
 import { optionalFieldsForFeed, type RecordFieldsClient } from './record-fields-client';
 import { upsertScrapedHauls } from './upsert';
 import type {
@@ -404,10 +404,13 @@ export interface SyncFeedContext {
   /** Per-run correlation id. Defaults to a fresh crypto.randomUUID when omitted. */
   runId?: string;
   /**
-   * How far the feed's newest business record may lag before the run is recorded
-   * `stale_mirror` instead of `ok` (default: `DEFAULT_MAX_AGE_MS` in freshness.ts).
+   * How far the feed's newest business record may lag, in BUSINESS DAYS, before the
+   * run is recorded `stale_mirror` instead of `ok` (ADR-0130 D6; default:
+   * `DEFAULT_MAX_BUSINESS_DAYS` in freshness.ts). Was `freshnessMaxAgeMs`, a
+   * calendar-hour window — a feed carrying one row per business day cannot be graded
+   * in calendar hours without calling three ordinary Mondays a freeze.
    */
-  freshnessMaxAgeMs?: number;
+  freshnessMaxBusinessDays?: number;
 }
 
 export interface SyncFeedResult {
@@ -554,7 +557,9 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
         prisma: ctx.prisma,
         feed: ctx.feed,
         now: started,
-        ...(ctx.freshnessMaxAgeMs === undefined ? {} : { maxAgeMs: ctx.freshnessMaxAgeMs }),
+        ...(ctx.freshnessMaxBusinessDays === undefined
+          ? {}
+          : { maxBusinessDays: ctx.freshnessMaxBusinessDays }),
       });
     } catch (e: unknown) {
       throw new Error(
@@ -762,7 +767,11 @@ export async function checkDeadman(args: {
           feed,
           message: `No successful MyMRC ${feed} sync for ${site} in ${hrs}h (threshold 26h).`,
           fingerprint: fingerprint.deadman(site, feed),
-          cooldownMs: 6 * 60 * 60 * 1000,
+          // ADR-0130 §6 re-graded `deadman` from a 6 h repeat to 12 h: Q3 is
+          // satisfied by construction (26 h of self-heal has already elapsed), so
+          // a half-day repeat is the right cadence. Derived from the matrix so the
+          // grade and the code cannot drift apart.
+          cooldownMs: GRADE_BY_KIND.deadman.cooldownMs,
         })
         .catch(() => undefined);
     }
