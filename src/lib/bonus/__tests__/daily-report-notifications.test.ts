@@ -268,7 +268,8 @@ function makeEod(overrides: Partial<EodInventorySnapshot> = {}): EodInventorySna
     inboundDaysSince: 0,
     inboundStale: false,
     staleDays: 14,
-    inboundStaleDays: 4,
+    inboundBusinessDaysSince: 0,
+    inboundStaleDays: 2,
     ...overrides,
   };
 }
@@ -405,17 +406,25 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
 
 describe('renderHtmlBody — EOD inventory, stale intake (§4b)', () => {
   it('renders the number WITH a why-suspect flag when intake has gone quiet', () => {
-    const html = bodyWithEod(makeEod({ inboundStale: true, inboundDaysSince: 9 }));
+    const html = bodyWithEod(
+      makeEod({ inboundStale: true, inboundDaysSince: 9, inboundBusinessDaysSince: 6 }),
+    );
     // The figure still renders — this is the best available number, unlike §4a.
     expect(html).toContain('3,748');
     expect(html).toContain('Intake feed is quiet');
-    expect(html).toContain('9 days old');
+    // ADR-0130 Am.2 — BOTH units, business days first because that is what decided.
+    // Quoting only "9 days old" against a 2-day tolerance is a sentence the reader
+    // cannot reconcile.
+    expect(html).toContain('6 business day(s) old');
+    expect(html).toContain('9 calendar days');
     expect(html).toContain('trends low until intake catches up');
   });
 
-  it('names the tolerance it breached, so the flag is auditable', () => {
-    const html = bodyWithEod(makeEod({ inboundStale: true, inboundDaysSince: 9 }));
-    expect(html).toContain('4-day tolerance');
+  it('names the tolerance it breached, and its UNIT, so the flag is auditable', () => {
+    const html = bodyWithEod(
+      makeEod({ inboundStale: true, inboundDaysSince: 9, inboundBusinessDaysSince: 6 }),
+    );
+    expect(html).toContain('2 business-day tolerance');
   });
 
   it('renders NO flag when intake is current', () => {

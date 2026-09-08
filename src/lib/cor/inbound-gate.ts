@@ -21,39 +21,57 @@
 // `assessFreshness`); the D2.1/D3 reconcile tripwire still governs that case.
 
 import { prisma } from '@/lib/prisma';
-import { measureFeedFreshness, type FeedFreshness } from '@/lib/mymrc/freshness';
+import {
+  DEFAULT_MAX_BUSINESS_DAYS,
+  measureFeedFreshness,
+  type FeedFreshness,
+} from '@/lib/mymrc/freshness';
 
 /**
- * How stale the delivered-hauls feed may be before a COR is refused, in CALENDAR
- * hours.
+ * This gate measures in BUSINESS DAYS, sharing the ADR-0130 D6 rule and threshold
+ * with the mirror-freshness pager. **Bill's decision, 2026-09-07 18:20 PDT**: "yes
+ * convert the COR gate and EOD flag to business days too" (ADR-0130 Amendment 2).
  *
- * This was `DEFAULT_MAX_AGE_MS` imported from the MyMRC freshness guard. ADR-0130
- * D6 changed THAT guard to measure in business days, because a feed carrying one
- * row per business day cannot be graded in calendar hours without false-paging on
- * ordinary Mondays. This gate was deliberately NOT converted with it, and the
- * number is restated here rather than re-imported so the decoupling is visible:
+ * It was 96 calendar hours, imported as `DEFAULT_MAX_AGE_MS` from the same guard so
+ * the two could not drift. When D6 changed the guard's units, this was deliberately
+ * left behind and Am.1 §A1.2 recorded why: a `409` that blocks a billing document
+ * from being filed is not a threshold a notification-noise ADR should re-decide
+ * implicitly. That reason is now superseded — the decision was taken explicitly.
  *
- *   - D6 decided the units of the PAGER. It said nothing about this gate, which is
- *     a 409 that blocks a billing document from being filed. Silently re-deciding a
- *     billing-adjacent refusal threshold on the back of a notification-noise ADR is
- *     not a change to make without its own decision.
- *   - The conversion is probably right and probably makes this gate STRICTLY
- *     better: under calendar hours this refuses to file a COR on an ordinary Monday
- *     for the same reason the pager false-fired on one. Recorded as a follow-on in
- *     `docs/OPEN-ITEMS.md` rather than done here.
+ * Why it is the right rule here, not merely a consistent one: the delivered-hauls
+ * feed advances on business days, so under calendar hours this gate refused to file
+ * a COR on an ordinary Monday for exactly the reason the pager false-paged on three
+ * of them. Measured on 2026-09-07 — newest delivered haul Thu 09-03, 105 calendar
+ * hours, ONE business day.
  *
- * Until then this gate behaves exactly as it did before ADR-0130.
+ * The conversion is NOT uniformly looser, and the direction matters on a billing
+ * path. Over a fortnight of freeze onsets the two rules diverge by at most ONE day
+ * either way: a freeze beginning Tue or Wed refuses one day EARLIER (stricter, and
+ * correct — a COR must not be filed on stale inbound), a freeze beginning Thu, Fri
+ * or Mon refuses one day later. Never two.
  */
-export const COR_INBOUND_STALE_MS = 96 * 60 * 60 * 1000;
+const MAX_BUSINESS_DAYS_BEHIND = DEFAULT_MAX_BUSINESS_DAYS;
 
 /** The delivered-hauls feed is stale — refuse to derive a COR figure from it. */
 export class CorInboundStaleError extends Error {
   readonly status = 409 as const;
-  constructor(readonly context: { newest: string | null; ageDays: number | null }) {
+  constructor(
+    readonly context: {
+      newest: string | null;
+      ageDays: number | null;
+      businessDaysBehind: number | null;
+    },
+  ) {
     super(
       `COR refused: the inbound (delivered-hauls) feed is frozen — newest delivered haul is dated ` +
         `${context.newest ?? 'never'}` +
-        (context.ageDays !== null ? ` (${context.ageDays.toFixed(1)} days behind)` : '') +
+        // BOTH numbers, business days first, because the business-day count is what
+        // DECIDED. Reporting only "3.4 days behind" against a threshold of 2 leaves
+        // the reader unable to reconcile the two figures (ADR-0130 Am.2).
+        (context.businessDaysBehind !== null
+          ? ` (${context.businessDaysBehind} business day(s) behind, threshold ${MAX_BUSINESS_DAYS_BEHIND})`
+          : '') +
+        (context.ageDays !== null ? `, ${context.ageDays.toFixed(1)} calendar days` : '') +
         `. The on-hand figure is computed from a one-sided ledger and must not be filed. ` +
         `Recover inbound (scripts/fix-woodland-inbound.sh) or take a fresh physical count, ` +
         `then regenerate the draft (PR #196 §2.3).`,
@@ -81,13 +99,18 @@ export class CorLedgerNegativeError extends Error {
  * to 08-10 MUST refuse).
  */
 export function assertInboundFreshnessForCor(f: FeedFreshness): void {
-  // `f.stale` is the ADR-0130 D6 BUSINESS-DAY verdict; this gate deliberately keeps
-  // the calendar-hour one (see COR_INBOUND_STALE_MS). An empty mirror carries a null
-  // age and is bootstrap, not stale — unchanged.
-  if (f.ageMs === null || f.ageMs <= COR_INBOUND_STALE_MS) return;
+  // `f.stale` IS the ADR-0130 D6 business-day verdict, computed against the same
+  // `site_holidays` closures the pager uses. Reading it directly (rather than
+  // restating a threshold here) is what keeps the gate and the pager from drifting
+  // apart again — the drift that made this a follow-on in the first place.
+  //
+  // An EMPTY mirror is bootstrap, not stale: `assessFreshness` returns
+  // `stale: false` with null counts, so this passes. Unchanged.
+  if (!f.stale) return;
   throw new CorInboundStaleError({
     newest: f.newest ? f.newest.toISOString().slice(0, 10) : null,
     ageDays: f.ageMs !== null ? f.ageMs / 86_400_000 : null,
+    businessDaysBehind: f.businessDaysBehind,
   });
 }
 

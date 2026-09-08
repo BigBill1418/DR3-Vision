@@ -38,23 +38,14 @@ which is the proof this is a storage choice, not a policy problem.
 
 ### Follow-on decisions this work deliberately did NOT make
 
-**BR-9 — the COR inbound gate and the EOD inventory flag are still on calendar
-hours (ADR-0130 Am.1 §A1.2).** `src/lib/cor/inbound-gate.ts` and
-`src/lib/loads/eod-inventory.ts` both imported `DEFAULT_MAX_AGE_MS` from the MyMRC
-freshness guard so the three could not drift. D6 moved the guard to business days;
-these two were left on 96 calendar hours / 4 days, with the decoupling stated at
-their own constants (`COR_INBOUND_STALE_MS`, `INBOUND_STALE_DAYS`) and pinned by a
-test. **Behaviour is unchanged from before ADR-0130.**
-
-Why not converted: the COR gate is a `409` that blocks a billing document from
-being filed, and D6 is a decision about a notification's units. Re-deciding a
-billing-adjacent refusal threshold as a side effect of a noise ADR is the class of
-silent change the fleet rules forbid.
-
-Why it probably should be: under calendar hours, that gate refuses to file a COR on
-an ordinary Monday for exactly the reason the pager false-fired on three of them —
-the delivered-hauls feed advances on business days. A COR blocked on a Monday is a
-louder false positive than a page. **Needs Bill's call**, then ~10 lines.
+**BR-9 — the COR inbound gate and the EOD inventory flag on business days.**
+**CLOSED 2026-09-07** by Bill's decision at 18:20 PDT: _"yes convert the COR gate
+and EOD flag to business days too"._ Both now read the D6 rule; `INBOUND_STALE_DAYS`
+is derived from `DEFAULT_MAX_BUSINESS_DAYS` so the three guards share one number and
+cannot drift by omission again. Sized before shipping: maximum divergence is **one
+day in either direction** (4 freeze onsets stricter, 6 looser), the EOD flag flips on
+zero of the measured 38 days, and the COR `409` keeps its two forward paths. Full
+measurement and the discarded COR replay are in ADR-0130 Amendment 2.
 
 **BR-10 — `site_holidays` stops at 2027-12-31.** The seed covers 2026–2027 to match
 the contract term (`prisma/seed/README.md`). From 2028-01-01 the closure set is

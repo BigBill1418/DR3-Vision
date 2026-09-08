@@ -38,8 +38,9 @@ import {
 
 const INCIDENT_NOW = new Date('2026-07-30T20:00:00Z');
 const FROZEN_DELIVERED_MAX = new Date('2026-07-21T12:00:00Z');
-/** The site closure list (unused by this gate — see the note below). */
+/** The operator-owned closure list this gate now shares with the pager. */
 const HOLIDAYS: ReadonlySet<string> = new Set(['2026-07-03', '2026-09-07']);
+const NO_HOL: ReadonlySet<string> = new Set<string>();
 
 describe('assertInboundFreshnessForCor (pure) — the 2026-07 incident fixture', () => {
   it('REFUSES on the exact incident state: delivered frozen 07-21, filing on 07-30', () => {
@@ -62,25 +63,62 @@ describe('assertInboundFreshnessForCor (pure) — the 2026-07 incident fixture',
     expect(() => assertInboundFreshnessForCor(f)).not.toThrow();
   });
 
-  it('gates on CALENDAR age, not on the D6 business-day verdict', () => {
-    // ADR-0130 D6 moved the mirror-freshness PAGER to business days. This gate was
-    // deliberately left on calendar hours (COR_INBOUND_STALE_MS): it is a 409 that
-    // blocks a billing document, and re-deciding that threshold is not something a
-    // notification-noise ADR gets to do implicitly.
+  it('gates on the D6 BUSINESS-DAY verdict — Bill 2026-09-07, ADR-0130 Am.2', () => {
+    // THIS TEST DELIBERATELY FLIPPED. Until 2026-09-07 it asserted the opposite:
+    // that the gate kept calendar hours while the pager moved to business days.
+    // Am.1 §A1.2 recorded that as "probably right to convert, but not a decision a
+    // notification-noise ADR gets to make implicitly." Bill made it explicitly at
+    // 18:20 PDT on 2026-09-07 — "yes convert the COR gate and EOD flag to business
+    // days too" — so the coupling is restored on purpose and this is the assertion
+    // of the NEW behaviour.
     //
-    // A Monday where the two verdicts DISAGREE, which is exactly the shape that
-    // false-paged three times: newest delivered Thu 2026-09-03, filing Mon
-    // 2026-09-07 (Labor Day). One business day behind — the pager stays quiet — but
-    // 105 calendar hours, so this gate still refuses, as it did before ADR-0130.
+    // The case that motivated it: newest delivered haul Thu 2026-09-03, filing on
+    // Mon 2026-09-07, which is Labor Day. 105 CALENDAR hours — the old gate refused
+    // to file a COR. ONE business day — a Friday — so nothing is actually stale and
+    // the filing goes through.
     const f = assessFreshness(
       'hauls',
       new Date('2026-09-03T12:00:00Z'),
       new Date('2026-09-07T21:00:00Z'),
       new Set(['2026-09-07']),
     );
-    expect(f.stale).toBe(false); // D6: not stale
-    expect(f.ageMs).toBeGreaterThan(96 * 3_600_000); // calendar: past the gate
-    expect(() => assertInboundFreshnessForCor(f)).toThrowError(CorInboundStaleError);
+    expect(f.ageMs).toBeGreaterThan(96 * 3_600_000); // the OLD rule would refuse
+    expect(f.businessDaysBehind).toBe(1);
+    expect(f.stale).toBe(false);
+    expect(() => assertInboundFreshnessForCor(f)).not.toThrow();
+  });
+
+  it('still refuses a genuine mid-week freeze — and one day EARLIER than 96h', () => {
+    // The direction that matters for a billing document. A freeze beginning Wed
+    // 2026-09-16 (last good record Tue 09-15) reaches 3 business days on Fri 09-18;
+    // 96 calendar hours is not reached until Sat 09-19. Converting makes the gate
+    // STRICTER here, by exactly one day, which is the correct direction: a COR must
+    // not be filed on stale inbound data.
+    const lastGood = new Date('2026-09-15T12:00:00Z');
+    const friday = assessFreshness('hauls', lastGood, new Date('2026-09-18T21:00:00Z'), NO_HOL);
+    expect(friday.businessDaysBehind).toBe(3);
+    expect(friday.ageMs).toBeLessThan(96 * 3_600_000); // 96h has NOT yet fired
+    expect(() => assertInboundFreshnessForCor(friday)).toThrowError(CorInboundStaleError);
+  });
+
+  it('the 409 states the business-day count, not only a calendar figure', () => {
+    // The rule decides in business days, so the refusal has to say so — otherwise
+    // it reads "3.4 days behind" against a threshold of 2 and the reader cannot
+    // reconcile the two numbers.
+    const f = assessFreshness('hauls', FROZEN_DELIVERED_MAX, INCIDENT_NOW, HOLIDAYS);
+    try {
+      assertInboundFreshnessForCor(f);
+      throw new Error('expected a refusal');
+    } catch (e) {
+      const err = e as CorInboundStaleError;
+      expect(err).toBeInstanceOf(CorInboundStaleError);
+      expect(err.message).toMatch(/business day/i);
+      // Tue 2026-07-21 -> Thu 2026-07-30 (INCIDENT_NOW is 13:00 PDT that day):
+      // 22, 23, 24, 27, 28, 29, 30 = 7 business days.
+      expect(err.context.businessDaysBehind).toBe(7);
+      // The forward path stays in the message — a refusal with no way out is a wall.
+      expect(err.message).toMatch(/fix-woodland-inbound\.sh|physical count/);
+    }
   });
 
   it('an empty mirror is bootstrap, not stale (assessFreshness contract)', () => {

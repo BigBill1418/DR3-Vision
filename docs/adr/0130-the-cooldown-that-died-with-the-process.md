@@ -362,7 +362,9 @@ Residual: the seed covers 2026–2027 only, matching the contract term. From
 slightly MORE eager (weekends still excluded), never silently disabled.
 
 **A1.2 — D6 was applied to the pager, and deliberately NOT to two downstream
-guards.** `src/lib/cor/inbound-gate.ts` and `src/lib/loads/eod-inventory.ts` both
+guards.** _(SUPERSEDED by Amendment 2, 2026-09-07 — Bill took the decision this
+section deferred. Retained because the reasoning for deferring it was sound and the
+sequence matters: the threshold was not changed until its owner said so.)_ `src/lib/cor/inbound-gate.ts` and `src/lib/loads/eod-inventory.ts` both
 imported `DEFAULT_MAX_AGE_MS` so they "cannot drift into disagreeing about when
 intake has stopped." D6 changes the units, which would have silently re-decided a
 `409` that blocks a COR from being filed and a why-suspect flag on an operator
@@ -400,3 +402,88 @@ every `discovery_gap` row in the ledger is `status = 'resolved'` with
 of 2,480 over 26 days (0.36%), each followed by a success. There is no OPEN row,
 so the split orphans nothing and the migration adds an enum value only, with no
 backfill: historical rows keep the kind the system actually believed at the time.
+
+## Amendment 2 — the COR gate and the EOD flag move to business days (2026-09-07)
+
+**Bill's decision, 18:20 PDT 2026-09-07, verbatim: _"yes convert the COR gate and
+EOD flag to business days too"._** This supersedes Amendment 1 §A1.2, which
+deferred exactly this change on the grounds that a `409` blocking a billing document
+is not a threshold a notification-noise ADR should re-decide implicitly. It was the
+owner's call; the owner made it.
+
+`COR_INBOUND_STALE_MS` (96 calendar hours) and `INBOUND_STALE_DAYS` (4 calendar
+days) are gone. Both now read the same D6 rule as the pager — more than
+`DEFAULT_MAX_BUSINESS_DAYS` (2) business days behind, Mon–Fri minus the six
+`site_holidays` closures — and `INBOUND_STALE_DAYS` is now _derived from_ that
+constant rather than restating it, so the coupling the original comments wanted is
+restored as code instead of prose. **There is one number again.**
+
+### A2.1 — the size of the change, measured
+
+The conversion is **not** uniformly looser. It is looser across weekends and
+closures, which is the win, and stricter on a freeze that begins mid-week. Computed
+deterministically with the shipped `businessDaysBetween`, over ten consecutive
+business-day freeze onsets:
+
+| Freeze begins | Last good | 96h refuses | D6 refuses | Delta          |
+| ------------- | --------- | ----------- | ---------- | -------------- |
+| Mon           | Fri       | Tue         | Wed        | 1d later       |
+| Tue           | Mon       | Fri         | Thu        | **1d EARLIER** |
+| Wed           | Tue       | Sat         | Fri        | **1d EARLIER** |
+| Thu           | Wed       | Sun         | Mon        | 1d later       |
+| Fri           | Thu       | Mon         | Tue        | 1d later       |
+
+**Four onsets stricter by one day, six looser by one day, maximum divergence one day
+in either direction.** Not two — an earlier draft of this ADR said "three business
+days behind is reached on the Friday of a Wednesday freeze, where 96 h waits for the
+fourth calendar day", which is true only under the reading that a "Wednesday freeze"
+has its last good record on Tuesday; under the other reading the sign inverts. Both
+readings give one day, never two.
+
+### A2.2 — historical replay, and why the COR half of it is not evidence
+
+The EOD flag replays cleanly: over the same 38 days used for D6, on
+`inbound_loads.arrived_at` at Woodland, **zero verdict flips in either direction** —
+every day is `ok` under both rules, peak calendar gap 3 days (2026-09-07), peak
+business-day gap 0. Eugene has **zero** verified inbound loads and the flag is
+`null`/not-stale there by design, so it is exercised at one site only.
+
+The COR gate **cannot be replayed historically and the attempt was discarded.** Two
+independent contaminations, either sufficient alone:
+
+1. `mymrc_hauls_mirror.status` is current, not as-of. A haul first seen 2026-07-24
+   while `Confirmed` with an appointment of 2026-08-05 is `Delivered` today, so a
+   `first_seen_at <= T` reconstruction wrongly counts it as delivered at
+   T = 2026-07-31 and pushes `max(COALESCE(...))` into the future.
+2. ADR-0089 D4's recovery (2026-08-10) backfilled
+   `recycler_reported_delivery_date` on 7,314 existing rows, so column values before
+   that date are not what the gate would have read.
+
+The replay it produced showed 0 flips and mostly _negative_ ages, which is the
+signature of the contamination, not a finding. It is recorded here so nobody re-runs
+it and believes it. The A2.1 rule-vs-rule table needs no history and is what the
+decision rests on.
+
+### A2.3 — what a person hits when it fires
+
+The refusal is a `409 CorInboundStaleError` raised from `prefill.ts` and
+`lifecycle.ts`. It is **not** a dead end: the message names the newest delivered
+haul, both counts, and two forward paths — recover inbound
+(`scripts/fix-woodland-inbound.sh`) or take a fresh physical count, then regenerate
+the draft. The body now leads with the business-day count and the threshold, with
+the calendar figure alongside; quoting only "3.4 days behind" against a threshold of
+2 is a sentence the reader cannot reconcile. The same applies to the daily-report
+email's intake-quiet flag, which now reads "6 business day(s) old (9 calendar days),
+over the 2 business-day tolerance."
+
+So the stricter direction costs at most one extra day of refusal on a genuine
+mid-week stoppage, and the person hitting it has a documented way through. That is
+the trade Bill accepted.
+
+### A2.4 — the coupling, checked
+
+After this change `DEFAULT_MAX_AGE_MS` no longer exists anywhere in the tree, in any
+form other than historical comments. `DEFAULT_MAX_BUSINESS_DAYS` is the single
+source for all three consumers: the mirror-freshness pager, the COR inbound gate,
+and the EOD intake-quiet flag. The drift that made this a follow-on cannot recur by
+omission — it would now require deleting an import.

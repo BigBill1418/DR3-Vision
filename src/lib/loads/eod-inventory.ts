@@ -45,6 +45,8 @@ import {
   anchorFlowBounds,
 } from '@/lib/inventory/running-balance';
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
+import { businessDaysBetween } from '@/lib/mymrc/business-days';
+import { DEFAULT_MAX_BUSINESS_DAYS, fleetWideHolidays } from '@/lib/mymrc/freshness';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
@@ -52,24 +54,66 @@ export const DEFAULT_EOD_INVENTORY_STALE_DAYS = 14;
 
 /**
  * How stale the INBOUND feed may get before the rendered figure carries a
- * why-suspect flag (handoff #270 §4b), in whole CALENDAR days.
+ * why-suspect flag (handoff #270 §4b), in whole BUSINESS days.
  *
- * This used to be `Math.round(DEFAULT_MAX_AGE_MS / 86_400_000)` — derived from the
- * MyMRC freshness pager's 96 h so the two "cannot drift into disagreeing about when
- * intake has stopped." ADR-0130 D6 moved THAT guard to business days, because a feed
- * carrying one row per business day cannot be graded in calendar hours: it
- * false-paged on three ordinary Mondays in thirty-eight days.
+ * **Bill's decision, 2026-09-07 18:20 PDT**: "yes convert the COR gate and EOD flag
+ * to business days too" (ADR-0130 Amendment 2).
  *
- * The number is restated here rather than re-derived, so the decoupling is visible
- * instead of implied. This flag is a rendering hint on an operator figure, not the
- * pager, and converting it is its own (probably correct) decision — recorded as a
- * follow-on in `docs/OPEN-ITEMS.md`. Behaviour is unchanged from before ADR-0130.
+ * It was 4 CALENDAR days, derived from the MyMRC freshness pager's 96 h so the two
+ * "cannot drift into disagreeing about when intake has stopped." ADR-0130 D6 moved
+ * that guard to business days — a feed advancing only on business days cannot be
+ * graded in calendar hours — and this was briefly left behind (Am.1 §A1.2). It is
+ * now re-derived from `DEFAULT_MAX_BUSINESS_DAYS`, so the coupling the original
+ * comment wanted is restored rather than merely described: there is ONE number.
  *
  * Deliberately much tighter than the 14-day ANCHOR window. They measure different
  * things: an anchor is allowed to age while daily flows keep the balance honest,
- * but intake stopping for four days IS the thing that makes the balance dishonest.
+ * but intake stopping IS the thing that makes the balance dishonest.
  */
-export const INBOUND_STALE_DAYS = 4;
+export const INBOUND_STALE_DAYS = DEFAULT_MAX_BUSINESS_DAYS;
+
+/** The verdict on how recently intake was seen. Pure, so it is unit-testable. */
+export interface InboundRecency {
+  /** Calendar days since the last verified inbound. Retained for the operator copy. */
+  calendarDaysSince: number | null;
+  /** Business days since it — the number the threshold is applied to. */
+  businessDaysSince: number | null;
+  stale: boolean;
+}
+
+/**
+ * Grade intake recency in business days (ADR-0130 Am.2).
+ *
+ * Both numbers are returned: the business-day count DECIDES, and the calendar count
+ * is what a reader would otherwise compute in their head and get a different answer
+ * from. A message quoting only "4 days old" against a threshold of 2 cannot be
+ * reconciled by the person reading it.
+ *
+ * `null` intake is NOT stale, and that distinction is load-bearing: Eugene has zero
+ * verified inbound loads by design (confirmed on production 2026-09-07), and
+ * "this site has no intake feed" must never render as "the feed died".
+ */
+export function assessInboundRecency(
+  inboundThrough: Date | null,
+  reportDate: Date,
+  holidays: ReadonlySet<string>,
+  maxBusinessDays: number = INBOUND_STALE_DAYS,
+): InboundRecency {
+  if (inboundThrough === null) {
+    return { calendarDaysSince: null, businessDaysSince: null, stale: false };
+  }
+  const calendarDaysSince = Math.round(
+    (reportDate.getTime() - inboundThrough.getTime()) / 86_400_000,
+  );
+  // Both are already Pacific day keys at UTC midnight, so the ISO date prefix IS
+  // the calendar day — no second zone conversion.
+  const businessDaysSince = businessDaysBetween(
+    inboundThrough.toISOString().slice(0, 10),
+    reportDate.toISOString().slice(0, 10),
+    holidays,
+  );
+  return { calendarDaysSince, businessDaysSince, stale: businessDaysSince > maxBusinessDays };
+}
 
 /**
  * The configured freshness window. Read at call time (not module load) so the
@@ -161,8 +205,13 @@ export interface EodInventorySnapshot {
    * Eugene's standing condition, not a fault.
    */
   inboundThrough: Date | null;
-  /** Whole days from `inboundThrough` to the report day. Null when there is no inbound. */
+  /** Whole CALENDAR days from `inboundThrough` to the report day. Null when no inbound. */
   inboundDaysSince: number | null;
+  /**
+   * BUSINESS days from `inboundThrough` to the report day — the number `inboundStale`
+   * is decided on since ADR-0130 Am.2. Null when there is no inbound.
+   */
+  inboundBusinessDaysSince: number | null;
   /**
    * True when intake has been silent longer than `INBOUND_STALE_DAYS` while the
    * figure still computed — the "shown, but here is why it is suspect" case.
@@ -428,11 +477,18 @@ export async function getEodInventorySnapshot(
   // taking a physical count does not mean a truck arrived, and folding the anchor
   // in here would let tonight's count mask a dead intake feed for another fortnight.
   const inboundThrough = latestFlow.inbound;
-  const inboundDaysSince =
-    inboundThrough != null
-      ? Math.round((reportDate.getTime() - inboundThrough.getTime()) / 86_400_000)
-      : null;
-  const inboundStale = inboundDaysSince != null && inboundDaysSince > INBOUND_STALE_DAYS;
+  // ADR-0130 Am.2 — graded in BUSINESS days, against the same `site_holidays`
+  // closures the mirror-freshness pager and the COR gate use. Fleet-wide (observed
+  // at every site) rather than this site's own list, deliberately: one calendar
+  // semantic across all three guards beats a second one that differs by a day.
+  const inboundRecency = assessInboundRecency(
+    inboundThrough,
+    reportDate,
+    await fleetWideHolidays(prisma),
+  );
+  const inboundDaysSince = inboundRecency.calendarDaysSince;
+  const inboundBusinessDaysSince = inboundRecency.businessDaysSince;
+  const inboundStale = inboundRecency.stale;
 
   const programOnHand = balance.program.toNumber();
   const nonProgramOnHand = balance.nonProgram.toNumber();
@@ -478,6 +534,7 @@ export async function getEodInventorySnapshot(
     inboundProvisional: provisionalInboundCount > 0,
     inboundThrough,
     inboundDaysSince,
+    inboundBusinessDaysSince,
     inboundStale,
     staleDays,
     inboundStaleDays: INBOUND_STALE_DAYS,

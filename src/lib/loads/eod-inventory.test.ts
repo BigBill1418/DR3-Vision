@@ -91,6 +91,7 @@ import {
   daysSinceAnchor,
   DEFAULT_EOD_INVENTORY_STALE_DAYS,
   type EodInventorySnapshot,
+  assessInboundRecency,
 } from '@/lib/loads/eod-inventory';
 
 const SITE = 'site-woodland';
@@ -464,5 +465,59 @@ describe('getEodInventorySnapshot', () => {
 
     const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
     expect(eod.inboundProvisional).toBe(false);
+  });
+});
+
+// ── ADR-0130 Amendment 2 — the intake-quiet flag measures business days ──────
+//
+// Bill, 2026-09-07 18:20 PDT: "yes convert the COR gate and EOD flag to business
+// days too." Until then this flag used 4 CALENDAR days, derived from the
+// mirror-freshness guard's old 96 h so the two could not drift. D6 moved the guard
+// to business days and this was left behind (Am.1 §A1.2) pending exactly this
+// decision.
+
+describe('assessInboundRecency (ADR-0130 Am.2)', () => {
+  const NO_HOL: ReadonlySet<string> = new Set<string>();
+  const HOL: ReadonlySet<string> = new Set(['2026-09-07']); // Labor Day
+  const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+
+  it('is quiet across an ordinary weekend — the false flag calendar days gave', () => {
+    // Last truck Thu 2026-09-03, report run Mon 2026-09-07 (Labor Day). Four
+    // CALENDAR days — the old rule did not fire at 4 (it needed >4) but Tuesday
+    // would have. In business days it is a single Friday.
+    const r = assessInboundRecency(day('2026-09-03'), day('2026-09-07'), HOL);
+    expect(r.calendarDaysSince).toBe(4);
+    expect(r.businessDaysSince).toBe(1);
+    expect(r.stale).toBe(false);
+  });
+
+  it('fires on a genuine mid-week stoppage', () => {
+    // Last truck Tue 2026-09-15; by Fri 09-18 that is three business days with no
+    // intake while processing keeps subtracting. Three calendar days would NOT have
+    // fired the old 4-day rule — so here the new rule is STRICTER, by one day.
+    const r = assessInboundRecency(day('2026-09-15'), day('2026-09-18'), NO_HOL);
+    expect(r.calendarDaysSince).toBe(3);
+    expect(r.businessDaysSince).toBe(3);
+    expect(r.stale).toBe(true);
+  });
+
+  it('does not fire at exactly the threshold — it is STRICTLY more than', () => {
+    const r = assessInboundRecency(day('2026-09-16'), day('2026-09-18'), NO_HOL);
+    expect(r.businessDaysSince).toBe(2);
+    expect(r.stale).toBe(false);
+  });
+
+  it('honours the closure list — Labor Day is not a working day', () => {
+    // Last truck Thu 09-03, report Tue 09-08. Without the list: Fri, Mon, Tue = 3
+    // and it fires. With Labor Day: Fri, Tue = 2 and it does not.
+    expect(assessInboundRecency(day('2026-09-03'), day('2026-09-08'), NO_HOL).stale).toBe(true);
+    expect(assessInboundRecency(day('2026-09-03'), day('2026-09-08'), HOL).stale).toBe(false);
+  });
+
+  it('never flags a site with no intake on record — Eugene is not a fault', () => {
+    // Verified on production 2026-09-07: eugene has ZERO verified inbound loads.
+    // "This site has no intake feed" must never render as "the feed died".
+    const r = assessInboundRecency(null, day('2026-09-18'), NO_HOL);
+    expect(r).toEqual({ calendarDaysSince: null, businessDaysSince: null, stale: false });
   });
 });

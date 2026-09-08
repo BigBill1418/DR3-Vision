@@ -242,7 +242,7 @@ export function renderEodInventoryHtml(
     // itself right up until the figure is already wrong. Flagged, not hidden: this
     // is still the best available number, unlike the negative case above.
     (eod.inboundStale
-      ? `<tr><td colspan="2" style="padding-top:10px;font-size:12px;color:${WARN_INK};line-height:1.5"><strong>⚠ Intake feed is quiet</strong> — most recent inbound is ${eod.inboundDaysSince} days old (over the ${eod.inboundStaleDays}-day tolerance). Processing keeps subtracting from it, so this figure trends low until intake catches up.</td></tr>`
+      ? `<tr><td colspan="2" style="padding-top:10px;font-size:12px;color:${WARN_INK};line-height:1.5"><strong>⚠ Intake feed is quiet</strong> — most recent inbound is ${eod.inboundBusinessDaysSince} business day(s) old (${eod.inboundDaysSince} calendar days), over the ${eod.inboundStaleDays} business-day tolerance. Processing keeps subtracting from it, so this figure trends low until intake catches up.</td></tr>`
       : '') +
     // ADR-0058 §3.3 / ADR-0059 — what on-hand actually means, so a reconciled floor is
     // never misread as a fully-confirmed live net position.

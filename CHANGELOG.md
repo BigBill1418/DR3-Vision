@@ -181,6 +181,46 @@ LOG WOODLAND.xlsm` is what cost 337 — now **393** — consecutive failed polls
   no OPEN row to re-key, and historical rows keep the kind the system actually
   believed at the time.
 
+### BR-9 closed the same evening — the COR gate and EOD flag follow D6 (Amendment 2)
+
+Raised as Bill's call at the end of the D6 work; he took it at **18:20 PDT
+2026-09-07**: _"yes convert the COR gate and EOD flag to business days too."_ This
+supersedes Am.1 §A1.2, which had deferred it.
+
+- **`COR_INBOUND_STALE_MS` (96 h) and `INBOUND_STALE_DAYS` (4 calendar days) are
+  gone.** Both guards now read the D6 rule, and `INBOUND_STALE_DAYS` is _derived
+  from_ `DEFAULT_MAX_BUSINESS_DAYS` rather than restating it — so the coupling the
+  original comments asked for is code again, not prose. `DEFAULT_MAX_AGE_MS` no
+  longer exists anywhere in the tree; one number now feeds all three consumers.
+- **Sized before shipping, because this is the billing path.** Business days is not
+  uniformly looser: it is looser across weekends and closures and STRICTER on a
+  freeze beginning mid-week. Computed deterministically with the shipped
+  `businessDaysBetween` over ten consecutive freeze onsets — **4 stricter by one
+  day, 6 looser by one day, maximum divergence ONE day either way.** Not two. (The
+  earlier "two days" framing came from an ambiguity in what "a Wednesday freeze"
+  means; both readings give one day.)
+- **The EOD flag flips on zero of the 38 measured days** at Woodland, peak
+  business-day gap 0. Eugene has zero verified inbound loads and the flag is
+  structurally inert there by design.
+- **The COR half of the historical replay was discarded, not reported.**
+  `mymrc_hauls_mirror.status` is current rather than as-of — a haul first seen
+  2026-07-24 while `Confirmed` is `Delivered` today — and ADR-0089 D4's recovery
+  backfilled delivery dates on 7,314 rows on 2026-08-10. Both make a
+  `first_seen_at <= T` reconstruction measure today's values against yesterday's row
+  set; it produced negative ages, which is the signature of the contamination rather
+  than a finding. Recorded in the ADR so nobody re-runs it and believes it.
+- **The refusal is not a dead end and now states its own unit.** The `409` leads
+  with the business-day count and threshold, keeps the calendar figure alongside,
+  and keeps both forward paths (recover inbound, or take a fresh physical count,
+  then regenerate). The daily-report intake-quiet flag reads "6 business day(s) old
+  (9 calendar days), over the 2 business-day tolerance" — quoting only "9 days old"
+  against a threshold of 2 is a sentence the reader cannot reconcile.
+- **The test that pinned the old behaviour was flipped, deliberately and visibly**,
+  not deleted: it now asserts that filing on Labor Day with a Thursday record is
+  ALLOWED (105 calendar hours, one business day), plus a new case proving a genuine
+  mid-week freeze is still refused — one day earlier than 96 h. Both conversions
+  falsify: reverting either constant turns the suites red.
+
 **Residual (reported, not changed):** `scripts/bonus-eod-check.mjs` hand-rolls its own
 ntfy publish with no cooldown ledger at all — its `X-Dedup-Id` header is decorative
 (ntfy does not honour it). Not storm-capable today: a long-running loop, one fire per
