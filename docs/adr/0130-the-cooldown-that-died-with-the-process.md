@@ -487,3 +487,27 @@ form other than historical comments. `DEFAULT_MAX_BUSINESS_DAYS` is the single
 source for all three consumers: the mirror-freshness pager, the COR inbound gate,
 and the EOD intake-quiet flag. The drift that made this a follow-on cannot recur by
 omission — it would now require deleting an import.
+
+## Outcome — measured 2026-09-10, three days after the deploy
+
+This ADR predicted specific behaviour. Recording what actually happened, because
+a decision record that never checks itself is how ADR-0102 came to ship a correct
+decision onto a row nobody moved (§4, P-63).
+
+| Prediction                                       | Result                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| D1 — the ledger survives process exit            | **Held.** `dr3-vision-container-start` `send_count` 1 → 2 on one key across a ~19-container recreate; written 2026-09-07 23:15Z, incremented 2026-09-08 01:55Z by a different process.                                                                                               |
+| D6 — fires once, on the real gap                 | **Held, to the day.** `mymrc-stale-mirror:woodland` paged 2026-09-09 07:01Z, `send_count = 1`. Fri 09-04 = 1, Mon 09-07 excluded as a closure, Tue 09-08 = 2, Wed 09-09 = 3 — the first day past the threshold. Silent through the holiday Monday the 96h rule was paging on hourly. |
+| D8 — one page per site                           | **Held.** One fingerprint, not two.                                                                                                                                                                                                                                                  |
+| D9 — the matcher resolves `SEPT`                 | **Held.** First poll after deploy; `consecutive_failures` 398 → 0.                                                                                                                                                                                                                   |
+| D10 — the run ledger says where it looked        | **Held, including on a failure.** The 2026-09-09 19:50Z `HTTP 503` run still recorded the resolved folder and matched file name.                                                                                                                                                     |
+| D11 — no probe page below 3 consecutive failures | **Held.** No discovery-gap page 09-07 → 09-10.                                                                                                                                                                                                                                       |
+
+Total `dr3-vision-system` volume: **1 page in three days**, against 18 in the
+single day that opened this ADR.
+
+**What this does not prove.** The stricter direction of Amendment 2 has not been
+exercised — no COR filing has hit the converted gate during a genuine mid-week
+freeze, so the one-day-earlier refusal remains a computed result, not an observed
+one. Nor has the ≥5-business-day escalation to `high` fired. Both are pinned by
+tests; neither has met production.

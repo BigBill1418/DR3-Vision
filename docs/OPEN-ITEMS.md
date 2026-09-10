@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BR — 2026-09-07 the alert storm: one delivery defect, one real data loss, two false pages — **ADR-0130**
+## 0.BR — 2026-09-07 the alert storm: one delivery defect, one real data loss, two false pages — **ADR-0130 — SHIPPED AND VERIFIED IN PRODUCTION 2026-09-10**
 
 Bill: "tons of alerts about the scraper and data failures." The topic held 29
 messages in its retained window; **18 of them were published between 05:01 and
@@ -35,6 +35,44 @@ evaluation. Moved to a Postgres `alert_cooldowns` row with an atomic conditional
 upsert. `workbook_sources.last_alert_at` — the same policy, already stored in
 the database — paged **once** in six days of a continuously-failing condition,
 which is the proof this is a storage choice, not a policy problem.
+
+### Production outcome — verified 2026-09-10, three days after the deploy
+
+Shipped as `ac0ab2f` (storm fix, D9/D10, D11) and `1869dcf` (BR-9), both
+auto-deployed to CHAD-HQ on 2026-09-07. Measured on the live system 2026-09-10:
+
+| What                               | Before                                      | After                                                   |
+| ---------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| `dr3-vision-system` pages          | **18 in one day**, two fingerprints, hourly | **1 in three days** (`send_count = 1`)                  |
+| Workbook `consecutive_failures`    | 398, climbing since 2026-09-01              | **0** — `last_success_at` 2026-09-10 21:03Z             |
+| Workbook run outcomes, trailing 3d | every poll `not_found`                      | **272 `ok`**, 1 transient error, 0 `not_found`          |
+| `workbook_sources.folder_path`     | literal `August 2026 Woodland`              | `…/{YEAR} Daily Logs/{MONTH_TITLE} {YEAR} Woodland`     |
+| MyMRC mirror                       | processed/outbound frozen at 2026-09-03     | processed/outbound **2026-09-09**, hauls **2026-09-10** |
+
+**The durable ledger is proven across a container recreate.** The 2026-09-07
+deploy recreated ~19 containers at once — the second storm vector D1 identified,
+because every in-memory ledger is wiped and every still-true condition re-pages
+together. The `alert_cooldowns` row for `dr3-vision-container-start` went
+`send_count` 1 → 2 on the SAME key, written by one process at 23:15Z and
+incremented by a different process in a rebuilt container at 01:55Z. One page,
+not nineteen.
+
+**The business-day rule fired once, on the day D6 predicted it would.**
+`mymrc-stale-mirror:woodland` paged at 2026-09-09 07:01Z with `send_count = 1`.
+Counting from the 2026-09-03 record: Fri 09-04 = 1, Mon 09-07 excluded as a
+`site_holidays` closure, Tue 09-08 = 2, Wed 09-09 = 3 — the first day the gap
+exceeds two business days. That is BR-2's own escalation criterion firing on its
+own schedule, at `default` under the new grade, once instead of 24 times, and
+under D8's per-site fingerprint rather than two per-feed pages. The old 96h rule
+had already been paging hourly for four days by that point.
+
+**One transient failure, and the D10 columns did their job.** A single run errored
+2026-09-09 19:50Z — `download item … → HTTP 503`, upstream Graph, self-healed on
+the next poll. Its ledger row still records `folder_path_resolved` =
+`…/September 2026 Woodland` and `file_name_matched` = `SEPT 2026 DAILY LOG
+WOODLAND.xlsm`, so a reader can see the transport was looking in the right place
+and had matched the right file. That distinction is what was missing for the six
+days this incident ran.
 
 ### Follow-on decisions this work deliberately did NOT make
 
@@ -56,7 +94,14 @@ Append `prisma/seed/site_holidays.csv` before the 2027 year-end deploy.
 ### Operator actions
 
 - **BR-1 — SEPTEMBER WORKBOOK: two defects, one needs Kelsey (or her successor),
-  one is ours.** Woodland's September daily log has **not been ingested since
+  one is ours. — CLOSED 2026-09-07, verified 2026-09-10.** Both defects were
+  closed in code, and the rename in option 1 below was never needed: the ADR-0130
+  D9 tolerant matcher resolved `SEPT 2026 DAILY LOG WOODLAND.xlsm` on the first
+  poll after deploy. `consecutive_failures` 398 → **0**; the catch-up wrote
+  `rows_upserted = 3` / `rows_overwritten = 3` with **zero** rows skipped as
+  billed, manual or mid-edit — so nothing the floor entered conflicted with the
+  workbook and no reconciliation call is owed. Six days of data recovered. The
+  original diagnosis is retained below as the record. Woodland's September daily log has **not been ingested since
   2026-09-01** — the floor has been filling it in and Vision has none of it.
   Verified read-only against the live drive 2026-09-07:
 
@@ -91,7 +136,13 @@ Append `prisma/seed/site_holidays.csv` before the 2027 year-end deploy.
     divergence.
 
 - **BR-2 — MyMRC Friday 2026-09-04 is genuinely missing; RE-CHECK TUESDAY
-  2026-09-08.** The mirror's newest `processed` / `outbound` business record is
+  2026-09-08. — CLOSED 2026-09-10. No MRC call needed.** The source caught up on
+  its own: `processed` and `outbound` now hold **2026-09-09** and `hauls`
+  **2026-09-10**. The gap did cross the Wednesday line first, and the business-day
+  rule paged exactly once for it on 2026-09-09 — the escalation this item
+  specified, firing without a human having to remember the date. The prediction
+  below was right about the cause and one business day optimistic about the
+  recovery. The mirror's newest `processed` / `outbound` business record is
   2026-09-03. Every Friday since 2026-06-05 carries 1 processed + 8–11 outbound
   rows; 2026-09-04 carries none. **The scraper is not the cause** — the list
   paginates newest-first, `rows_upserted = 800` every run, and detail coverage is
@@ -110,7 +161,11 @@ Append `prisma/seed/site_holidays.csv` before the 2027 year-end deploy.
   side for anything requiring a rename, and the register's preamble already
   records that everything blocked on Kelsey is blocked with **no owner**. This is
   the first item since then that needs one and cannot proceed on Vision's side
-  alone. **Asked 2026-09-07; unanswered.**
+  alone. **Asked 2026-09-07; still unanswered as of 2026-09-10 — but no longer
+  blocking.** D9's tolerant matcher closed BR-1 without a rename, so this is now a
+  standing ownership gap rather than an outage cause. It is the second item in this
+  register blocked on a person who no longer has one, and the first one is why this
+  incident ran six days before anyone noticed.
 - **BR-4 — accept `stale_mirror` at `default` instead of `high`?** ADR-0130 §6
   downgrades it: it is an internal reconciliation input, never customer-visible,
   so ADR-0037 Q2 says it is not an hour-response signal. It escalates back to
@@ -119,7 +174,7 @@ Append `prisma/seed/site_holidays.csv` before the 2027 year-end deploy.
 
 ### Accepted residuals (recorded, not actions)
 
-- **BR-5 — the 96h freshness threshold produced 3 false pages in 38 days** and
+- **BR-5 — the 96h freshness threshold produced 3 false pages in 38 days — REPLACED, AND CONFIRMED IN PRODUCTION 2026-09-10.** Live behaviour matches the replay: across 2026-09-07 → 09-10 the business-day rule stayed silent through a holiday Monday that the 96h rule had been paging on hourly, then fired once on 2026-09-09 when the gap became real. Original finding: and
   every one landed on a Monday or Tuesday. A feed that advances only on business
   days cannot be measured in calendar hours; an ordinary Monday peaks at 83–99 h
   against a 96 h threshold, so whether the phone rings is decided by what time on
@@ -132,7 +187,8 @@ Append `prisma/seed/site_holidays.csv` before the 2027 year-end deploy.
   `reachable_count = watched_count = 11` on every successful scan since
   2026-08-17. Upstream Graph 500 (`XapSearchWorkflowProviderV3`), Microsoft's own
   text is "please try again". Now requires 3 consecutive failures (ADR-0130 D11).
-  A real `gap_count > 0` still pages on its leading edge.
+  A real `gap_count > 0` still pages on its leading edge. **Shipped; no
+  discovery-gap page has fired since (2026-09-07 → 09-10).**
 - **BR-7 — "the ADR shipped, the data did not" is now a pattern, not an
   incident.** ADR-0102's folder-rollover decision was correct, was implemented in
   `engine.ts`, and the production `workbook_sources` row was never migrated to

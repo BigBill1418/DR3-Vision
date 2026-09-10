@@ -9,6 +9,39 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-10 — ADR-0130 measured in production, three days on
+
+No code change. The 2026-09-07 work is verified against the live system and the
+0.BR register is closed out; recorded because "the fix deployed" and "the fix
+worked" are different claims and only the second one is worth anything.
+
+- **Pages: 18 in one day → 1 in three days.** The single page is
+  `mymrc-stale-mirror:woodland` at 2026-09-09 07:01Z, `send_count = 1` — fired on
+  the first day the gap genuinely exceeded two business days (Fri 09-04 = 1, Mon
+  09-07 excluded as a `site_holidays` closure, Tue 09-08 = 2, Wed 09-09 = 3), at
+  `default`, under D8's per-site fingerprint. The rule paged for the real gap and
+  stayed silent through the holiday Monday the old 96h rule had been paging on
+  hourly.
+- **The durable ledger survived a container recreate.** The deploy recreated ~19
+  containers — D1's second storm vector. `alert_cooldowns` shows
+  `dr3-vision-container-start` going `send_count` 1 → 2 on the same key, written
+  by one process and incremented by another in a rebuilt container. One page, not
+  nineteen.
+- **Workbook: `consecutive_failures` 398 → 0**, `last_success_at` 2026-09-10
+  21:03Z, 272 `ok` runs in three days and no `not_found` since the deploy. The D9
+  matcher resolved `SEPT 2026 DAILY LOG WOODLAND.xlsm` on the first poll, so the
+  rename BR-1 was waiting on a person for was never needed. The catch-up
+  overwrote 3 rows with zero skipped as billed, manual or mid-edit — nothing the
+  floor entered conflicted with the workbook.
+- **One transient failure proves the D10 columns.** A run errored 2026-09-09
+  19:50Z on an upstream Graph `HTTP 503` and self-healed next poll; its ledger row
+  still records `folder_path_resolved` and `file_name_matched`, so a reader can
+  see the transport was in the right folder with the right file. That distinction
+  is exactly what was missing for the six days this incident ran.
+- **BR-1, BR-2, BR-5, BR-6 closed** in `docs/OPEN-ITEMS.md` §0.BR with the
+  measurements above. **BR-3 (who owns the Woodland daily log) remains open and
+  unanswered** — no longer an outage cause, now a standing ownership gap.
+
 ## 2026-09-07 — The cooldown that died with the process (ADR-0130)
 
 Bill: "tons of alerts about the scraper and data failures via ntfy." Two identical
