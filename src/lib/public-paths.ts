@@ -151,6 +151,18 @@ export function isPublic(pathname: string): boolean {
   // nothing to delete and the break cost nothing yet. It was a LATENT defect
   // that would have started mattering the first time a key aged past the TTL.
   if (pathname.startsWith('/api/internal/idempotency/')) return true;
+  // The production data-invariant suite (`/api/internal/invariants`), 07:30 PT
+  // daily. Same loopback-guarded internal-route pattern as the crons above: the
+  // POST carries no session, so without this exemption the middleware refuses it
+  // and the daemon logs a failure for a run that never happened.
+  //
+  // Note the path shape: this route is `/api/internal/invariants` exactly, with
+  // no trailing segment, so it needs BOTH the prefix form (for any future
+  // subroute) and the exact match. A `startsWith('/api/internal/invariants/')`
+  // alone would not match the route that actually exists — the precise way the
+  // idempotency sweep above was broken in production for weeks.
+  if (pathname === '/api/internal/invariants') return true;
+  if (pathname.startsWith('/api/internal/invariants/')) return true;
   // ADR-0067 §3.2 — the Graph change-notification webhook
   // (`/api/doc-ingest/notifications`). UNLIKE the loopback-guarded crons above,
   // this endpoint is genuinely internet-reachable: Microsoft Graph POSTs to it

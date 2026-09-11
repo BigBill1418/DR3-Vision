@@ -9,6 +9,131 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-10 — the assertions that only ever ran against fixtures
+
+Implements **ADR-0131 D1–D8**. This repo has 6,100+ tests and every one of them runs
+against a fixture. Nothing continuously checked that production DATA still satisfies
+what the code and the ADRs assume about it. A fixture proves the code is right about
+a world we invented; it cannot notice when the real world stops resembling it.
+
+The harness was built in parallel with ADR-0131 and reconciled against it once the
+record landed. Where the two disagreed, D1–D8 won; the two places this goes beyond
+the ADR are marked below, with reasons.
+
+**Added — a production data-invariant suite.** Eight invariants, each pinning an ADR
+sentence, run daily on the existing audit-sweep container.
+
+- **Two tiers (D1).** Seven `refusal` (provable from the data; may page — 7 of D1's
+  lifetime budget of 15) and one `implausibility` (thresholded, arguable, never
+  pages). Both are necessary: a refusal tier could not have caught the 2026-09-04
+  defect, and an implausibility tier could never have caught the 2,193-unit duplicate.
+- **Co-located, not central (D2).** `src/lib/inventory/invariants.ts`,
+  `workbook-sync/invariants.ts`, `notify/invariants.ts`.
+  `src/lib/invariants/registry.ts` imports them and defines none;
+  `colocation.guard.test.ts` fails the build on an `invariants.ts` the registry does
+  not import — the case where a module exists, looks maintained, and runs nowhere.
+  - **Deviation from D2, verified:** D2 nominates `src/lib/mymrc/invariants.ts`. It
+    cannot live there. `tsconfig.mymrc.json` pins `rootDir: ./src/lib/mymrc` with no
+    `@/` alias, so any file under it importing `@/lib/prisma` breaks
+    `npm run build:mymrc` with TS6059 — the forced placement already recorded in
+    `cooldown-store.ts` and `ntfy-header-safe.ts`. The workbook invariant lives with
+    its reader in `workbook-sync/` instead.
+- **Every invariant carries `adr`, `assumption`, `gate` and `remedy` (D3).** The ADR
+  link is checked twice — `registry.test.ts` asserts the file exists, and
+  `check-adr-citations.mjs` is an existing hard build gate over `src/`.
+- **Runs on the existing `dr3-vision-audit-sweep` container (D7).** No new container,
+  no new image, no new cron entry. It runs immediately BEFORE the sweep, isolated in
+  a try/catch: the sweep is the load-bearing job there and does not get to fail
+  because a diagnostic could not page.
+- **Not a new storm (D6).** Tier B never pages, whatever its severity says — the tier
+  is checked first so the ban cannot depend on a future author remembering it.
+  Refusals page at most once per 24 h on `invariant:<id>`, claimed through the
+  durable ADR-0130 `alert_cooldowns` ledger, so a restarted cron child cannot
+  re-fire. A passing suite is silent.
+  - **Two deliberate narrowings of D6.** The fingerprint is per-invariant, not
+    per-site: `INV-ROLLOUT-SURFACE-SEEDED` has 28 subjects and would emit 28 pages
+    from one unseeded registry. And paging is not yet transition-only (PASS→FAIL) —
+    that needs durable knowledge of the previous verdict, and this pass is read-only
+    against production by instruction. The 24 h cooldown bounds a persistent failure
+    to one page per day rather than one page ever; closing it needs the
+    `invariant_state` table D5 already specifies.
+- **A check that examined nothing cannot report `ok`** — this goes beyond D3, which
+  types a check as returning "the violating rows; empty means PASS". That makes PASS
+  and "my query matched nothing" the same value. Every check returns a
+  `subjectsChecked` opportunity count and the runner rewrites a zero-subject `ok` to
+  `indeterminate`. Not hypothetical: scoped to existing rows, the workbook invariant
+  passes on Woodland and is structurally blind to Eugene having no row at all.
+- **A check that threw cannot report `violated`.** It degrades to `indeterminate`
+  with the error recorded and the rest of the list still runs. The expensive failure
+  here is a FALSE finding, not a missed one — a wrong assertion that pages costs
+  trust in the whole suite, and a muted suite is the silence this was built to end.
+- **`blind` is its own state.** All-indeterminate pages on its own fingerprint,
+  because a suite that checked nothing reports the same green as a healthy one.
+- **Read-only, with a mechanism rather than a promise.** `readonly.guard.test.ts`
+  fails the build on any Prisma or raw-SQL write verb across the plumbing AND every
+  co-located module, with negative controls so the scan itself can fire. It derives
+  its file list from the co-location scan, so a new module is in scope the moment it
+  exists — it caught its own scope gap the first time the checks moved.
+- **Cost, measured against production:** 8 invariants, 28 queries, 413 ms of database
+  time, ~650 ms wall, once a day, on a sweep that already runs for minutes.
+
+**Also added** — `/api/internal/invariants` (loopback-guarded operator dry-run;
+`notify: false` reads current state without consuming a cooldown window, `only: [...]`
+filters and then refuses to publish, because a subset reported as the whole is a
+false all-clear). It returns **200 even with violations**: findings are the payload,
+and a non-2xx would make "found problems" look identical to "could not run". Its
+`public-paths` exemption was caught by the repo's own on-disk sweep test — the same
+gap that silently broke the idempotency sweep in production for weeks.
+
+**Fixed nothing in production.** The suite diagnoses; the inventory repair is a
+separate pass.
+
+### What it found, first run against production (read-only, 2026-09-10)
+
+- **`INV-FLOOR-WITHIN-CAPACITY` — Woodland computed on-hand is 11,668 units against
+  a 3,500-unit permitted maximum (333%).** Program 11,020 / non-program 648, against
+  a 2026-08-18 physical count of 923 (201 / 722). The legs are internally consistent
+  (201 + 25,513 inbound + 239 drop-offs − 14,933 stripped = 11,020 exactly), which is
+  precisely why every invariant that checks the balance against ITSELF passes. This
+  independently reproduces ADR-0131 D8 #9.
+- **`INV-ANCHOR-FRESH` — Eugene has never recorded a physical count**, so `onHand`
+  anchors on zero; Woodland's newest anchor is 16 business days old.
+- **`INV-WORKBOOK-PATH-TOKEN` — Eugene has no `workbook_sources` row at all.** Note
+  the difference from ADR-0131 D8 #7, which records this as PASS (1/1): scoped to
+  existing rows it does pass. Scoped to SITES it does not, and the row that does not
+  exist is the one nothing could see.
+- Clean: the pool split (0.0 drift on all three measured rows), same-instant live
+  anchors, negative pools, the balance computing, and rollout coverage (28/28
+  surfaces, 2 rows each). The 2026-08-18 anchor pair is **not** a violation — the 383
+  row was voided at 16:59:40.282 and the 202 row inserted 0.478 s later, which is
+  ADR-0084's void flow working correctly.
+
+### P-63 / BR-7 audit — what else shipped without its data being moved
+
+BR-7's general question is not machine-answerable; an ADR is prose. It IS answerable
+wherever the code carries a machine-readable statement of what the data should
+contain, so that is what was audited: **every app-layer save-time guard, run against
+the rows that predate it** — the guard stops a bad value being retyped and says
+nothing about what is already there. Twelve guard classes, against production.
+Complements ADR-0131's own five-claim re-check; no overlap.
+
+- **Clean, with real denominators:** manager-only flags held by non-managers (0/19
+  users), case-insensitive duplicate emails (0/9),
+  `bonus_employees.employee_number` shape and per-site uniqueness (0/17 — app-layer
+  only, no DB constraint), `equipment.display_name` trim/whitespace/length (0/577),
+  `sources.canonical_mileage` bounds (0/26), `state_program_rules` jurisdiction and
+  ambiguity (0/12), `doc_sources.doc_class` (0/11), credential username trim (0/1),
+  rollout-surface coverage (0/28 — now standing, as `INV-ROLLOUT-SURFACE-SEEDED`).
+- **One finding: `equipment` case-folded duplicates.** `admin-equipment.ts` records
+  ONE known live pair (`Terex Machine` / `Terex machine`) as a deliberate
+  detector-not-constraint. Production holds **two**: that pair and `Terex` / `terex`,
+  both at Woodland. The accepted residual is larger than the record says.
+- **One check was vacuous and is labelled as such:** `fuel_prices.week_of` must be a
+  Monday, and `fuel_prices` is empty. Zero violations over zero rows is not a pass.
+- Not P-63, recorded so it is not rediscovered as one: `audit_check_config` has no
+  rows and four readers, but empty is a supported state falling through to code
+  defaults; `site_billing_rates` has no rows and no reader in `src/` at all.
+
 ## 2026-09-10 — ADR-0130 measured in production, three days on
 
 No code change. The 2026-09-07 work is verified against the live system and the

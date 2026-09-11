@@ -19,6 +19,132 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BS — 2026-09-10 the floor reads 11,020 in a 3,500-unit building — **ADR-0131 ACCEPTED; the data repair is NOT ours**
+
+Bill: _"the program units on hand are wildly and completely broken - all the way
+around - this needs to be totally fixed"_ and, separately, _"we need to stop
+having these become frequent situations."_ Both halves are answered:
+`docs/2026-09-10-woodland-program-floor-overstatement.md` (diagnosis, with the
+arithmetic) and `docs/adr/0131-a-number-no-one-could-call-impossible.md`
+(prevention design; Aegis is building the harness against D1–D8).
+
+**The finding in one line:** Woodland's floor shows **11,020 program units**; the
+true figure is **~390**. Two rows in **MyMRC's own Salesforce org** carry
+impossible unit counts (H-138391 = 6,020 units / 331,100 lb and H-139774 = 4,840 /
+266,200, both on 53' trailers whose 468-load mean is 114 units). **Nothing in this
+repo is broken** — the scrape, the ADR-0089 key, the ADR-0059 guard, the ADR-0084
+void filter and `computeRunningBalance` each behaved correctly and composed into a
+number wrong by 28×. `cor_certificates` and `invoices` are both empty, so nothing
+has been _filed_ by this system.
+
+### Needs a human — in priority order
+
+1. **BS-1 — CORRECT TWO HAULS IN MyMRC. _Operator / MRC. URGENT. Blocking._**
+   `Recycler_Program_Unit_Count__c` is 6,020 on **H-138391** (delivered
+   2026-09-04) and 4,840 on **H-139774** (delivered 2026-09-09). Establish the
+   true counts from the dock paperwork or BOLs and have MRC correct them **in
+   MyMRC**. The hourly scrape then re-details, the bridge rewrites the day
+   aggregates (absolute SETs — idempotent by design), and the floor self-heals
+   with no code change and no database write. **Do not hand-edit
+   `mymrc_hauls_mirror` or `inbound_loads`** — the mirror is a copy and the next
+   scrape overwrites it (ADR-0084's standing rule: do not edit the mirror).
+   _Note the ownership: these are DR3's OWN reported counts in MRC's system of
+   record (`recycler_name = 'DR3 Woodland'`), so ~10,860 phantom program units
+   sit in MRC's September record for Woodland right now. MRC bills on program
+   units. DR3-Vision cannot correct this and did not cause it._
+
+2. **BS-2 — DO NOT FILE A SEPTEMBER COR FOR WOODLAND until BS-1 lands. _Bill._**
+   `computeCorPrefill` has **no upper bound** — the only numeric gate is
+   `assertCorInventoryNotNegative`, and nothing compares the figure to
+   `sites.max_units_indoor`. On today's ledger Exhibit 5 would print **~11,700
+   units** for a 3,500-unit building.
+
+3. **BS-3 — TAKE A PHYSICAL COUNT AT WOODLAND. _Operator._** The anchor is 24
+   days old (2026-08-18). A count now re-anchors the ledger, produces a
+   `reconciled_delta` measuring exactly how wrong it was, and trips the 20% swing
+   guardrail as designed — and corrects the floor independently of whether BS-1
+   has landed.
+
+4. **BS-4 — DECIDE WHAT EUGENE'S INVENTORY SURFACES SHOULD SAY. _Bill._**
+   Eugene has **no physical anchor, ever**, and zero rows in all five flow
+   tables. `onHand` therefore returns exactly `0` — not null, not an error — and
+   "not yet onboarded" renders identically to "nothing on the floor", at
+   `text-5xl` on the operator iPad. Options: keep `0`; render "—" with an
+   explanation when no anchor has ever existed; or refuse the tile. A product
+   decision, not a bug. (`INV-COR-HAS-ANCHOR`, ADR-0131 D8 #10, closes the
+   regulatory half either way.)
+
+### Needs Aegis
+
+5. **BS-5 — RE-RUN THE PROCESSED BRIDGE OVER 2025-02-27 AND 2025-05-15.**
+   **This is a P-63 hit and it is in the billing path.** The 2026-07-30
+   negative-inventory diagnosis (§ billing, item 5) measured a **2,193-unit
+   overstatement** from two MRC-voided duplicate processed records, and named the
+   remedy. **Both rows are still in production untouched** — `stripped_program`
+   2,120.0 where 1,060 is live (2025-02-27) and 2,266.0 where 1,133 is live
+   (2025-05-15), with `created_at = updated_at = 2026-07-24 00:13`. Forty-two
+   days, a documented defect, a one-command remedy, never run. The bridge filters
+   `disappeared_at IS NULL` and self-corrects downward. **No hand-written
+   UPDATE**; verify `updated_at` has moved on both rows afterwards — the check
+   ADR-0102 taught us to run.
+
+6. **BS-6 — BUILD THE ADR-0131 HARNESS.** Seed set, tiers and the ten invariants
+   are in ADR-0131 D8. `INV-INBOUND-PLAUSIBLE` (threshold 350; observed max ever
+   is 342 over 6,551 rows) and `INV-FLOOR-WITHIN-CAPACITY` are the two that catch
+   this class. Use ADR-0130's durable `alert_cooldowns` and transition-only
+   paging — see D6, which is the constraint Bill actually asked about.
+
+7. **BS-7 — THE FULL P-63 SWEEP.** Walk every ADR and dated finding that claims a
+   production data repair, re-assert it against prod today, record HOLDS or
+   FAILS as a table in ADR-0131. Five were checked tonight as the method's proof:
+   ADR-0089 D4 (0/6,551 dateless) **HOLDS**; ADR-0089 §5 orphaned aggregates (0
+   rows) **HOLDS**; ADR-0037 D-3 (4/4 anchors at 07:00Z) **HOLDS**; ADR-0078 D1
+   (`created_at` backfill) **HOLDS**; the 2,193-unit re-run **FAILS** (= BS-5).
+   One hit in five, found in a single query.
+
+### Accepted residuals recorded, not scheduled
+
+8. **BS-8 — `startBalance` is a second implementation of `onHand`.**
+   `src/lib/audit/leg-fetchers.ts:456` issues its own anchor query **without** the
+   ADR-0078 `created_at` tiebreak and sums drop-offs **bare**, silently absorbing
+   an untaught kind where `onHand` throws. ADR-0037 D6's stated premise is "ONE
+   shared function … never two competing sums." A candidate for the ADR-0131
+   Tier A budget, not something that ADR ships.
+
+9. **BS-9 — three anchor selectors still lack the ADR-0078 tiebreak**
+   (`startBalance`, `cor/prefill.ts:215`, `loads/eod-inventory.ts:440`). ADR-0084
+   deferred this deliberately. **`cor/prefill.ts` is the COR filing path**: on a
+   two-count day the COR can name a different anchor row than the figure was
+   computed from.
+
+10. **BS-10 — seven surfaces render an unclamped on-hand**, two of which consume
+    the very `FloorInventoryTileData` whose `negative` flag exists to suppress it
+    (`OpsOverviewPanel.tsx:145`, `dashboard/page.tsx:248`). None has an **upper**
+    bound either — which is why 11,020 rendered without comment.
+
+11. **BS-11 — 894 open `audit_findings`** (381 `c1_inbound`, 361 `c3_outbound`)
+    with no triage path. ADR-0131 Tier B will add to this. Whether an unread
+    finding beats no finding is a real question the ADR names and does not settle.
+
+12. **BS-12 — `outbound_materials` and `landfilled_units` have never held a
+    Woodland row.** Two of the five subtraction legs are permanently inert, a
+    standing upward bias in the ledger. Related: ADR-0104.
+
+13. **BS-13 — the ~79/day `c5_conservation` residual is real, separate, and
+    currently masked** by the phantom inbound. Fixing BS-1 will make it visible
+    again rather than resolving it. Do not read its return as a regression.
+
+### Closed by this work
+
+- **The ADR-0089 §5 "2026-07-29 671-unit hole" is now inert.** The
+  `ipad_floor`/`mymrc_haul` slot contention for 2026-07-29 sits **pre-anchor**
+  behind the 2026-08-18 count, so it cannot move today's number. The standing
+  warning _"Do not publish or act on the −52 program floor while this is open"_
+  is **obsolete** — that floor reading no longer exists. The underlying
+  undefined-contention question is unchanged and still unowned.
+
+---
+
 ## 0.BR — 2026-09-07 the alert storm: one delivery defect, one real data loss, two false pages — **ADR-0130 — SHIPPED AND VERIFIED IN PRODUCTION 2026-09-10**
 
 Bill: "tons of alerts about the scraper and data failures." The topic held 29
