@@ -142,12 +142,35 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
               testId="ov-stale-claims"
             />
           )}
-          {data.floor ? (
+          {/*
+            BS-10 — this card consumes the very `FloorInventoryTileData` whose
+            `negative` flag exists to suppress an impossible figure, and rendered
+            the raw number regardless. The flags are decided once in
+            `computeFloorInventoryTile` precisely so every surface agrees; reading
+            the numbers and ignoring the verdict is how 11,020 units appeared in a
+            3,500-unit building here without comment.
+
+            Negative suppresses the figure entirely (it measures nothing).
+            Over-capacity keeps it and marks it (it may be a real emergency).
+          */}
+          {data.floor && data.floor.negative ? (
+            <StatCard
+              label="On the floor"
+              value="—"
+              sub="Computing negative — intake incomplete"
+              href={`/dashboard/${siteCode}/loads-inventory`}
+              testId="ov-floor-total"
+            />
+          ) : data.floor ? (
             <StatCard
               label="On the floor"
               value={nf(data.floor.totalOnFloor, 1)}
-              unit="units total"
-              sub={`${nf(data.floor.programOnFloor, 1)} program · ${nf(data.floor.nonProgramOnFloor, 1)} non-program`}
+              unit={data.floor.overCapacity ? 'units — OVER CAPACITY' : 'units total'}
+              sub={
+                data.floor.overCapacity
+                  ? `${data.floor.pctOfCapacity}% of the ${data.floor.capacity}-unit maximum · ${nf(data.floor.programOnFloor, 1)} program`
+                  : `${nf(data.floor.programOnFloor, 1)} program · ${nf(data.floor.nonProgramOnFloor, 1)} non-program`
+              }
               href={`/dashboard/${siteCode}/loads-inventory`}
               testId="ov-floor-total"
             />

@@ -42,6 +42,10 @@ const store = {
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     siteInventorySnapshot: { findFirst: async () => store.anchor },
+    // BS-10 — the tile now reads the site's permitted maximum so it can state an
+    // UPPER bound. Woodland's real cap, so the over-capacity cases in
+    // `floor-capacity.test.ts` and these pool cases share one set of numbers.
+    site: { findUnique: async () => ({ max_units_indoor: 3500, max_units_total_on_site: null }) },
     inboundLoad: { aggregate: async (): Promise<Agg> => ({ _sum: store.inbound }) },
     consumerDropoff: { groupBy: async () => store.dropoffs },
     processedUnitsDaily: {

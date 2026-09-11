@@ -10,12 +10,14 @@
 // `snapshot-void-readers.guard.test.ts`, which D2 explicitly says to copy.
 
 import { INVENTORY_INVARIANTS } from '@/lib/inventory/invariants';
+import { LOADS_INVARIANTS } from '@/lib/loads/invariants';
 import { NOTIFY_INVARIANTS } from '@/lib/notify/invariants';
 import { WORKBOOK_SYNC_INVARIANTS } from '@/lib/workbook-sync/invariants';
 import type { Invariant } from './types';
 
 export const INVARIANTS: readonly Invariant[] = [
   ...INVENTORY_INVARIANTS,
+  ...LOADS_INVARIANTS,
   ...WORKBOOK_SYNC_INVARIANTS,
   ...NOTIFY_INVARIANTS,
 ];

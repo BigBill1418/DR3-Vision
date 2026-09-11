@@ -76,7 +76,36 @@ has been _filed_ by this system.
 
 ### Needs Aegis
 
-5. **BS-5 — RE-RUN THE PROCESSED BRIDGE OVER 2025-02-27 AND 2025-05-15.**
+5. **BS-5 — DONE 2026-09-11 10:09Z. Executed and verified.** Three rows, not the
+   two named below — total **−2,198** program units, not −2,193. The third was
+   **2025-09-30** (1,154.0 → 1,149, **−5**, voided duplicate `M-145376`), found by
+   the dry-run. One mechanism explains all three: every offending mirror row went
+   `Inactive` and was stamped `disappeared_at = 2026-07-31 03:12:12.267` — ONE
+   sweep — while `processed_units_daily` was last written 2026-07-24 00:13:37 and
+   never rewritten. The 2026-07-30 diagnosis predates that sweep by a day, which is
+   why it saw only the two large ones.
+
+   ```
+   floor BEFORE: woodland=11020/648/11668
+   processed-bridge: days=402 ins=0 upd=3 skip=29 same=370
+   floor AFTER : woodland=11020/648/11668
+   floor-invariance gate PASSED — live floor byte-identical before/after
+   ```
+
+   All three rows now read 1060.0 / 1133.0 / 1149.0; `updated_at` moved on
+   **exactly 3 rows**; `still_diverging` for mymrc-sourced rows is **0**. The zero
+   floor drift is the expected result and the thing that had to be checked — every
+   affected day is a 2025 date far behind the 2026-08-18 anchor.
+
+   Run with the DEPLOYED script via `--since=2025-02-27` rather than the `--days=`
+   flag added in the same batch (uncommitted, so not on the image). Safe because
+   `processed-bridge.ts:281` `continue`s on an `unchanged` row BEFORE any write, so
+   a wider window touches only differing rows and the ADR-0102 `updated_at` check
+   survives — which `rows_touched_today = 3` then confirmed empirically. Skip
+   arithmetic reconciled: 402 = 373 mymrc (370 same + 3 upd) + 29 skipped (28
+   `import` + 1 `manual`), zero `closed_at`. **See BS-14 for those 29 skips.**
+
+   _Original item:_ **RE-RUN THE PROCESSED BRIDGE OVER 2025-02-27 AND 2025-05-15.**
    **This is a P-63 hit and it is in the billing path.** The 2026-07-30
    negative-inventory diagnosis (§ billing, item 5) measured a **2,193-unit
    overstatement** from two MRC-voided duplicate processed records, and named the
@@ -88,7 +117,15 @@ has been _filed_ by this system.
    UPDATE**; verify `updated_at` has moved on both rows afterwards — the check
    ADR-0102 taught us to run.
 
-6. **BS-6 — BUILD THE ADR-0131 HARNESS.** Seed set, tiers and the ten invariants
+6. **BS-6 — DONE 2026-09-11 (`a525944` + the follow-up batch).** Nine invariants
+   against D1–D8, live in production: first fire 2026-09-11 09:30Z on the
+   audit-sweep tick, two refusal pages plus one digest, all `default`.
+   `INV-INBOUND-PLAUSIBLE` was MISSING from the first pass and landed in the
+   second; both invariants ADR-0131 names as catching this class now fire, naming
+   H-138391 and H-139774. Two calibration corrections are in the code: the
+   threshold applies to the per-haul MIRROR (against `inbound_loads`, a per-day
+   aggregate, 598 of 650 rows would false-positive), and the observed legitimate
+   maximum is **303 over 1,094 rows**, not 342 over 6,551 — threshold unchanged at 350. _Original item:_ **BUILD THE ADR-0131 HARNESS.** Seed set, tiers and the ten invariants
    are in ADR-0131 D8. `INV-INBOUND-PLAUSIBLE` (threshold 350; observed max ever
    is 342 over 6,551 rows) and `INV-FLOOR-WITHIN-CAPACITY` are the two that catch
    this class. Use ADR-0130's durable `alert_cooldowns` and transition-only
@@ -104,20 +141,40 @@ has been _filed_ by this system.
 
 ### Accepted residuals recorded, not scheduled
 
-8. **BS-8 — `startBalance` is a second implementation of `onHand`.**
+8. **BS-8 — CLOSED 2026-09-11.** Both paths now call one `computePoolBalance`; the
+   only thing either caller may express is its upper bound (`lte` live floor / `lt`
+   audit roll). All three divergences gone: the anchor tiebreak, the bare drop-off
+   sum (it now throws `UnknownDropoffKindError` exactly as `onHand` does), and the
+   private `VERIFIED_STATUSES` copy. 185 existing inventory/audit tests pass
+   unchanged. _Original item:_ **`startBalance` is a second implementation of `onHand`.**
    `src/lib/audit/leg-fetchers.ts:456` issues its own anchor query **without** the
    ADR-0078 `created_at` tiebreak and sums drop-offs **bare**, silently absorbing
    an untaught kind where `onHand` throws. ADR-0037 D6's stated premise is "ONE
    shared function … never two competing sums." A candidate for the ADR-0131
    Tier A budget, not something that ADR ships.
 
-9. **BS-9 — three anchor selectors still lack the ADR-0078 tiebreak**
+9. **BS-9 — CLOSED 2026-09-11, and there were FOUR, not three.**
+   `src/lib/inventory/__tests__/anchor-tiebreak.guard.test.ts` parses every
+   `siteInventorySnapshot.findFirst` that selects a physical anchor and fails the
+   build on any without `[{snapshot_at:'desc'},{created_at:'desc'}]`. It found
+   `leg-fetchers.ts:677` beyond the three named — the argument for a guard over
+   three point-edits. Each of the three carried a comment SAYING the tiebreak was
+   missing: a known defect, documented at the call site, propagated by copy.
+   _Original item:_ **three anchor selectors still lack the ADR-0078 tiebreak**
    (`startBalance`, `cor/prefill.ts:215`, `loads/eod-inventory.ts:440`). ADR-0084
    deferred this deliberately. **`cor/prefill.ts` is the COR filing path**: on a
    two-count day the COR can name a different anchor row than the figure was
    computed from.
 
-10. **BS-10 — seven surfaces render an unclamped on-hand**, two of which consume
+10. **BS-10 — CLOSED 2026-09-11 (flagged, deliberately not clamped).**
+    `FloorInventoryTileData` gains `capacity` / `overCapacity` / `pctOfCapacity`,
+    decided in the builder beside `negative` for the reason `negative`'s own comment
+    gives — so no two surfaces can disagree. It FLAGS rather than clamps: a floor
+    over its cap may be a real operational emergency, and clamping would hide that
+    while silently falsifying the other case. A negative floor still replaces the
+    figure; an over-capacity floor keeps it and marks it. `OpsOverviewPanel` and
+    `dashboard/page.tsx` now honour both verdicts.
+    _Original item:_ **seven surfaces render an unclamped on-hand**, two of which consume
     the very `FloorInventoryTileData` whose `negative` flag exists to suppress it
     (`OpsOverviewPanel.tsx:145`, `dashboard/page.tsx:248`). None has an **upper**
     bound either — which is why 11,020 rendered without comment.
@@ -133,6 +190,38 @@ has been _filed_ by this system.
 13. **BS-13 — the ~79/day `c5_conservation` residual is real, separate, and
     currently masked** by the phantom inbound. Fixing BS-1 will make it visible
     again rather than resolving it. Do not read its return as a regression.
+
+### Recorded 2026-09-11 — not acted on
+
+14. **BS-14 — seven days disagree with the MyMRC mirror and are protected from the
+    bridge by SOURCE PRECEDENCE.** Surfaced by the BS-5 run's `skip=29`. The
+    workbook (`source = 'import'`, plus one `manual`) and MRC disagree on
+    2026-08-06 (+159), 08-13 (+379), 08-19 (+10, the manual row), 08-26 (+35),
+    08-27 (+395), 08-28 (+37), 09-03 (−69). **Six of seven run the same direction**
+    — the workbook records LESS stripped than MRC — netting **+946 units of stripped
+    that Vision is not subtracting**, which overstates the floor by that much on top
+    of everything else.
+
+    May be entirely legitimate: the precedence rule exists on purpose (a human row
+    wins over a bridged one, ADR-0058) and dual-recording with a lag is the normal
+    shape. May equally be a second unreconciled discrepancy of the BS-5 family.
+    **Nobody has checked, and nothing checks.** It matters because
+    `stripped_program` is the MRC billing input. Deciding which side is right is a
+    question for whoever holds the workbook, not a code change — and a Tier B
+    invariant here would fire daily on a state somebody may already have accepted.
+
+15. **BS-15 — the AP routing-problem alert is fingerprinted per REQUEST, not per
+    cause.** `src/lib/ap/notify.ts` pages once per affected invoice when the
+    second-approval routing table is misconfigured — one cause, N pages. A soft
+    failure of ADR-0037 gate question 4. Downgraded `urgent` → `high` in the
+    2026-09-11 ntfy audit, which makes the noise survivable; the fingerprint was
+    left alone because a cause-level one would suppress a genuinely different
+    routing problem on another request for the whole cooldown window.
+
+16. **BS-16 — `dr3-vision-container` has no row in
+    `noc-master/data/ntfy-fallback-topics.yml`.** `src/lib/ntfy.ts` maps it to the
+    generic `dr3-vision` fallback topic. It works and is written down nowhere.
+    Registry lives in another repo — one line, next time someone is in that file.
 
 ### Closed by this work
 

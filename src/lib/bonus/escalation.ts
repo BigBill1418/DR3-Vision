@@ -382,7 +382,23 @@ async function tierAutoOverride(
         `System auto-signed ${signedSlotsLabel(unsignedSlots)} for ${period.site.name} ` +
         `Period ${period.period_number} (${period.period_year}) as ${actor.name} per ` +
         `ADR-0019.1 escalation policy. PDF + payroll delivery triggered.`,
-      priority: 'urgent',
+      // ADR-0037 re-grade (ntfy audit 2026-09-11): `default`, was `urgent`.
+      //
+      // This is a SUCCESS CONFIRMATION. The auto-override ran, the period is
+      // signed, the PDF and payroll delivery fired — the system did the right
+      // thing without anyone. It failed all five gate questions at `urgent`:
+      // nothing is actionable in five minutes (it already happened), there is no
+      // customer impact, and Q3's "has the system tried to self-heal first?" is
+      // not merely satisfied but is the entire content of the message.
+      //
+      // It stays a page rather than becoming a dashboard tile because ADR-0019.1
+      // §4 requires an audit trail that a machine signed for a human on a payroll
+      // document. That is a record Bill must SEE, not one he must WAKE for.
+      //
+      // Its siblings in this file stay `urgent` and are different in kind: actor
+      // unavailable, period STRANDED and payroll deadline MISSED all mean payroll
+      // does not go out. This one means it did.
+      priority: 'default',
       tags: ['white_check_mark', 'bonus', 'auto-override'],
       fingerprint: `bonus-auto-override:${period.site.code}:${period.id}`,
       cooldownMs: 6 * 60 * 60 * 1000,

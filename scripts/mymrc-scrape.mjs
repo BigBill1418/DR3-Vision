@@ -44,7 +44,7 @@ const HEADLESS = (process.env.MYMRC_HEADLESS ?? 'true').toLowerCase() !== 'false
 // so the alert is directly actionable (ADR-0037 gate Q5).
 const ADMIN_SURFACE_URL =
   process.env.MYMRC_ADMIN_SURFACE_URL?.trim() ||
-  'https://dr3-vision.barnardhq.com/admin/mrc-scrape';
+  'https://dr3-vision.svdp.us/admin/mrc-scrape';
 
 function log(level, message) {
   const line = `mymrc-sync[${new Date().toISOString()}]: ${message}`;

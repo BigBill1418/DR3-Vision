@@ -25,6 +25,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { onHand } from '@/lib/inventory/running-balance';
+import { floorCapacityState } from '@/lib/dashboard/floor-capacity';
 import { appTodayISO, dayKeyUTCFromISO } from '@/lib/time';
 
 const D = Prisma.Decimal;
@@ -64,6 +65,19 @@ export interface FloorInventoryTileData {
    * positive total is still a billing-grade error.
    */
   negative: boolean;
+  /**
+   * BS-10 — the site's permitted maximum, or null when none is recorded.
+   *
+   * The symmetric half of `negative`, and decided in the same place for the same
+   * reason. A floor has always had a lower bound it could not cross and, until this,
+   * no upper one — which is why 11,020 units rendered in a 3,500-unit building on
+   * seven surfaces for six days without comment.
+   */
+  capacity: number | null;
+  /** True when a cap exists and a non-negative floor strictly exceeds it. */
+  overCapacity: boolean;
+  /** Floor as a whole-number percentage of capacity, or null without a cap. */
+  pctOfCapacity: number | null;
   trailingUnitsPerDay: number | null;
   programDaysRemaining: number | null;
   asOfISO: string;
@@ -112,11 +126,18 @@ export async function computeFloorInventoryTile(
   const endKey = dayKeyUTCFromISO(asOfISO);
   const startKey = new Date(endKey.getTime() - 6 * 86_400_000); // trailing 7 days inclusive
 
-  const [balance, closes] = await Promise.all([
+  const [balance, closes, site] = await Promise.all([
     onHand(siteId, now),
     prisma.processedUnitsDaily.findMany({
       where: { site_id: siteId, production_date: { gte: startKey, lte: endKey } },
       select: { stripped_program: true, stripped_non_program: true },
+    }),
+    // BS-10 — the permitted maximum, read alongside the balance so the tile can
+    // state the bound rather than leaving every consumer to look it up (or, as
+    // happened, not to).
+    prisma.site.findUnique({
+      where: { id: siteId },
+      select: { max_units_indoor: true, max_units_total_on_site: true },
     }),
   ]);
 
@@ -126,12 +147,20 @@ export async function computeFloorInventoryTile(
   const nonProgramOnFloor = balance.nonProgram.toNumber();
   const totalOnFloor = balance.total.toNumber();
 
+  const capacity = floorCapacityState(totalOnFloor, {
+    maxUnitsIndoor: site?.max_units_indoor ?? null,
+    maxUnitsTotalOnSite: site?.max_units_total_on_site ?? null,
+  });
+
   return {
     programOnFloor,
     nonProgramOnFloor,
     totalOnFloor,
     anchorPool: balance.anchorPool ?? null,
     negative: programOnFloor < 0 || nonProgramOnFloor < 0 || totalOnFloor < 0,
+    capacity: capacity.capacity,
+    overCapacity: capacity.overCapacity,
+    pctOfCapacity: capacity.pctOfCapacity,
     trailingUnitsPerDay: projection.trailingUnitsPerDay,
     programDaysRemaining: projection.programDaysRemaining,
     asOfISO,

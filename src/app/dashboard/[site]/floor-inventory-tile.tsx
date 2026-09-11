@@ -61,6 +61,15 @@ export function FloorInventoryTile({
               unsplit anchor
             </span>
           )}
+          {tile.overCapacity && (
+            <span
+              className="rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300"
+              data-testid="floor-over-capacity-badge"
+              title={`This floor exceeds the site's permitted maximum of ${tile.capacity} units.`}
+            >
+              over capacity
+            </span>
+          )}
           Live · as of {tile.asOfISO}
         </span>
       </div>
@@ -97,6 +106,29 @@ export function FloorInventoryTile({
         and markup that is merely `display:none` still ships the sentence to
         anything reading the page's HTML.
       */}
+      {/*
+        BS-10 — an over-capacity floor is shown WITH its numbers, unlike a negative
+        one. The distinction is deliberate. A negative floor is not a measurement of
+        anything, so printing it invites it into a spreadsheet. An over-capacity
+        floor may be entirely real — too many mattresses genuinely in the building
+        is an operational emergency someone has to act on — so the number stays and
+        the claim beside it is what changes. Woodland read 11,020 units in a
+        3,500-unit building for six days at `text-5xl` with nothing on the screen
+        saying so.
+      */}
+      {!tile.negative && tile.overCapacity && (
+        <div
+          className="rounded border border-red-500/60 bg-red-500/10 p-3 text-sm leading-relaxed text-red-200"
+          data-testid="floor-over-capacity-banner"
+          role="status"
+        >
+          <strong className="block text-red-300">
+            Above the permitted maximum — {tile.pctOfCapacity}% of {tile.capacity} units.
+          </strong>
+          Either the building is genuinely over its contract limit, or a flow row is wrong. Check
+          the legs since the last physical count before this figure is used for a COR or an invoice.
+        </div>
+      )}
       {!tile.negative && (
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-dr3-mist-dim">
           <span data-testid="floor-program-days">

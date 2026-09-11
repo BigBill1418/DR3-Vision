@@ -18,6 +18,12 @@ export interface BackfillOpts {
   siteCodes: string[] | null;
   /** Lower-bound Pacific production day `YYYY-MM-DD`, or null for full history. */
   since: string | null;
+  /**
+   * BS-5 — restrict to EXACTLY these Pacific production days, or null. Sorted and
+   * de-duplicated by `parseArgs`, which also refuses an empty list and refuses to
+   * be combined with `since`.
+   */
+  days: string[] | null;
 }
 
 /** Injectable collaborators for {@link runProcessedBridgeBackfill}. */

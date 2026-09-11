@@ -12,6 +12,8 @@
 // `bonus-escalation-cron.test.ts`; here we mock the transport as the sibling cron
 // tests do.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   fireTierWithRetry,
@@ -105,7 +107,7 @@ describe('publishFireFailure — app-independent backstop page', () => {
     delete process.env['NTFY_PUBLISHER_TOKEN'];
   });
 
-  it('posts to the primary ntfy topic (NOT the app) with a bearer, dedup id, and urgent priority for t3', async () => {
+  it('posts to the primary ntfy topic (NOT the app) with a bearer and urgent priority for t3', async () => {
     process.env['NTFY_PUBLISHER_TOKEN'] = 'tk_test';
     const { calls } = stubFetch(true);
 
@@ -117,9 +119,32 @@ describe('publishFireFailure — app-independent backstop page', () => {
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers['Authorization']).toBe('Bearer tk_test');
     expect(headers['Priority']).toBe('urgent');
-    expect(headers['X-Dedup-Id']).toBe('bonus-escalation-fire-failed:t3:2026-06-09');
     // The page never routes through the DR3 app.
     expect(calls[0]!.url).not.toContain('/api/internal');
+  });
+
+  it('sends NO X-Dedup-Id — ntfy does not honour it (ntfy audit 2026-09-11)', () => {
+    // This test used to ASSERT the header's presence, which is how a no-op
+    // survives: a green test named "dedup id" reads as proof that deduplication
+    // works. ntfy has no such server feature, so the header deduplicated nothing
+    // while making the code look as though something did.
+    //
+    // It was NOT replaced with the ADR-0130 durable ledger here, deliberately.
+    // `publishFireFailure` is the APP-DOWN backstop — it publishes only when the
+    // app is unreachable, which is when the database usually is too. Giving the
+    // last-resort pager a dependency on the thing that is probably down is the
+    // wrong direction to fail. The real dedup on this path is the schedule: four
+    // fixed daily fires, and a restart computes the next fire strictly after now.
+    //
+    // Asserted by reading the source, because the point is that the header must
+    // not come BACK — a behavioural assertion on an absent header passes equally
+    // whether the publisher is correct or simply never called.
+    const src = readFileSync(join(process.cwd(), 'scripts', 'bonus-escalation-check.mjs'), 'utf8');
+    const code = src
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+      .join('\n');
+    expect(code).not.toContain('X-Dedup-Id');
   });
 
   it('uses high priority for a reminder tier (t1)', async () => {

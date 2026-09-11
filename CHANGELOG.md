@@ -108,6 +108,232 @@ separate pass.
   row was voided at 16:59:40.282 and the 202 row inserted 0.478 s later, which is
   ADR-0084's void flow working correctly.
 
+### 2026-09-11 — the second half: the inventory repair (0.BS)
+
+Same entry, next pass. The harness shipped as `a525944`; this is the repair work it
+was built to make visible. **ADR-0131's falsification test now passes:** both
+invariants it names as catching this class fire against production, naming the two
+hauls.
+
+**BS-5 — DRY-RUN ONLY, awaiting confirmation. Nothing was written.** The 2026-07-30
+remedy that was never executed: re-run the processed bridge over the days whose
+stored aggregates still contain MRC-voided duplicates.
+
+- **The mechanism, established rather than assumed.** All three offending mirror
+  rows went `Inactive` and were stamped `disappeared_at = 2026-07-31 03:12:12.267` —
+  one sweep, one instant. `processed_units_daily` was last written **2026-07-24
+  00:13:37** and has never been rewritten since (`created_at = updated_at` on every
+  row). The stored aggregates therefore still contain records MRC has withdrawn.
+- **There are THREE rows, not two.** The dry-run found a third the diagnosis does
+  not name:
+
+  | `production_date` |      stored | bridge would write |      delta |
+  | ----------------- | ----------: | -----------------: | ---------: |
+  | 2025-02-27        |     2,120.0 |              1,060 | **−1,060** |
+  | 2025-05-15        |     2,266.0 |              1,133 | **−1,133** |
+  | **2025-09-30**    | **1,154.0** |          **1,149** |     **−5** |
+
+  Total **−2,198 program units**, not −2,193. The third is the same class and the
+  same cohort; its voided duplicate (`M-145376`, 5 units) was simply small enough
+  that nobody counted it. `stripped_program` is the MRC billing input
+  (`generation-inputs.ts:124`).
+
+- **Both precedence gates clear:** all three rows are `source = 'mymrc'` with
+  `closed_at IS NULL`, so the bridge will write rather than skip. Confirmed before
+  proposing the run — a remedy that the guard would have silently refused is not a
+  remedy.
+- **Added `--days=` to the backfill runner**, and this is the point of the flag.
+  `--since=2025-02-27` would re-bridge **402** production days to fix three rows,
+  and the verification ADR-0102 taught us to run — _did `updated_at` move on the
+  rows we meant?_ — stops discriminating once it has moved on everything. `--days`
+  names the exact set. It refuses an empty list (which would silently widen to full
+  history with an identical-looking command) and refuses to be combined with
+  `--since`.
+- **Blast radius, measured three ways:** `--days` (3 days) · `--since=2025-02-27`
+  (402 days considered) · `--backfill` (1,014 days considered, 3 updates, 29 guarded,
+  982 unchanged). Every affected day is a 2025 date, far behind the 2026-08-18
+  anchor, so `onHand`'s `{ gt: anchorDay }` excludes them and the ADR-0058 D4
+  floor-invariance gate must show **zero drift** — which is the gate's whole purpose
+  and the thing to watch on the real run.
+- **Not executed.** Awaiting confirmation before a billing-path row moves.
+  `updated_at` on all three rows is unchanged at `2026-07-24 00:13:37`, verified
+  after the dry-run.
+
+**BS-8 — `startBalance` is no longer a second implementation of `onHand`.** ADR-0037
+D6's stated premise is "ONE shared function … never two competing spreadsheet sums";
+there were two, and they had drifted in three ways that each move a billing number:
+no ADR-0078 anchor tiebreak, a bare drop-off sum that silently absorbed an untaught
+kind where `onHand` throws, and a private copy of the verified-inbound status list.
+Both paths now call one `computePoolBalance`; the only thing either caller may
+express is its upper bound (`lte` for the live floor, `lt` for the audit roll). The
+185 existing inventory/audit tests pass unchanged.
+
+**BS-9 — all FOUR anchor selectors carry the ADR-0078 D1 tiebreak**, enforced by
+`anchor-tiebreak.guard.test.ts` rather than by three point-edits. The guard is the
+argument: BS-9 named three selectors and the scan found a **fourth**
+(`leg-fetchers.ts:677`). Each of the three had a comment saying the tiebreak was
+missing — a known defect, documented at the call site, propagated by copy, which is
+the shape this repo keeps rediscovering. `running-balance.ts` already said "if you
+change one of these two orderings, change both"; a sentence is not a mechanism.
+`cor/prefill.ts` is the COR filing path, and Woodland's 2026-08-18 is exactly the
+tying pair that makes it matter.
+
+**BS-10 — the floor has an upper bound for the first time.** `FloorInventoryTileData`
+carried `negative`, computed in the builder so "the tile and the daily report cannot
+disagree about when a floor has gone impossible" — and that reasoning had only ever
+been applied downward. New `capacity` / `overCapacity` / `pctOfCapacity`, decided at
+the same choke point. **It flags, it does not clamp:** a floor over its cap may be a
+genuine operational emergency, and clamping would hide that while silently falsifying
+the other case. A negative floor still replaces the figure (it measures nothing); an
+over-capacity floor keeps it and marks it. The two surfaces that consumed the tile
+and ignored even `negative` (`OpsOverviewPanel`, `dashboard/page.tsx`) now honour
+both verdicts.
+
+**`INV-INBOUND-PLAUSIBLE` shipped** (ADR-0131 D8 #8) — it was **not** in the
+2026-09-10 harness, and it is the invariant that catches this class. Tier B, never
+pages. It fires on both hauls:
+
+```
+INV-INBOUND-PLAUSIBLE  implausibility  VIOLATED  73ms  subjects=1096
+  * woodland H-138391: 6020 program units on a 53' Trailer (331100 lb) delivered 2026-09-04
+  * woodland H-139774: 4840 program units on a 53' Trailer (266200 lb) delivered 2026-09-09
+```
+
+- **It thresholds the per-haul MIRROR, never `inbound_loads`** — which is a
+  per-site-per-DAY aggregate (ADR-0060 D5). Against production, **598 of its 650**
+  verified rows exceed 350 legitimately, because one day holds several hauls. Aiming
+  this invariant at the table the balance reads would have produced a 598-row false
+  positive on its first run, and a suite that cries wolf once gets muted. A test pins
+  the table.
+- **Calibration differs from the record and the threshold does not.** ADR-0131 D8 #8
+  gives the basis as "observed maximum ever is 342, over 6,551 rows". Neither
+  reproduces on any filter tried (all mirror rows 7,568 · live 1,112 · live Delivered
+  General 1,096), and excluding the two offenders the all-time max is **303**, not
+  342, on every unit column. 350 still clears it with ~15% headroom and catches both
+  offenders by more than an order of magnitude, so the number stands and the basis
+  recorded in the code is the one that can be re-derived.
+
+**Cost after this pass:** 9 invariants, 31 queries, 495 ms database time, ~575 ms
+wall — still nil against the audit sweep it rides, which runs for minutes.
+
+### 2026-09-11 — every ntfy alert in the repo, audited against reality
+
+Bill: _"check all the ntfy alerts for this repo - make sure we are good here check
+it all and repair all."_ 41 `publishNtfy` call sites plus four `.mjs` publishers,
+audited on seven dimensions and reconciled against the live retained window on both
+topics. Hosts were **tested, not read** — which is the only reason the headline
+defect was found.
+
+**Fixed — every MyMRC alert has carried a dead link since the day it was written.**
+`src/lib/mymrc/ntfy.ts` set its tier-2 click to `dr3-vision.barnardhq.com`. That
+host has no DNS record at all:
+
+```
+https://dr3-vision.barnardhq.com/admin/mrc-scrape   dns=NXDOMAIN   http=000
+https://dr3-vision.svdp.us/admin/mrc-scrape         dns=2606:…c88  http=307
+```
+
+The app is published at `dr3-vision.svdp.us` (CLAUDE.md "Build context"), which
+every other publisher already used. **The same wrong host was copied into three
+`.mjs` workers** — `mymrc-scrape`, `mymrc-backfill`, `mymrc-enrich-details` — so
+four publishers shipped it. Measured against the live window: **25 of 41 retained
+messages** carried it, including all 24 stale-mirror pages of 2026-09-07. Those
+alerts were delivered, graded and deduplicated correctly, and were unactionable.
+
+This is the confusable-hostname class `src/lib/ntfy.ts:19` already warns about
+(`noc.barnardhq.com` vs `noc-mastercontrol.barnardhq.com`) — recurring two files
+away from its own warning. That warning is live, incidentally:
+`noc.barnardhq.com/status/dr3-vision` returns **404**, while
+`noc-mastercontrol.barnardhq.com/status/dr3-vision` returns **200**.
+
+**Added `src/__tests__/ntfy-click-url-hosts.guard.test.ts`** — every fleet host
+literal (`barnardhq.com` / `svdp.us`) in `src/` and `scripts/` must be on an
+allowlist recording the date and status code it was verified with, plus a named
+known-wrong list that can say _"use this instead"_. A comment did not prevent this
+and would not prevent the next one.
+
+- **The first version of the guard was wrong and the negative controls caught it.**
+  It keyed on `clickUrl:` / `Click:` / `*CLICK_URL` and found only ONE of the four
+  dead links: `mymrc-scrape.mjs` names its constant `ADMIN_SURFACE_URL` and wraps
+  the literal onto the next line. A guard keyed on a naming convention only finds
+  the authors who followed it, and the author who did not is the one worth
+  catching. Rescoped to _what the host is_, not what the constant is called.
+
+**Fixed — a dedup header that deduplicated nothing.** `scripts/bonus-eod-check.mjs`
+sent `X-Dedup-Id: <fingerprint>`. **ntfy has no such feature**, so the header was
+decorative while making the code read as though deduplication were handled. It now
+claims the durable ADR-0130 ledger (20 h, per site per day).
+
+- **The `dist/` objection I raised previously does not survive checking.** The
+  script already imports `PrismaClient`, `dist/` is already COPY'd into the runner
+  stage, and `mymrc-processed-bridge-backfill.mjs` already uses exactly this
+  `createRequire(dist/mymrc)` pattern. It also already needs the database to decide
+  whether to page, so the ledger adds no failure mode that was not there.
+- **`scripts/bonus-escalation-check.mjs` keeps no ledger, deliberately.** Its
+  header is removed too, but it is the APP-DOWN BACKSTOP — it publishes on its own
+  only when the app is unreachable, which is when the database usually is. Giving
+  the last-resort pager a dependency on the thing that is probably down is the
+  wrong direction to fail, and it would buy nothing (a one-shot process's fallback
+  map is empty, so the claim is granted anyway). Its real dedup is the schedule.
+- The test that asserted the header's PRESENCE now asserts its absence. A green
+  test named "dedup id" reads as proof that dedup works, which is how the no-op
+  survived.
+
+**Re-graded three `urgent` publishes** (ADR-0037: `urgent` means customer impact
+now or imminent data loss, target ≤ 2/week):
+
+| Site                                              | Was    | Now          | Why                                                                                                                                                                                                                                                         |
+| ------------------------------------------------- | ------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bonus/escalation.ts` auto-override **applied**   | urgent | `default`    | A SUCCESS confirmation. The system auto-signed, the PDF and payroll fired. Q3 ("has it tried to self-heal?") is not merely satisfied — it is the whole message. Stays a page because ADR-0019.1 §4 needs the audit trail; a record to SEE, not to WAKE for. |
+| `bonus/amendment-notifications.ts` "X pinged you" | urgent | `high` + 6 h | A person nudging a person. It also had NO cooldown, so it inherited the 5-minute default and could re-page twelve times an hour.                                                                                                                            |
+| `ap/notify.ts` second-approval routing problem    | urgent | `high`       | An invoice stuck unapproved is worth the hour; it is not data loss.                                                                                                                                                                                         |
+
+The payroll cluster stays `urgent` and that is deliberate: _actor unavailable_,
+_period STRANDED_ and _payroll deadline MISSED_ all mean payroll does not go out,
+which is ADR-0019.1's designed tier and the carve-out ADR-0130 §6 already blesses.
+
+**Discrepancy worth recording:** ADR-0130 §6 states _"Nothing in this repo publishes
+`urgent`"_ with a carve-out for one bonus-signature page. The repo had **nine**
+`urgent` call sites. §6's claim was scoped to the ingestion alerts it re-graded but
+reads repo-wide. Six remain, all payroll.
+
+**Checked and found correct — recorded so the next audit can start from a
+narrower question:**
+
+- **Fallback topics** — all four in use (`system`, `deploys`, `loads`, `floor`)
+  match `noc-master/data/ntfy-fallback-topics.yml` exactly. One drift to note, in
+  the registry rather than here: `dr3-vision-container` has no row of its own and
+  the code maps it to the generic `dr3-vision` fallback. It works; it is not
+  written down.
+- **Header safety** — `ntfy.ts` and `mymrc/ntfy.ts` both sanitize _every_ header
+  except `Authorization`, at the choke point rather than per field. Already swept by
+  `ntfy-header-safety-sweep.test.ts`, which carries its own match-nothing guard.
+- **Token handling** — no token value in any code, log or message path; only the
+  variable NAME appears, in "unset" log lines.
+- **Cooldown coverage** — **zero** publishers have a stable (literal) fingerprint
+  with no explicit cooldown. Every site relying on the 5-minute default has a
+  per-event fingerprint, where that default is right.
+- **Topic correctness** — the one publisher that looks like a rule #5 violation,
+  `floor/dead-end-alert.ts` on `dr3-vision-floor`, argues the case explicitly in its
+  header and is right: a screen rendered with no next action is a system event, not
+  an operational one. `dr3-vision-queue` is an IndexedDB database name, not a topic.
+- **The matrix vs what fired.** Every ADR-0130 §6 row that never fired is a
+  healthy-is-silent row (`auth_failed`, `contract_drift`, `zero_anomaly`,
+  `deadman`, `dateless_hauls`, `error`, workbook `forbidden`, doc-ingest probe).
+  Most alerts that DID fire are not in §6 at all — the matrix is scoped to
+  ingestion, not to the repo, despite its opening sentence.
+- **The ADR-0131 harness is live and behaving.** It fired for the first time in
+  production at 2026-09-11 09:30Z on the audit-sweep tick: two refusal pages plus
+  one digest, all `default`, all with a resolving click. Exactly the shape the
+  design predicted.
+
+**Not repaired, deliberately:** `ap/notify.ts`'s routing-problem fingerprint is
+per-REQUEST, so one misconfigured routing table pages once per affected invoice
+rather than once per cause — a soft failure of ADR-0037 gate question 4. A
+cause-level fingerprint would suppress a genuinely different routing problem on
+another request for the whole window. At `high` rather than `urgent` the noise is
+survivable. Recorded in OPEN-ITEMS rather than changed on my own judgement.
+
 ### P-63 / BR-7 audit — what else shipped without its data being moved
 
 BR-7's general question is not machine-answerable; an ADR is prose. It IS answerable

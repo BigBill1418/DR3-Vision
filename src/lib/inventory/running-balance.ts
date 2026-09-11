@@ -39,7 +39,12 @@
 // All arithmetic uses `Prisma.Decimal` (stripped units are Decimal(7,1); every
 // other count is an Int) so there is zero float drift at any count boundary.
 
-import { Prisma, type LoadStatus, type ConsumerDropoffKind } from '@prisma/client';
+import {
+  Prisma,
+  type LoadStatus,
+  type ConsumerDropoffKind,
+  type PrismaClient,
+} from '@prisma/client';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { prisma } from '@/lib/prisma';
 import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
@@ -359,8 +364,30 @@ export function anchorFlowBounds(anchorAt: Date | null): {
  * `program + nonProgram === total` still holds. This default is documented in
  * docs/QUESTIONS.md (question ADR-0037-inventory-anchor-pool).
  */
-export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance> {
-  const anchor = await prisma.siteInventorySnapshot.findFirst({
+/**
+ * The upper bound of a balance window. `lte` is the LIVE floor ("as of this
+ * instant, inclusive"); `lt` is the audit's roll anchor ("strictly before the
+ * window opens"). One shape, because it is the ONLY thing that differed between
+ * the two implementations that used to exist.
+ */
+export type BalanceUpperBound = { lte: Date } | { lt: Date };
+
+/**
+ * The client the balance reads through.
+ *
+ * `PrismaClient` rather than a hand-written structural type, deliberately: every
+ * caller already holds one (`onHand` the module singleton, the audit an injected
+ * one), and a narrowed interface here would have to re-declare six Prisma
+ * delegate signatures, which is a third place for the shapes to drift.
+ */
+export type BalanceDb = PrismaClient;
+
+export async function computePoolBalance(
+  db: BalanceDb,
+  siteId: string,
+  upper: BalanceUpperBound,
+): Promise<RunningBalance> {
+  const anchor = await db.siteInventorySnapshot.findFirst({
     // ADR-0084 — `NOT_VOIDED` first, and it is not optional here. This is THE
     // anchor selector: a voided count reaching this query does not produce a
     // slightly wrong list, it recomputes the whole floor from a number an
@@ -369,7 +396,7 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
       ...NOT_VOIDED,
       site_id: siteId,
       snapshot_kind: 'physical',
-      snapshot_at: { lte: asOf },
+      snapshot_at: upper,
     },
     // ADR-0078 D1 — MUST match `loadPriorAnchor` in anchor-guardrail.ts exactly.
     // Counts are stored at Pacific midnight (D-3 below), so same-day counts tie
@@ -405,11 +432,11 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
   // midnight of the day AFTER the anchor's day). No physical anchor → epoch (count
   // everything up to asOf). See anchorFlowBounds for the storage-shape rationale.
   const { dateSince, inboundSince } = anchorFlowBounds(anchor ? anchor.snapshot_at : null);
-  const dateWindow = { gt: dateSince, lte: asOf };
-  const inboundWindow = { gte: inboundSince, lte: asOf };
+  const dateWindow = { gt: dateSince, ...upper };
+  const inboundWindow = { gte: inboundSince, ...upper };
 
   const [inbound, dropoffs, stripped, wholeUnitsSold, landfilled] = await Promise.all([
-    prisma.inboundLoad.aggregate({
+    db.inboundLoad.aggregate({
       _sum: { program_unit_count: true, non_program_unit_count: true },
       where: {
         site_id: siteId,
@@ -422,22 +449,22 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     // what lets `sumTaughtDropoffKinds` SEE an untaught kind instead of silently
     // absorbing it. Same table, same window, same round trip; the only thing that
     // changed is that the reader now has to recognise what it is adding up.
-    prisma.consumerDropoff.groupBy({
+    db.consumerDropoff.groupBy({
       by: ['kind'],
       _sum: { units: true },
       where: { site_id: siteId, dropoff_date: dateWindow },
     }),
-    prisma.processedUnitsDaily.aggregate({
+    db.processedUnitsDaily.aggregate({
       _sum: { stripped_program: true, stripped_non_program: true },
       where: { site_id: siteId, production_date: dateWindow },
     }),
     // WholeUnitsSold = renovation-sub-category outbound rows (the folded-in renovator
     // channel). Baled/shredded commodity sales are excluded — they never subtract units.
-    prisma.outboundMaterial.aggregate({
+    db.outboundMaterial.aggregate({
       _sum: { program_units: true, non_program_units: true },
       where: { site_id: siteId, sub_category: 'renovation', ship_date: dateWindow },
     }),
-    prisma.landfilledUnit.aggregate({
+    db.landfilledUnit.aggregate({
       _sum: { program_units: true, non_program_units: true },
       where: { site_id: siteId, disposal_date: dateWindow },
     }),
@@ -473,6 +500,22 @@ export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance
     // still applies the workbook's own recorded subtraction — that parity is unchanged.
   });
   return { ...balance, anchorPool };
+}
+
+/**
+ * The LIVE pool-aware on-hand balance for a site as of an instant.
+ *
+ * A thin wrapper over {@link computePoolBalance}, which is THE implementation.
+ * ADR-0037 D6's premise is "ONE shared function ... never two competing sums", and
+ * until BS-8 that premise was false: `src/lib/audit/leg-fetchers.ts` carried a
+ * second copy that lacked the ADR-0078 D1 anchor tiebreak, summed drop-offs bare
+ * (silently absorbing an untaught kind this one refuses), and kept a private copy
+ * of the verified-inbound status list. Three divergences, each of which moves a
+ * billing number. Both paths now go through one function; the only difference
+ * either caller may express is the upper bound.
+ */
+export async function onHand(siteId: string, asOf: Date): Promise<RunningBalance> {
+  return computePoolBalance(prisma, siteId, { lte: asOf });
 }
 
 /** Result of a physical-count reconciliation. */

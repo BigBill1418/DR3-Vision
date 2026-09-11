@@ -222,10 +222,14 @@ export async function computeCorPrefill(
         snapshot_kind: 'physical',
         snapshot_at: { lte: monthEndAsOf },
       },
-      // PRE-EXISTING: no ADR-0078 D1 `created_at DESC` tiebreak here (unlike
-      // `onHand`, whose figure this row is supposed to describe). Reported in
-      // ADR-0084, deliberately not changed by it.
-      orderBy: { snapshot_at: 'desc' },
+      // ADR-0078 D1 (BS-9) — MUST match the `onHand` call directly above, whose
+      // figure this row is supposed to describe. This is the COR FILING PATH: the
+      // row named here goes to MRC on Exhibit 5, so selecting it with a different
+      // query than the one that computed the number beside it means the filing can
+      // cite a count the figure was not derived from. Woodland's 2026-08-18 is
+      // exactly such a day — two counts at a byte-identical `snapshot_at`, one
+      // `legacy` (923 all-program) and one `measured` (201/722).
+      orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
       select: {
         id: true,
         snapshot_at: true,

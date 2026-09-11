@@ -415,7 +415,20 @@ export async function reportSecondApprovalRoutingProblem(args: {
     title: 'AP second-approval routing problem',
     // ADR-0045 — ids only in the page body, never amount or vendor.
     body: `${summary} Request id: ${args.requestId}. ${detail}`,
-    priority: 'urgent',
+    // ADR-0037 re-grade (ntfy audit 2026-09-11): `high`, was `urgent`.
+    //
+    // An invoice that cannot route for second approval sits unapproved and
+    // invisible — real, and worth the hour. It is not customer impact NOW and it
+    // is not data loss, which is the bar ADR-0037 sets for `urgent` at a target of
+    // <= 2 per week.
+    //
+    // NOT changed, and worth knowing: the fingerprint is PER REQUEST, so one
+    // misconfigured routing table pages once per affected invoice rather than once
+    // per cause — a soft failure of gate question 4. Left alone deliberately,
+    // because a cause-level fingerprint would suppress a genuinely different
+    // routing problem on another request for the whole cooldown window. At `high`
+    // rather than `urgent` the noise is survivable; recorded in OPEN-ITEMS.
+    priority: 'high',
     tags: ['rotating_light', 'ap', 'routing', 'dr3-vision'],
     clickUrl: apRequestUrl(args.requestId),
     // Per-request fingerprint: distinct requests always page, a retry does not.

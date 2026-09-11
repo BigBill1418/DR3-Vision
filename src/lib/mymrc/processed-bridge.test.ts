@@ -96,7 +96,14 @@ function mirrorMatches(r: MirrorRow, where: Record<string, unknown>): boolean {
 
 function fakePrisma(s: Store): PrismaClient {
   const tx = {
-    $queryRawUnsafe: async (_sql: string, id: string, siteId: string, iso: string, prog: number, nprog: number) => {
+    $queryRawUnsafe: async (
+      _sql: string,
+      id: string,
+      siteId: string,
+      iso: string,
+      prog: number,
+      nprog: number,
+    ) => {
       // Emulate the guarded ON CONFLICT upsert against the pud Map.
       const key = `${siteId}|${iso}`;
       const existing = s.pud.get(key);
@@ -163,12 +170,22 @@ describe('bridgeProcessedToInventory — aggregation', () => {
       ],
     });
     const res = await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
-    expect(res).toMatchObject({ daysConsidered: 1, inserted: 1, updated: 0, skippedGuarded: 0, unchanged: 0 });
+    expect(res).toMatchObject({
+      daysConsidered: 1,
+      inserted: 1,
+      updated: 0,
+      skippedGuarded: 0,
+      unchanged: 0,
+    });
     const row = s.pud.get('woodland|2026-07-20')!;
     expect(row.stripped_program).toBe(600);
     expect(row.stripped_non_program).toBe(30);
     expect(s.audit).toHaveLength(1);
-    expect(s.audit[0]).toMatchObject({ action: 'insert', actor_label: 'mymrc-processed-bridge', table_name: 'processed_units_daily' });
+    expect(s.audit[0]).toMatchObject({
+      action: 'insert',
+      actor_label: 'mymrc-processed-bridge',
+      table_name: 'processed_units_daily',
+    });
   });
 
   it('EXCLUDES a soft-deleted (disappeared_at set) mirror row', async () => {
@@ -203,7 +220,9 @@ describe('bridgeProcessedToInventory — aggregation', () => {
   });
 
   it('falls back to legacy `units` as program-only when program_unit_count is null (no double-count)', async () => {
-    const s = store({ mirror: [mirror({ program_unit_count: null, units: 500, non_program_unit_count: 7 })] });
+    const s = store({
+      mirror: [mirror({ program_unit_count: null, units: 500, non_program_unit_count: 7 })],
+    });
     await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
     const row = s.pud.get('woodland|2026-07-20')!;
     expect(row.stripped_program).toBe(500);
@@ -213,7 +232,11 @@ describe('bridgeProcessedToInventory — aggregation', () => {
 
 describe('bridgeProcessedToInventory — date mapping', () => {
   it('maps a noon-stamped processed_date to the Pacific @db.Date UTC-midnight key', async () => {
-    const s = store({ mirror: [mirror({ processed_date: new Date('2026-07-20T12:00:00.000Z'), program_unit_count: 10 })] });
+    const s = store({
+      mirror: [
+        mirror({ processed_date: new Date('2026-07-20T12:00:00.000Z'), program_unit_count: 10 }),
+      ],
+    });
     await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
     const row = s.pud.get('woodland|2026-07-20')!;
     expect(row.production_date.toISOString()).toBe('2026-07-20T00:00:00.000Z');
@@ -243,7 +266,13 @@ describe('bridgeProcessedToInventory — idempotency (double-count-proof)', () =
     expect(s.audit).toHaveLength(1);
 
     const second = await bridgeProcessedToInventory({ prisma });
-    expect(second).toMatchObject({ daysConsidered: 1, inserted: 0, updated: 0, unchanged: 1, skippedGuarded: 0 });
+    expect(second).toMatchObject({
+      daysConsidered: 1,
+      inserted: 0,
+      updated: 0,
+      unchanged: 1,
+      skippedGuarded: 0,
+    });
     expect(s.pud.get('woodland|2026-07-20')!.stripped_program).toBe(859); // NOT 1718
     expect(s.audit).toHaveLength(1); // no second audit row
   });
@@ -264,12 +293,15 @@ describe('bridgeProcessedToInventory — idempotency (double-count-proof)', () =
 describe('bridgeProcessedToInventory — precedence (a human row always wins)', () => {
   it('leaves a source=manual row BYTE-IDENTICAL, counts it skippedGuarded, writes no audit', async () => {
     const s = store({ mirror: [mirror({ program_unit_count: 859 })] });
-    s.pud.set('woodland|2026-07-20', pud({
-      production_date: new Date('2026-07-20T00:00:00.000Z'),
-      stripped_program: 12,
-      stripped_non_program: 3,
-      source: 'manual',
-    }));
+    s.pud.set(
+      'woodland|2026-07-20',
+      pud({
+        production_date: new Date('2026-07-20T00:00:00.000Z'),
+        stripped_program: 12,
+        stripped_non_program: 3,
+        source: 'manual',
+      }),
+    );
     const res = await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
     expect(res).toMatchObject({ skippedGuarded: 1, inserted: 0, updated: 0, unchanged: 0 });
     const row = s.pud.get('woodland|2026-07-20')!;
@@ -281,11 +313,14 @@ describe('bridgeProcessedToInventory — precedence (a human row always wins)', 
 
   it('leaves a source=import (workbook) row untouched', async () => {
     const s = store({ mirror: [mirror({ program_unit_count: 859 })] });
-    s.pud.set('woodland|2026-07-20', pud({
-      production_date: new Date('2026-07-20T00:00:00.000Z'),
-      stripped_program: 42,
-      source: 'import',
-    }));
+    s.pud.set(
+      'woodland|2026-07-20',
+      pud({
+        production_date: new Date('2026-07-20T00:00:00.000Z'),
+        stripped_program: 42,
+        source: 'import',
+      }),
+    );
     const res = await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
     expect(res.skippedGuarded).toBe(1);
     expect(s.pud.get('woodland|2026-07-20')!.stripped_program).toBe(42);
@@ -294,12 +329,15 @@ describe('bridgeProcessedToInventory — precedence (a human row always wins)', 
 
   it('leaves a CLOSED mymrc day untouched (never re-open a manager close)', async () => {
     const s = store({ mirror: [mirror({ program_unit_count: 859 })] });
-    s.pud.set('woodland|2026-07-20', pud({
-      production_date: new Date('2026-07-20T00:00:00.000Z'),
-      stripped_program: 500,
-      source: 'mymrc',
-      closed_at: new Date('2026-07-21T03:00:00Z'),
-    }));
+    s.pud.set(
+      'woodland|2026-07-20',
+      pud({
+        production_date: new Date('2026-07-20T00:00:00.000Z'),
+        stripped_program: 500,
+        source: 'mymrc',
+        closed_at: new Date('2026-07-21T03:00:00Z'),
+      }),
+    );
     const res = await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
     expect(res.skippedGuarded).toBe(1);
     expect(s.pud.get('woodland|2026-07-20')!.stripped_program).toBe(500);
@@ -345,10 +383,80 @@ describe('bridgeProcessedToInventory — window + dry-run + empty', () => {
     expect(s.pud.has('eugene|2026-07-20')).toBe(false);
   });
 
+  // BS-5 — `onlyProductionDays`, the narrow-blast-radius filter.
+  //
+  // The repair it exists for is two 2025 rows carrying MRC-voided duplicates. Doing
+  // that with `sinceProductionDate` re-bridges every day from 2025-02-27 forward
+  // (402 days against production), which both widens the write far past the defect
+  // and destroys the ADR-0102 verification: "did `updated_at` move on the rows we
+  // meant?" answers yes for everything.
+  it('onlyProductionDays bridges EXACTLY the named days and nothing else', async () => {
+    const s = store({
+      mirror: [
+        mirror({ processed_date: new Date('2025-02-27T12:00:00.000Z'), program_unit_count: 1060 }),
+        mirror({ processed_date: new Date('2025-05-15T12:00:00.000Z'), program_unit_count: 1133 }),
+        mirror({ processed_date: new Date('2025-09-30T12:00:00.000Z'), program_unit_count: 1149 }),
+      ],
+    });
+    const res = await bridgeProcessedToInventory({
+      prisma: fakePrisma(s),
+      onlyProductionDays: ['2025-02-27', '2025-05-15'],
+    });
+    expect(res).toMatchObject({ daysConsidered: 2, inserted: 2 });
+    expect(s.pud.has('woodland|2025-02-27')).toBe(true);
+    expect(s.pud.has('woodland|2025-05-15')).toBe(true);
+    // The day the operator did NOT name must be untouched — the whole point.
+    expect(s.pud.has('woodland|2025-09-30')).toBe(false);
+  });
+
+  it('onlyProductionDays still EXCLUDES a disappeared mirror row on a named day', async () => {
+    // This is the repair's actual mechanism: the stored aggregate contains a row
+    // MRC has since voided, and re-bridging drops it. If the day filter were
+    // applied before the `disappeared_at` filter, or instead of it, the re-run
+    // would rewrite the same wrong number and report success.
+    const s = store({
+      mirror: [
+        mirror({ processed_date: new Date('2025-02-27T12:00:00.000Z'), program_unit_count: 1060 }),
+        mirror({
+          processed_date: new Date('2025-02-27T12:00:00.000Z'),
+          program_unit_count: 1060,
+          disappeared_at: new Date('2026-07-31T03:12:12.267Z'),
+        }),
+      ],
+      pud: new Map([
+        [
+          'woodland|2025-02-27',
+          pud({ production_date: new Date('2025-02-27T00:00:00.000Z'), stripped_program: 2120 }),
+        ],
+      ]),
+    });
+    const res = await bridgeProcessedToInventory({
+      prisma: fakePrisma(s),
+      onlyProductionDays: ['2025-02-27'],
+    });
+    expect(res).toMatchObject({ daysConsidered: 1, updated: 1 });
+    expect(s.pud.get('woodland|2025-02-27')!.stripped_program).toBe(1060);
+  });
+
+  it('an EMPTY onlyProductionDays means no restriction, never "bridge nothing"', async () => {
+    // `[]` reaching the bridge must not silently become a no-op that reports
+    // success. The runner refuses an empty `--days` at the flag level; this is the
+    // second door, for a programmatic caller.
+    const s = store({ mirror: [mirror({ program_unit_count: 500 })] });
+    const res = await bridgeProcessedToInventory({ prisma: fakePrisma(s), onlyProductionDays: [] });
+    expect(res).toMatchObject({ daysConsidered: 1, inserted: 1 });
+  });
+
   it('no mirror rows → a clean zero result, no writes', async () => {
     const s = store();
     const res = await bridgeProcessedToInventory({ prisma: fakePrisma(s) });
-    expect(res).toEqual({ daysConsidered: 0, inserted: 0, updated: 0, skippedGuarded: 0, unchanged: 0 });
+    expect(res).toEqual({
+      daysConsidered: 0,
+      inserted: 0,
+      updated: 0,
+      skippedGuarded: 0,
+      unchanged: 0,
+    });
     expect(s.pud.size).toBe(0);
   });
 });

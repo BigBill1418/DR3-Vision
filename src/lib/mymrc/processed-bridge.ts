@@ -52,6 +52,19 @@ export interface ProcessedBridgeContext {
    */
   sinceProductionDate?: Date;
   /**
+   * BS-5 — restrict to EXACTLY these Pacific production days (`YYYY-MM-DD`).
+   *
+   * `sinceProductionDate` is a lower bound, which is the wrong shape for a targeted
+   * repair: re-bridging two 2025 rows with it rewrites every day from that date
+   * forward (402 days against production on 2026-09-11), and the verification
+   * ADR-0102 taught us to run — "did `updated_at` move on the rows we meant?" —
+   * stops discriminating once it moved on everything.
+   *
+   * Mutually exclusive with `sinceProductionDate`; the runner refuses both at the
+   * flag level, and this module simply applies whichever it is given.
+   */
+  onlyProductionDays?: readonly string[];
+  /**
    * When true, compute + classify every affected day but perform NO writes and NO
    * audit rows. `inserted`/`updated` report what WOULD happen. Used by the backfill
    * script's `--dry-run`.
@@ -156,6 +169,13 @@ export async function bridgeProcessedToInventory(
   const { prisma } = ctx;
   const dryRun = ctx.dryRun === true;
   const sinceIso = ctx.sinceProductionDate ? productionDayIso(ctx.sinceProductionDate) : null;
+  // A Set, not an array, so the per-row filter below stays O(1) over a full-history
+  // mirror scan. `null` (not an empty Set) means "no day restriction" — an empty Set
+  // would be indistinguishable from one and would silently bridge NOTHING.
+  const onlyDays =
+    ctx.onlyProductionDays && ctx.onlyProductionDays.length > 0
+      ? new Set(ctx.onlyProductionDays)
+      : null;
 
   // 1. Pull the active Processing mirror rows (the 2 stray type/site-NULL rows are
   //    excluded by the filter). `program_unit_count`/`non_program_unit_count`/`units`
@@ -191,6 +211,10 @@ export async function bridgeProcessedToInventory(
     // Exact re-filter on the derived production day (defends against any hypothetical
     // non-noon row that the coarse `processed_date >= since` prefilter let through).
     if (sinceIso != null && iso < sinceIso) continue;
+    // BS-5 — the exact-day filter. Applied on the DERIVED Pacific day key, the same
+    // value the upsert writes, so the set named on the command line is exactly the
+    // set of rows that can move.
+    if (onlyDays != null && !onlyDays.has(iso)) continue;
     const hasSplit = r.program_unit_count != null;
     const program = hasSplit ? (r.program_unit_count as number) : (r.units ?? 0);
     const nonProgram = hasSplit ? (r.non_program_unit_count ?? 0) : 0;
@@ -210,7 +234,10 @@ export async function bridgeProcessedToInventory(
     unchanged: 0,
   };
   if (aggregates.length === 0) {
-    log('info', `processed-bridge: no mirror rows to bridge${sinceIso ? ` (since ${sinceIso})` : ''}`);
+    log(
+      'info',
+      `processed-bridge: no mirror rows to bridge${sinceIso ? ` (since ${sinceIso})` : ''}`,
+    );
     return result;
   }
 

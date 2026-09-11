@@ -29,8 +29,12 @@
 import type { PrismaClient } from '@prisma/client';
 import {
   computeRunningBalance,
-  resolveAnchorPair,
-  anchorFlowBounds,
+  // BS-8 — `resolveAnchorPair` and `anchorFlowBounds` used to be imported here and
+  // re-assembled into a second copy of the balance. They are now reached only
+  // THROUGH `computePoolBalance`, which is the point: there is one assembly of those
+  // parts, not two that have to be kept in step by hand.
+  computePoolBalance,
+  VERIFIED_INBOUND_STATUSES,
   type PoolPair,
 } from '@/lib/inventory/running-balance';
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
@@ -79,10 +83,14 @@ const toNum = (v: unknown): number => (v == null ? 0 : typeof v === 'number' ? v
 const toNumOrNull = (v: unknown): number | null =>
   v == null ? null : typeof v === 'number' ? v : Number(v);
 
-// Inbound statuses that have cleared the manager verify gate (mirrors ADR-0037
-// running-balance.VERIFIED_INBOUND_STATUSES; kept local to avoid the prisma
-// import pulled in by that module in this always-compiled fetcher).
-const VERIFIED_STATUSES = ['verified', 'submitted_to_mymrc', 'processed'] as const;
+// Inbound statuses that have cleared the manager verify gate.
+//
+// BS-8 — this WAS a private re-declaration, justified by a comment about avoiding
+// "the prisma import pulled in by that module". That reason has expired: this file
+// already imports `computePoolBalance` from the same module. A second list that
+// happened to agree is exactly the shape that stops agreeing silently, so it is now
+// an alias for the shared export.
+const VERIFIED_STATUSES = VERIFIED_INBOUND_STATUSES;
 
 // ── Leg fetchers ────────────────────────────────────────────────────────
 
@@ -444,97 +452,34 @@ async function fetchDayFlows(db: PrismaClient, w: AuditWindow): Promise<Map<stri
 
 /**
  * The pool-aware on-hand balance strictly BEFORE the window (the roll anchor).
- * Mirrors `running-balance.onHand`, bounded to `< windowStart`, over the injected
- * db (so it is testable with a fake client). The anchor's pool split is resolved by
- * the SHARED `resolveAnchorPair` (D-4) — a `measured` physical count uses its entered
- * program/non-program split; otherwise the whole count is attributed to the program
- * pool. This selects the pool columns so onHand and the audit can never disagree on a
- * measured anchor (which previously produced spurious C6 `physical_reconcile` findings).
+ *
+ * BS-8 — this is now a thin call into the ONE shared `computePoolBalance`, not a
+ * second implementation. It used to be its own copy of `onHand`, and the copies had
+ * drifted in three ways that each move a billing number:
+ *
+ *   1. **No ADR-0078 D1 `created_at` tiebreak.** The anchor selector ordered by
+ *      `snapshot_at DESC` alone. Counts are stamped at Pacific midnight, so two
+ *      counts on one day TIE, and SQL does not promise which of two equal keys
+ *      comes back — the audit could roll forward from a different anchor than the
+ *      balance it was auditing, decided by the planner. Woodland has exactly such a
+ *      day: 2026-08-18 carries two rows at a byte-identical `snapshot_at`, one
+ *      `legacy` (all 923 units to the program pool) and one `measured` (201/722).
+ *      Picking the wrong one is a 722-unit mis-attribution into the billed pool.
+ *   2. **A bare drop-off sum.** `aggregate({ _sum: { units } })` with no `kind`
+ *      grouping silently absorbed an untaught `ConsumerDropoffKind` into the
+ *      program pool, where `onHand` throws `UnknownDropoffKindError`. The louder
+ *      behaviour is the correct one and both paths now have it.
+ *   3. **A private `VERIFIED_STATUSES` copy.** Now the shared
+ *      `VERIFIED_INBOUND_STATUSES`, so a status added to one list cannot be missing
+ *      from the other.
+ *
+ * ADR-0037 D6's stated premise is "ONE shared function ... never two competing
+ * spreadsheet sums". Until this change that premise was false. The only thing this
+ * caller still expresses is its upper bound (`lt`, strictly before the window),
+ * which is the one genuine difference between the live floor and the audit roll.
  */
-async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair> {
-  const before = rangeDate(w.startISO);
-  const anchor = await db.siteInventorySnapshot.findFirst({
-    // ADR-0084 — an anchor selector, so voided counts are ineligible. This one
-    // mirrors `onHand`; if the two disagreed about eligibility the audit would
-    // roll forward from a different anchor than the balance it is auditing.
-    where: {
-      ...NOT_VOIDED,
-      site_id: w.siteId,
-      snapshot_kind: 'physical',
-      snapshot_at: { lt: before },
-    },
-    // PRE-EXISTING DIVERGENCE (reported, not fixed here): `onHand` and
-    // `loadPriorAnchor` carry the ADR-0078 D1 `created_at DESC` tiebreak and
-    // this does not, so two same-day counts can hand the audit a different
-    // anchor than the balance. Out of ADR-0084's scope — see the ADR's
-    // "What this ADR does not fix" section.
-    orderBy: { snapshot_at: 'desc' },
-    select: {
-      snapshot_at: true,
-      units_indoor: true,
-      units_total: true,
-      units_in_processing: true,
-      program_units: true,
-      non_program_units: true,
-      pool_attribution: true,
-    },
-  });
-  const { pair: anchorPair } = resolveAnchorPair(anchor);
-  // D-3: Pacific-calendar-consistent anchor bounds (shared with onHand). `@db.Date`
-  // outflow columns exclude the anchor's own Pacific day (`gt dateSince`); the
-  // `arrived_at` instant excludes it via Pacific midnight of the following day
-  // (`gte inboundSince`). Upper bound stays the audit window start (`lt before`).
-  const { dateSince, inboundSince } = anchorFlowBounds(anchor ? anchor.snapshot_at : null);
-  const dateFlowWindow = { gt: dateSince, lt: before };
-  const inboundFlowWindow = { gte: inboundSince, lt: before };
-
-  const [inbound, dropoffs, stripped, renovation, landfilled] = await Promise.all([
-    db.inboundLoad.aggregate({
-      _sum: { program_unit_count: true, non_program_unit_count: true },
-      where: {
-        site_id: w.siteId,
-        status: { in: [...VERIFIED_STATUSES] },
-        arrived_at: inboundFlowWindow,
-      },
-    }),
-    db.consumerDropoff.aggregate({
-      _sum: { units: true },
-      where: { site_id: w.siteId, dropoff_date: dateFlowWindow },
-    }),
-    db.processedUnitsDaily.aggregate({
-      _sum: { stripped_program: true, stripped_non_program: true },
-      where: { site_id: w.siteId, production_date: dateFlowWindow },
-    }),
-    db.outboundMaterial.aggregate({
-      _sum: { program_units: true, non_program_units: true },
-      where: { site_id: w.siteId, sub_category: 'renovation', ship_date: dateFlowWindow },
-    }),
-    db.landfilledUnit.aggregate({
-      _sum: { program_units: true, non_program_units: true },
-      where: { site_id: w.siteId, disposal_date: dateFlowWindow },
-    }),
-  ]);
-
-  const bal = computeRunningBalance({
-    anchor: anchorPair,
-    verifiedInbound: {
-      program: toNum(inbound._sum.program_unit_count),
-      nonProgram: toNum(inbound._sum.non_program_unit_count),
-    },
-    dropoffUnits: toNum(dropoffs._sum.units),
-    stripped: {
-      program: toNum(stripped._sum.stripped_program),
-      nonProgram: toNum(stripped._sum.stripped_non_program),
-    },
-    wholeUnitsSold: {
-      program: toNum(renovation._sum.program_units),
-      nonProgram: toNum(renovation._sum.non_program_units),
-    },
-    landfilled: {
-      program: toNum(landfilled._sum.program_units),
-      nonProgram: toNum(landfilled._sum.non_program_units),
-    },
-  });
+export async function startBalance(db: PrismaClient, w: AuditWindow): Promise<PoolPair> {
+  const bal = await computePoolBalance(db, w.siteId, { lt: rangeDate(w.startISO) });
   return { program: bal.program, nonProgram: bal.nonProgram };
 }
 
@@ -737,7 +682,13 @@ async function fetchLastPhysicalSnapshotISO(
       snapshot_kind: 'physical',
       snapshot_at: { lt: rangeDate(shiftDaysISO(asOfISO, 1)) },
     },
-    orderBy: { snapshot_at: 'desc' },
+    // ADR-0078 D1 (BS-9) — not named in the BS-9 item; found by
+    // `anchor-tiebreak.guard.test.ts`, which is the argument for having the guard
+    // rather than three point-fixes. It only reports a DAY, so a tie changes the
+    // answer solely when two counts on one day have different `snapshot_at`
+    // values, which cannot happen — but the selector is kept identical to every
+    // other anchor query so no future reader has to work that out again.
+    orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
     select: { snapshot_at: true },
   });
   return snap ? toISO(snap.snapshot_at) : null;
@@ -779,13 +730,11 @@ function buildM1Days(
   const activity = new Set<string>(dropoffDays);
   for (const r of inbound) activity.add(r.businessDateISO);
   const closes = new Set(processed.map((p) => p.productionDateISO));
-  return [...activity]
-    .sort()
-    .map((dateISO) => ({
-      dateISO,
-      hadInboundActivity: true,
-      hasProcessedRow: closes.has(dateISO),
-    }));
+  return [...activity].sort().map((dateISO) => ({
+    dateISO,
+    hadInboundActivity: true,
+    hasProcessedRow: closes.has(dateISO),
+  }));
 }
 
 // ── Assemble the per-window comparator runner the sweep injects ──────────

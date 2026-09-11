@@ -49,7 +49,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HEADLESS = (process.env.MYMRC_HEADLESS ?? 'true').toLowerCase() !== 'false';
 const ADMIN_SURFACE_URL =
-  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() || 'https://dr3-vision.barnardhq.com/admin/mrc-scrape';
+  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() || 'https://dr3-vision.svdp.us/admin/mrc-scrape';
 
 function log(level, message) {
   const line = `mymrc-backfill[${new Date().toISOString()}]: ${message}`;

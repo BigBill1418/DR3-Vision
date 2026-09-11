@@ -28,9 +28,23 @@ const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
 // Tier-2 click: the MyMRC ingestion admin surface (`src/app/admin/mrc-scrape`),
 // where an operator sees credential + sync state. Preferred over tier-3 for
 // alerts about the INGESTION itself rather than the service being down.
+//
+// THE HOST WAS WRONG AND DEAD FROM THE DAY IT WAS WRITTEN. This read
+// `dr3-vision.barnardhq.com`, which has no DNS record at all — `getent hosts`
+// returns nothing and `curl` reports `http=000`. DR3-Vision is published at
+// `dr3-vision.svdp.us` (CLAUDE.md "Build context"), which every other publisher in
+// the repo already used; this file was the only `barnardhq.com` app host in it.
+// Measured 2026-09-11: 25 of the 41 messages in the retained ntfy window carried
+// this dead link, including every one of the 24 stale-mirror pages of 2026-09-07.
+//
+// This is the confusable-hostname class `src/lib/ntfy.ts:19` warns about for
+// `noc.barnardhq.com` vs `noc-mastercontrol.barnardhq.com` — recurring two files
+// away from its own warning, which is why the replacement for that warning is
+// `src/__tests__/ntfy-click-url-hosts.guard.test.ts` and not a better comment.
+// `noc.barnardhq.com/status/dr3-vision` was tested in the same pass and 404s, so
+// that warning is live too.
 const INGESTION_CLICK_URL =
-  process.env['MYMRC_ADMIN_SURFACE_URL']?.trim() ||
-  'https://dr3-vision.barnardhq.com/admin/mrc-scrape';
+  process.env['MYMRC_ADMIN_SURFACE_URL']?.trim() || 'https://dr3-vision.svdp.us/admin/mrc-scrape';
 const TIMEOUT_MS = 5_000;
 
 export type AlertKind =

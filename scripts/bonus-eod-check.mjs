@@ -21,6 +21,41 @@
 import { toHeaderSafe } from './ntfy-header-safe.mjs';
 
 import { PrismaClient } from '@prisma/client';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ADR-0130 — the ONE durable cooldown ledger, loaded from the compiled MyMRC
+// bundle. Same `createRequire(dist/mymrc)` pattern
+// `scripts/mymrc-processed-bridge-backfill.mjs` already uses, and `dist/` is COPY'd
+// into the runner stage (Dockerfile), so this adds no new build or image step.
+//
+// WHY THIS DAEMON AND NOT `bonus-escalation-check.mjs`. That one is the APP-DOWN
+// BACKSTOP: it POSTs an internal route and publishes on its own only when the app
+// is unreachable, which is when the database is most likely unreachable too. This
+// one ALREADY needs the database to decide whether to page at all (it queries
+// `site_holidays` and the day's bonus entries), so the ledger adds no failure mode
+// that was not already there. `claimCooldown` never throws — it degrades to an
+// in-process map — so a database outage cannot silence the page either way.
+const requireCjs = createRequire(import.meta.url);
+let cooldown = null;
+try {
+  cooldown = requireCjs(resolve(__dirname, '..', 'dist', 'mymrc'));
+} catch (err) {
+  // Not fatal, and not silent: without the ledger this daemon reverts to its
+  // pre-repair behaviour (one page per fire, deduplicated only by the daily
+  // schedule). "Shipped disabled" must not look identical to "shipped working".
+  console.warn(
+    JSON.stringify({
+      level: 40,
+      op: 'bonus-eod-check',
+      msg: '[bonus-eod-check] dist/mymrc not loadable - durable ADR-0130 cooldown DISABLED for this process',
+      reason: String(err && err.message ? err.message : err).slice(0, 200),
+    }),
+  );
+}
 
 const PACIFIC_TZ = 'America/Los_Angeles';
 // 20:00 PT — the 8pm entry deadline. DST-correct via nextFireInstant (offset
@@ -34,6 +69,13 @@ const FALLBACK_BASE = 'https://ntfy.sh';
 const TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
 const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
+
+/**
+ * ADR-0037 — one page per site per day. The fingerprint is already per
+ * `(site, date)`, so this window only has to outlast a same-day restart; 20 h is
+ * shorter than the fire interval and longer than any plausible double-fire.
+ */
+const COOLDOWN_MS = 20 * 60 * 60 * 1000;
 
 const TIMEOUT_MS = 5_000;
 
@@ -160,12 +202,29 @@ async function publishMissing({ siteCode, siteName, dateLabel, fingerprint }) {
     return;
   }
 
+  // ADR-0130 — CLAIM the window before sending. This replaced an `X-Dedup-Id`
+  // header, which ntfy DOES NOT HONOUR: the server has no such feature, so the
+  // header was decorative and the code read as though deduplication were handled
+  // when nothing was deduplicating anything. A header that states a guarantee the
+  // server does not provide is worse than no header, because it stops the next
+  // reader looking.
+  //
+  // In practice this daemon fires once per site per day by its schedule, so the
+  // observable duplicate rate was already near zero — the defect was the claim,
+  // not (yet) the behaviour.
+  if (cooldown) {
+    const claim = await cooldown.claimCooldown(fingerprint, COOLDOWN_MS);
+    if (!claim.claimed) {
+      logTs(`cooldown-suppressed for ${siteCode} (${fingerprint})`);
+      return;
+    }
+  }
+
   const headers = {
     'X-Title': toHeaderSafe(title),
     Priority: 'high',
     Click: CLICK_URL,
     Tags: 'warning,bonus,dr3-vision',
-    'X-Dedup-Id': fingerprint,
     Authorization: `Bearer ${token}`,
   };
   const ok = await postWithTimeout(`${PRIMARY_BASE}/${TOPIC}`, body, headers, TIMEOUT_MS);
@@ -178,7 +237,6 @@ async function publishMissing({ siteCode, siteName, dateLabel, fingerprint }) {
     Priority: 'high',
     Click: CLICK_URL,
     Tags: 'warning,bonus,dr3-vision',
-    'X-Dedup-Id': fingerprint,
   };
   const fbOk = await postWithTimeout(
     `${FALLBACK_BASE}/${FALLBACK_TOPIC}`,
@@ -281,6 +339,10 @@ async function main() {
   }
 
   const prisma = new PrismaClient();
+  // ADR-0130 — point the ledger at the database for this process. Without this the
+  // claim falls back to an in-process map, which a one-shot or restarted daemon
+  // wipes; registering it is what makes the cooldown durable.
+  if (cooldown) cooldown.setCooldownDb(prisma);
   logTs('daemon starting');
 
   // eslint-disable-next-line no-constant-condition

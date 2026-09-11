@@ -436,6 +436,16 @@ export interface SiteSummary {
   loadsActive: number;
   loadsArrivedToday: number;
   floorTotal: number | null;
+  /**
+   * BS-10 — the floor's verdict, carried alongside its number.
+   *
+   * `dashboard/page.tsx` rendered `floorTotal` as a bare figure because a bare
+   * figure was all this shape offered. Passing the number without the verdict makes
+   * every consumer re-derive it or, as happened, skip it.
+   */
+  floorNegative: boolean;
+  floorOverCapacity: boolean;
+  floorCapacity: number | null;
   processedFoundToday: boolean;
   processedTodayClosed: boolean;
   commodityOutstandingUsd: number | null;
@@ -504,6 +514,9 @@ export async function computeSiteSummary(args: {
     loadsActive,
     loadsArrivedToday,
     floorTotal: floor?.totalOnFloor ?? null,
+    floorNegative: floor?.negative ?? false,
+    floorOverCapacity: floor?.overCapacity ?? false,
+    floorCapacity: floor?.capacity ?? null,
     processedFoundToday: processed?.foundToday ?? false,
     processedTodayClosed: processed?.todayClosed ?? false,
     commodityOutstandingUsd: commodity,

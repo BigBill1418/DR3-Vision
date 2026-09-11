@@ -375,3 +375,90 @@ every ADR and dated finding that claims a production data repair, re-assert it,
 and record the result — HOLDS or FAILS — as a table in this ADR. Anything that
 FAILS becomes either a data repair or a Tier A invariant, so that it can never go
 stale unobserved again.
+
+---
+
+## Amendment 1 (PROPOSED — Bill decides; nothing below is built)
+
+**Date:** 2026-09-11 · **Author:** Aegis · **Status:** Proposed, not accepted.
+
+**The question asked:** is there a defensible mechanism for excluding a disputed
+upstream row from the computed balance — something that keeps the mirror faithful to
+MyMRC while the ledger stops repeating a number we have established is impossible?
+
+### The recommendation, in order
+
+**1. Take the physical count (BS-3). It is the answer to THIS incident, and it needs
+no code.** A count today re-anchors the ledger; `anchorFlowBounds` then excludes
+every flow before it, so both phantom hauls fall behind the anchor and the floor
+self-corrects to the counted truth within one working day. This is not a workaround —
+re-anchoring is precisely the mechanism ADR-0037 D6 built for "the ledger has drifted
+from the building", and the `reconciled_delta` it produces _measures_ how wrong the
+ledger was, which is evidence worth having. It also trips the 20% swing guardrail as
+designed, which is the system asking a human to confirm on the way through.
+
+**Build nothing until BS-3 has been tried.** A new mechanism for a problem an
+existing mechanism already solves is how a system accumulates the second
+implementations this ADR spent its Consequences section complaining about.
+
+**2. If upstream disputes recur, build a dispute record — with six conditions.** One
+bad haul is an incident; a pattern is a missing capability. The shape:
+
+An `inbound_haul_disputes` table keyed on `external_haul_id`, recording the value
+MyMRC asserts, the value DR3 believes, the evidence (BOL or dock paperwork
+reference), the filer, and an expiry. The bridge consults it when writing
+`inbound_loads` day aggregates.
+
+The conditions are not decoration — without all six this is a second source of truth
+for a billed quantity, which is the exact failure this ADR exists to prevent:
+
+1. **The mirror is never touched.** Disputes live in their own table. ADR-0084's
+   standing rule holds, and the next scrape would overwrite an edit anyway.
+2. **A dispute is a DR3 ASSERTION, not a correction of MRC's record.** It says "we
+   believe this row is wrong, here is why"; it does not claim MRC agrees.
+3. **It cannot silently change a number.** Every surface rendering a figure derived
+   from a disputed haul must say so, with the same discipline as the `legacy` anchor
+   badge and the new over-capacity banner. A quietly-filtered ledger is worse than a
+   loudly-wrong one, because nobody can see which they are looking at.
+4. **It expires** — 30 days, capped, on the D5 quarantine model. A dispute that keeps
+   needing renewal means nobody is chasing MRC, and the expiry is what forces that
+   conversation instead of letting the filter calcify.
+5. **Admin-only and audited.** One `audit_log` row per dispute, per ADR-0131 D5.
+6. **It NEVER reaches the COR.** This is the condition that makes the rest
+   defensible. A disputed haul in the filing window must **block** the COR, not
+   change it.
+
+### Why condition 6 is the whole design
+
+The floor tile and the COR are different numbers with different audiences and
+different consequences, and the current system conflates them. The floor tile tells
+the crew what is in the building — being _approximately right and clearly caveated_
+serves that. The COR is a regulatory filing against MRC's own system of record;
+filing a number that silently disagrees with what MRC holds, without MRC having
+corrected it, is a worse problem than filing late. Tonight the same
+`computeRunningBalance` output feeds both.
+
+So a dispute may correct the **operational** floor and is forbidden from touching the
+**regulatory** filing. That split is worth having independently of whether disputes
+are ever built.
+
+### The tradeoff, stated plainly
+
+**What it buys:** the iPad stops showing a number everyone knows is false, within
+hours of someone noticing, without waiting on another company's ticket queue.
+
+**What it costs:** a second place where a billed quantity can be decided, and a
+filter between MyMRC and the ledger that did not exist before. Every reconciliation
+against MRC's records gets harder, because DR3's number and MRC's number now differ
+_by design_ and someone has to hold both. The six conditions bound that cost; they do
+not remove it.
+
+**The honest risk:** condition 3 is the one that erodes. Badges get dropped in a
+redesign, and a dispute filter that has lost its badge is an invisible adjustment to
+a billed number. If this is built, the badge needs a guard test on the same model as
+`anchor-tiebreak.guard.test.ts`, not a code-review convention.
+
+**What I would not do:** filter on a threshold. An automatic "ignore hauls over 350
+units" rule would have fixed tonight and would silently delete a real 400-unit haul
+the first time one arrived. `INV-INBOUND-PLAUSIBLE` exists to make a human look; it
+must not become a mechanism that acts.

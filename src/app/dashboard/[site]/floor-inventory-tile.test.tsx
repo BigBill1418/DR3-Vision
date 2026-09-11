@@ -17,6 +17,9 @@ const base: FloorInventoryTileData = {
   totalOnFloor: 1289,
   anchorPool: 'measured',
   negative: false,
+  capacity: 3500,
+  overCapacity: false,
+  pctOfCapacity: 26,
   trailingUnitsPerDay: 237,
   programDaysRemaining: 137 / 237,
   asOfISO: '2026-07-21',
@@ -144,5 +147,55 @@ describe('FloorInventoryTile — negative floor', () => {
     expect(html).toContain('data-testid="floor-program-days"');
     expect(html).toContain('7-day pace');
     expect(html).not.toContain('data-testid="floor-negative-banner"');
+  });
+});
+
+// BS-10 — the upper bound, rendered.
+//
+// Woodland's live figure on 2026-09-10 was 11,668 units in a 3,500-unit building
+// and every surface printed it as an ordinary quantity for six days.
+describe('FloorInventoryTile — over capacity', () => {
+  const over: FloorInventoryTileData = {
+    ...base,
+    programOnFloor: 11020,
+    nonProgramOnFloor: 648,
+    totalOnFloor: 11668,
+    capacity: 3500,
+    overCapacity: true,
+    pctOfCapacity: 333,
+  };
+
+  it('shows the banner, the percentage and the cap', () => {
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={over} siteCode="woodland" />);
+    expect(html).toContain('floor-over-capacity-banner');
+    expect(html).toContain('333%');
+    expect(html).toContain('3500');
+  });
+
+  it('KEEPS the numbers visible — unlike a negative floor', () => {
+    // The distinction is the design: an over-capacity floor may be a real
+    // operational emergency, so the figure has to stay readable. A negative floor
+    // measures nothing and is replaced.
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={over} siteCode="woodland" />);
+    expect(html).toContain('11,020');
+  });
+
+  it('NEGATIVE CONTROL — an in-capacity floor shows no banner and no badge', () => {
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={base} siteCode="eugene" />);
+    expect(html).not.toContain('floor-over-capacity-banner');
+    expect(html).not.toContain('floor-over-capacity-badge');
+  });
+
+  it('a NEGATIVE floor still suppresses the figure and does not double-flag', () => {
+    const negative: FloorInventoryTileData = {
+      ...base,
+      programOnFloor: -2439,
+      totalOnFloor: -2439,
+      negative: true,
+      overCapacity: false,
+    };
+    const html = renderToStaticMarkup(<FloorInventoryTile tile={negative} siteCode="eugene" />);
+    expect(html).toContain('floor-negative-banner');
+    expect(html).not.toContain('floor-over-capacity-banner');
   });
 });

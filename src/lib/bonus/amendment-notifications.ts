@@ -55,7 +55,19 @@ export async function notifyAmendmentBillPinged(
     topic: TOPIC,
     title,
     body,
-    priority: 'urgent',
+    // ADR-0037 re-grade (ntfy audit 2026-09-11): `high`, was `urgent`.
+    //
+    // A colleague nudging Bill to look at an amendment request is a person asking
+    // for attention, not customer impact and not imminent data loss. ADR-0037
+    // targets <= 2 `urgent` per WEEK; a ping is user-triggered, so at `urgent` its
+    // rate is bounded only by how often someone taps the button. `high` is the
+    // grade for "look within the hour", which is exactly what a ping means.
+    //
+    // The 6 h cooldown is new. This call had NO `cooldownMs`, so it inherited the
+    // 5-minute default: the same request could re-page twelve times an hour.
+    // Fingerprinted per request, so a DIFFERENT amendment still pages immediately.
+    priority: 'high',
+    cooldownMs: 6 * 60 * 60 * 1000,
     tags: ['rotating_light', 'bonus', 'amendment'],
     fingerprint: `bonus-amendment-bill-pinged:${ctx.requestId}`,
   });

@@ -244,10 +244,21 @@ function SiteSummaryCard({ s }: { s: SiteSummary }) {
       <div className="grid grid-cols-2 gap-x-4 gap-y-3 lg:grid-cols-4">
         <Metric label="On dock now" value={nf(s.loadsActive)} unit="loads" />
         <Metric label="Arrived today" value={nf(s.loadsArrivedToday)} unit="loads" />
+        {/* BS-10 — a negative floor is not a small floor and an over-capacity one
+            is not an ordinary quantity. Both verdicts are decided once in
+            `computeFloorInventoryTile`; this surface used to render the number
+            alone. */}
         <Metric
           label="On floor"
-          value={s.floorTotal == null ? '—' : nf(s.floorTotal, 0)}
-          unit="units"
+          value={s.floorTotal == null || s.floorNegative ? '—' : nf(s.floorTotal, 0)}
+          unit={
+            s.floorNegative
+              ? 'computing negative'
+              : s.floorOverCapacity
+                ? 'units — OVER CAP'
+                : 'units'
+          }
+          {...(s.floorOverCapacity ? { valueClass: 'text-red-300' } : {})}
         />
         <Metric
           label="Processing"

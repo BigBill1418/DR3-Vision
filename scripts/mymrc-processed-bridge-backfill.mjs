@@ -20,6 +20,10 @@
 // Flags:
 //   --backfill            full history (default when no --since)
 //   --since=YYYY-MM-DD    only production days on/after this Pacific day
+//   --days=D1,D2,...      ONLY these exact Pacific production days (BS-5). Use this,
+//                         not --since, for a targeted repair: --since is a lower
+//                         bound and rewrites everything after it, which destroys the
+//                         "did updated_at move on the rows we meant?" check.
 //   --site=woodland[,eugene]   restrict to these site codes (default: both)
 //   --dry-run             compute + classify only; NO writes, NO floor gate
 //
@@ -48,7 +52,7 @@ function log(level, message) {
 
 /** Parse argv into the backfill options. Pure/testable. */
 export function parseArgs(argv) {
-  const opts = { dryRun: false, siteCodes: null, since: null };
+  const opts = { dryRun: false, siteCodes: null, since: null, days: null };
   for (const a of argv) {
     if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--backfill') {
@@ -57,6 +61,19 @@ export function parseArgs(argv) {
       const v = a.slice('--since='.length).trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(`--since must be YYYY-MM-DD (got "${v}")`);
       opts.since = v;
+    } else if (a.startsWith('--days=')) {
+      const raw = a
+        .slice('--days='.length)
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean);
+      // An empty list THROWS rather than falling back to null. `--days=` parsing to
+      // "no restriction" would turn a targeted two-row repair into a full-history
+      // rewrite, with the command line looking identical to the safe one.
+      if (raw.length === 0) throw new Error('--days needs at least one YYYY-MM-DD day');
+      const bad = raw.filter((d) => !/^\d{4}-\d{2}-\d{2}$/.test(d));
+      if (bad.length) throw new Error(`--days must be YYYY-MM-DD (got "${bad.join(',')}")`);
+      opts.days = [...new Set(raw)].sort();
     } else if (a.startsWith('--site=')) {
       const codes = a
         .slice('--site='.length)
@@ -69,6 +86,9 @@ export function parseArgs(argv) {
     } else if (a.startsWith('--')) {
       throw new Error(`unknown flag: ${a}`);
     }
+  }
+  if (opts.days && opts.since) {
+    throw new Error('--days and --since are mutually exclusive (one is a set, the other a bound)');
   }
   return opts;
 }
@@ -133,6 +153,7 @@ export async function runProcessedBridgeBackfill({ mymrc, prisma, probe, opts, l
   const bridgeCtx = { prisma, log: logFn, dryRun: opts.dryRun };
   if (siteIds) bridgeCtx.siteIds = siteIds;
   if (sinceProductionDate) bridgeCtx.sinceProductionDate = sinceProductionDate;
+  if (opts.days) bridgeCtx.onlyProductionDays = opts.days;
 
   if (opts.dryRun) {
     const res = await mymrc.bridgeProcessedToInventory(bridgeCtx);

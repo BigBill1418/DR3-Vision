@@ -62,6 +62,32 @@ const NTFY_FALLBACK_BASE = 'https://ntfy.sh';
 const NTFY_TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
 const NTFY_FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const NTFY_CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
+
+// ── Why there is no ADR-0130 durable cooldown in THIS daemon ────────────────
+//
+// An `X-Dedup-Id: <fingerprint>` header used to sit on these publishes. ntfy DOES
+// NOT HONOUR that header — there is no such server feature — so it deduplicated
+// nothing while reading as though it did. It has been removed rather than left as
+// a comforting no-op.
+//
+// It was NOT replaced with `claimCooldown`, and that is a decision, not an
+// oversight. This daemon is the APP-DOWN BACKSTOP: the tier fires normally go
+// THROUGH the app (`POST /api/internal/bonus/escalation-check`), where
+// `src/lib/bonus/escalation.ts` publishes via `publishNtfy`, which DOES claim the
+// durable ledger. This wrapper publishes on its own only when the app is
+// unreachable — precisely the moment the database is most likely unreachable too.
+// Giving the last-resort pager a dependency on the thing that is probably down is
+// the wrong direction to fail, and it would buy nothing: `claimCooldown` degrades
+// to an in-process map on any database error, and a one-shot process's map is
+// empty, so the claim would be granted anyway.
+//
+// The real dedup on the app-down path is the SCHEDULE: four fixed daily fires, one
+// publish per tier per fire. A restart recomputes the next fire strictly AFTER
+// now, so it cannot re-fire a tier it has already sent today.
+//
+// `scripts/bonus-eod-check.mjs` took the opposite decision for the opposite
+// reason: it already needs the database to decide whether to page at all, so the
+// ledger adds no failure mode that was not already there.
 const NTFY_TIMEOUT_MS = 5_000;
 
 // ADR-0037 severity: a failed t3 (auto-override + payroll PDF) or t4 (deadline
@@ -240,7 +266,6 @@ async function publishFireFailure(tier, now = new Date()) {
     Priority: priority,
     Click: NTFY_CLICK_URL,
     Tags: 'rotating_light,bonus,escalation',
-    'X-Dedup-Id': fingerprint,
   };
 
   // This is a safety-critical, app-INDEPENDENT payroll page (P1-4). The primary

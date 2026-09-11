@@ -447,8 +447,11 @@ export async function getEodInventorySnapshot(
         snapshot_kind: 'physical',
         snapshot_at: { lte: endOfDay },
       },
-      // PRE-EXISTING: no ADR-0078 D1 `created_at DESC` tiebreak (see ADR-0084).
-      orderBy: { snapshot_at: 'desc' },
+      // ADR-0078 D1 (BS-9) — MUST match the two `onHand` calls above. This row
+      // drives the report's "counted by X, N days ago" line and its
+      // `pool_attribution`; naming a different count than the balance used makes
+      // the freshness line describe a row the number did not come from.
+      orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
       select: { id: true, snapshot_at: true, pool_attribution: true },
     }),
     latestFlowDayKey(siteId, endOfDay),

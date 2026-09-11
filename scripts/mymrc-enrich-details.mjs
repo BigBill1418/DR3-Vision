@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HEADLESS = (process.env.MYMRC_HEADLESS ?? 'true').toLowerCase() !== 'false';
 const ADMIN_SURFACE_URL =
-  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() || 'https://dr3-vision.barnardhq.com/admin/mrc-scrape';
+  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() || 'https://dr3-vision.svdp.us/admin/mrc-scrape';
 const BATCH_SIZE = Number(process.env.MYMRC_ENRICH_BATCH_SIZE ?? '100') || 100;
 const PACING_MS = Number(process.env.MYMRC_ENRICH_PACING_MS ?? '1000');
 
