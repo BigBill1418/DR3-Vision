@@ -59,11 +59,25 @@ has been _filed_ by this system.
    `sites.max_units_indoor`. On today's ledger Exhibit 5 would print **~11,700
    units** for a 3,500-unit building.
 
-3. **BS-3 — TAKE A PHYSICAL COUNT AT WOODLAND. _Operator._** The anchor is 24
-   days old (2026-08-18). A count now re-anchors the ledger, produces a
+3. **BS-3 — TAKE A PHYSICAL COUNT AT WOODLAND. _Operator._ Bill is scheduling
+   this; reminder set for Monday 2026-09-14.** The anchor is 2026-08-18 — 25 days
+   old as of 2026-09-12, and `INV-ANCHOR-FRESH` now reports it **past** the
+   15-business-day limit. A count re-anchors the ledger, produces a
    `reconciled_delta` measuring exactly how wrong it was, and trips the 20% swing
    guardrail as designed — and corrects the floor independently of whether BS-1
    has landed.
+
+   **This is the recommended remedy for the phantom floor, not merely a hygiene
+   task** (ADR-0131 Am.1). Re-anchoring drops H-138391 (6,020) and H-139774
+   (4,840) behind the new anchor, so the ~11,020 displayed program units collapse
+   to reality within a working day **without waiting on MRC's queue** and without
+   building a disputed-haul mechanism. It also resolves the ~390 estimate
+   independently of the median substitution it rests on.
+
+   **Still needs a named person** — the same gap as BR-3. Bill asked on
+   2026-09-12 to be reminded Monday; that reminder is session-scoped, so THIS
+   entry is the durable record. If the count has been taken, close this item and
+   record the `reconciled_delta`.
 
 4. **BS-4 — DECIDE WHAT EUGENE'S INVENTORY SURFACES SHOULD SAY. _Bill._**
    Eugene has **no physical anchor, ever**, and zero rows in all five flow

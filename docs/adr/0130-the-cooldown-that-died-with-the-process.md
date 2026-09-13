@@ -308,11 +308,20 @@ the D1 durable window; every row is per-fingerprint.
 ¹ nominal only — published from a one-shot cron, so the cooldown was never
 enforced. This column is the whole reason for D1.
 
-**Nothing in this repo publishes `urgent`.** ADR-0037 reserves `urgent` for
+**Nothing re-graded above publishes `urgent`.** ADR-0037 reserves `urgent` for
 customer impact now or imminent data loss, at a target of ≤2/week. Every alert
-above is an internal ingestion signal about a system that bills monthly. The
-existing `URGENT: bonus signatures still pending` page (priority 5, seen
-2026-09-01) is the one legitimate `urgent` in the topic and is out of scope here.
+in this matrix is an internal ingestion signal about a system that bills monthly.
+
+**Corrected 2026-09-11 (the repo-wide reading was wrong).** This paragraph
+originally read "Nothing in this repo publishes `urgent`" — a claim scoped to the
+ingestion alerts re-graded here but phrased as if it covered the repo, and it
+contradicted its own next sentence, which named one. The ADR-0131 ntfy sweep found
+**nine** `urgent` sites. Three were re-graded down (the auto-override SUCCESS
+confirmation → `default`, the amendment ping → `high`, AP routing → `high`); the
+payroll cluster legitimately stays `urgent`, because _actor unavailable_,
+_STRANDED_ and _deadline MISSED_ each mean payroll does not go out. A sentence
+that asserts more than it measured is the same defect class this ADR exists to
+catch — recorded rather than silently reworded.
 
 ## Consequences
 

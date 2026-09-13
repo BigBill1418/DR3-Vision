@@ -108,7 +108,29 @@ separate pass.
   row was voided at 16:59:40.282 and the 202 row inserted 0.478 s later, which is
   ADR-0084's void flow working correctly.
 
-### 2026-09-11 — the second half: the inventory repair (0.BS)
+### 2026-09-12 — two numbers our own ADRs asserted and could not support
+
+No code change. Both corrections are the defect ADR-0131 exists to catch, found
+in ADR-0131 and ADR-0130 themselves.
+
+- **ADR-0130 §6 claimed "Nothing in this repo publishes `urgent`"** — scoped to
+  the ingestion alerts it re-graded, phrased repo-wide, and contradicted by its
+  own next sentence, which named one. The ntfy sweep found **nine** sites. Three
+  were re-graded down; the payroll cluster legitimately stays `urgent`. Corrected
+  in place with the history kept, not silently reworded.
+- **ADR-0131 cited "the observed maximum ever is 342, over 6,551 rows"** as the
+  basis for `INV-INBOUND-PLAUSIBLE`'s threshold. Neither number reproduces.
+  Re-measured read-only 2026-09-12: 7,577 mirror rows, 1,119 live with units, and
+  excluding the two offenders a maximum of **303 over 1,117 live rows**. No filter
+  tried yields 342/6,551. **The threshold of 350 survives** — it clears 303 with
+  headroom — so the figures are corrected and the decision stands. A basis note
+  records the queries rather than the results, which is the actual lesson.
+- **BS-3 carries the durable record** of the Woodland physical count Bill is
+  scheduling for 2026-09-14, including why it is the recommended remedy for the
+  phantom floor (ADR-0131 Am.1) rather than a hygiene task, and that it still
+  needs a named person — the same gap as BR-3.
+
+## 2026-09-11 — the second half: the inventory repair (0.BS)
 
 Same entry, next pass. The harness shipped as `a525944`; this is the repair work it
 was built to make visible. **ADR-0131's falsification test now passes:** both

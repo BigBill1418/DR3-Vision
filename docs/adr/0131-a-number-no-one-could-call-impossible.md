@@ -23,7 +23,7 @@ The mechanism matters more than the number. Two haul rows in
 | H-138391 | 2026-09-04   | **6,020** | 331,100 lb           | 53' Trailer |
 | H-139774 | 2026-09-09   | **4,840** | 266,200 lb           | 53' Trailer |
 
-Every other Delivered General haul in the mirror — **6,549 of them** — is 342
+Every other Delivered General haul in the live mirror — **1,117 of them** — is 303
 units or fewer, and 99.8% are at or below 198. A 53' trailer since 2026-06-01
 averages **114** units (n=468, median 113, range 27–209). 331,100 lb is 165 tons
 of mattresses on a trailer whose legal gross is about 40 tons.
@@ -273,16 +273,16 @@ Run tonight against production. Result recorded, because an invariant whose
 first run is green is worth as much as one that fires — it converts a belief into
 a measurement.
 
-| #   | Id                            | Tier               | Statement                                                                                                                                                                                            | Result tonight                                             |
-| --- | ----------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| 1   | `INV-ANCHOR-POOLS-SUM`        | refusal            | A non-voided `measured` snapshot has `program_units + non_program_units = units_indoor + units_total + units_in_processing`.                                                                         | **PASS** (0 rows)                                          |
-| 2   | `INV-ANCHOR-FRESH`            | refusal            | Every active site has a non-voided physical anchor newer than 14 days.                                                                                                                               | **FAIL** — Eugene has none ever; Woodland's is 24 days old |
-| 3   | `INV-ANCHOR-UNIQUE`           | refusal            | No two non-voided physical snapshots share `(site_id, snapshot_at)`.                                                                                                                                 | **PASS** (0 rows)                                          |
-| 4   | `INV-ANCHOR-PACIFIC-MIDNIGHT` | refusal            | Every non-voided physical anchor is stamped 07:00:00 or 08:00:00 UTC.                                                                                                                                | **PASS** (0 rows)                                          |
-| 5   | `INV-SNAPSHOT-ONE-COLUMN`     | refusal            | No snapshot has both `units_indoor` and `units_total` set. (CA uses one, OR the other; nothing enforces it, and four surfaces read `units_total ?? units_indoor` while the balance reads their sum.) | **PASS** (0 rows)                                          |
-| 6   | `INV-INBOUND-SPLIT-SUMS`      | refusal            | A verified inbound row has `program + non_program = total_units`.                                                                                                                                    | **PASS** (0 rows)                                          |
-| 7   | `INV-WORKBOOK-PATH-TOKEN`     | refusal            | Every `workbook_sources.folder_path` contains a `{` token.                                                                                                                                           | **PASS** (1/1)                                             |
-| 8   | `INV-INBOUND-PLAUSIBLE`       | **implausibility** | No Delivered General haul carries more units than the largest container can hold. Threshold **350** — the observed maximum ever is 342, over 6,551 rows.                                             | **FAIL** — H-138391 (6,020), H-139774 (4,840)              |
+| #   | Id                            | Tier               | Statement                                                                                                                                                                                                                               | Result tonight                                             |
+| --- | ----------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 1   | `INV-ANCHOR-POOLS-SUM`        | refusal            | A non-voided `measured` snapshot has `program_units + non_program_units = units_indoor + units_total + units_in_processing`.                                                                                                            | **PASS** (0 rows)                                          |
+| 2   | `INV-ANCHOR-FRESH`            | refusal            | Every active site has a non-voided physical anchor newer than 14 days.                                                                                                                                                                  | **FAIL** — Eugene has none ever; Woodland's is 24 days old |
+| 3   | `INV-ANCHOR-UNIQUE`           | refusal            | No two non-voided physical snapshots share `(site_id, snapshot_at)`.                                                                                                                                                                    | **PASS** (0 rows)                                          |
+| 4   | `INV-ANCHOR-PACIFIC-MIDNIGHT` | refusal            | Every non-voided physical anchor is stamped 07:00:00 or 08:00:00 UTC.                                                                                                                                                                   | **PASS** (0 rows)                                          |
+| 5   | `INV-SNAPSHOT-ONE-COLUMN`     | refusal            | No snapshot has both `units_indoor` and `units_total` set. (CA uses one, OR the other; nothing enforces it, and four surfaces read `units_total ?? units_indoor` while the balance reads their sum.)                                    | **PASS** (0 rows)                                          |
+| 6   | `INV-INBOUND-SPLIT-SUMS`      | refusal            | A verified inbound row has `program + non_program = total_units`.                                                                                                                                                                       | **PASS** (0 rows)                                          |
+| 7   | `INV-WORKBOOK-PATH-TOKEN`     | refusal            | Every `workbook_sources.folder_path` contains a `{` token.                                                                                                                                                                              | **PASS** (1/1)                                             |
+| 8   | `INV-INBOUND-PLAUSIBLE`       | **implausibility** | No Delivered General haul carries more units than the largest container can hold. Threshold **350** — the observed maximum excluding the two offenders is 303, over 1,117 live rows (re-measured 2026-09-12; see the basis note below). | **FAIL** — H-138391 (6,020), H-139774 (4,840)              |
 
 Two more that tonight's evidence demands and that were not in the starting
 proposal:
@@ -300,12 +300,12 @@ paging `urgent` on it would be paging about mattresses rather than about numbers
 
 This ADR introduces the section, so it declares its own first.
 
-| Assumption                                                                                                                             | Invariant                                        | Tier           |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------------- |
-| No Delivered General haul carries more units than its container can hold. Threshold 350; observed maximum ever is 342 over 6,551 rows. | `INV-INBOUND-PLAUSIBLE`                          | implausibility |
-| A site's computed on-hand does not exceed `sites.max_units_indoor`.                                                                    | `INV-FLOOR-WITHIN-CAPACITY`                      | implausibility |
-| A COR is never generated for a site with no non-voided physical anchor.                                                                | `INV-COR-HAS-ANCHOR`                             | refusal        |
-| `invariant_state.mode` is only ever `observe`; no invariant can be switched off.                                                       | enforced by a CHECK constraint, not an invariant | —              |
+| Assumption                                                                                                                                                                                  | Invariant                                        | Tier           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------------- |
+| No Delivered General haul carries more units than its container can hold. Threshold 350; observed maximum excluding the two offenders is 303 over 1,117 live rows (re-measured 2026-09-12). | `INV-INBOUND-PLAUSIBLE`                          | implausibility |
+| A site's computed on-hand does not exceed `sites.max_units_indoor`.                                                                                                                         | `INV-FLOOR-WITHIN-CAPACITY`                      | implausibility |
+| A COR is never generated for a site with no non-voided physical anchor.                                                                                                                     | `INV-COR-HAS-ANCHOR`                             | refusal        |
+| `invariant_state.mode` is only ever `observe`; no invariant can be switched off.                                                                                                            | enforced by a CHECK constraint, not an invariant | —              |
 
 The other seven seeded in D8 pin assumptions belonging to ADR-0037, ADR-0078,
 ADR-0084 and ADR-0089. Those ADRs gain this section by amendment as each
@@ -462,3 +462,29 @@ a billed number. If this is built, the badge needs a guard test on the same mode
 units" rule would have fixed tonight and would silently delete a real 400-unit haul
 the first time one arrived. `INV-INBOUND-PLAUSIBLE` exists to make a human look; it
 must not become a mechanism that acts.
+
+## Basis note — the 342/6,551 figures did not reproduce (2026-09-12)
+
+This ADR was drafted citing "the observed maximum ever is 342, over 6,551 rows".
+Neither number reproduces, and the threshold of **350** survives anyway — which is
+why the figures are corrected here rather than the decision reopened.
+
+Re-measured against production 2026-09-12, read-only:
+
+| Population                                      |      Rows | Max `program_unit_count` |
+| ----------------------------------------------- | --------: | -----------------------: |
+| All mirror rows                                 |     7,577 |                    6,020 |
+| Live (`disappeared_at IS NULL`, units not null) |     1,119 |                    6,020 |
+| Live, excluding the two offenders               | **1,117** |                  **303** |
+
+No filter tried yields 342 or 6,551. The likely explanation is that 6,551 was a
+row count taken at drafting time against a differently-filtered population (the
+ADR's own §P-63 table cites "0 / 6,551" for a _dateless-haul_ check, which is a
+different denominator), and 342 came with it. Recorded rather than assumed wrong
+in a specific way, because the filter that produces them was not found.
+
+**350 still clears 303 with headroom**, and the invariant fires on exactly the two
+rows it was built for. The lesson is the ADR's own: a number in a decision record
+that nobody can re-derive is indistinguishable from a number that was never true,
+and the fix is to state the query, not the result. Every figure in the table above
+came from a query recorded in `docs/2026-09-10-woodland-program-floor-overstatement.md`.
