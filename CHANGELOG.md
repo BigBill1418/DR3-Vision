@@ -9,6 +9,34 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-12 — R2 was the only copy of every photo; it isn't any more (noc-master ADR-0232)
+
+Docs only. No DR3-Vision script, unit, credential, bucket or schedule changed.
+
+`docs/operator/backups.md` described the nightly `pg_dump` → restic → R2 lane as "off-site",
+which it is — but every DR3-Vision backup landed in **one Cloudflare account**, R2 has **no
+object versioning**, and hard rule 7 (photos live in R2, never in the DB or on host disk) meant
+**R2 held the only copy of every load photo, receipt and signature in the system**. noc-master
+**ADR-0232** (2026-09-11/12) put a second storage provider underneath all of it:
+
+- **`fleetbackup-chad`** (svdp-dev, 05:30 PT) — the host's **whole root filesystem**, so the live
+  `dr3-vision-postgres` data volume, `~/.dr3-vision-secrets/` and the compose files have a copy
+  that does not depend on `dr3-vision-pg-backup.timer` having run.
+- **`fleetbackup-r2-mirror`** (BOS, 07:00 PT) — `rclone copy` (**never `sync`**) of every R2
+  bucket, so **`dr3-vision-photos`** and `dr3-vision-backups` are both copied, and an R2 deletion
+  cannot propagate.
+- Destination: B2 `barnardhq-fleet-nightly`, Object Lock **compliance 90 days**,
+  keep-all-versions, zero lifecycle rules, no `forget`/`prune`. One digest a day at 11:00 PT on
+  ntfy `infrawatch-alerts` — the `dr3-vision-backup` topic still carries this repo's own lane
+  failures and is untouched.
+
+New section in `docs/operator/backups.md` with the lane table, 1Password item names and the
+limits; a parenthetical on hard rule 7 in `CLAUDE.md`. The limits are stated rather than implied:
+additive and slower (R2 stays primary), not point-in-time, file-level not bare-metal, and — because
+these snapshots carry bonus/payroll/PII and every photo — **nothing in that bucket is purgeable for
+90 days**, so a deletion request that must reach every copy is a retention question for the
+operator, not a `restic forget`.
+
 ## 2026-09-10 — the assertions that only ever ran against fixtures
 
 Implements **ADR-0131 D1–D8**. This repo has 6,100+ tests and every one of them runs
