@@ -19,6 +19,127 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BT — 2026-09-14 the three 02:30 AM pages — **NEXT SESSION OPENS HERE: diagnose and repair, in order** (Bill, 2026-09-14 02:32 PT)
+
+Bill: _"look at the last three ntfy notifications I got and add them to the roadmap
+for immediate diagnosis and repair during the next session."_ This section IS that
+entry — DR3-Vision keeps its roadmap here (CLAUDE.md: the single hanging-items
+register) — so the next session starts at BT-1 and works down. **Nothing was
+repaired on 2026-09-14.** The three messages were pulled from the ntfy server's own
+cache, every claim in them was re-read against production, and the result is
+recorded below.
+
+### What arrived — verbatim from the ntfy cache on BOS-HQ (`cache.db` ids 12002–12004)
+
+All three: topic `dr3-vision-system`, priority `default`, published **02:30:00 PT
+2026-09-14 (09:30:00 UTC)** by the ADR-0131 invariant suite on the 02:30 PT
+audit-sweep tick (`/api/internal/invariants`; paging policy in
+`src/lib/invariants/notify.ts`). The same three arrived 09-12; on 09-13 only the
+digest, because the two refusal pages carry a 24 h `invariant:<id>` fingerprint.
+
+1. **`[DR3-Vision] INV-ANCHOR-FRESH violated - Every site has a non-voided physical anchor newer than the count cadence`** (refusal tier, ADR-0037)
+   - eugene: no non-voided physical count has EVER been recorded; onHand anchors on zero
+   - woodland: newest anchor 2026-08-18 is 18 business days old (limit 15)
+   - REMEDY, as paged: _Schedule a floor count at the named site. Until one exists,
+     every number computed forward from the anchor — floor tile, COR, MRC invoice —
+     rests on an unverified base._
+
+2. **`[DR3-Vision] INV-WORKBOOK-PATH-TOKEN violated - Every site's workbook source exists and carries a tokenised monthly path`** (refusal tier, ADR-0102)
+   - eugene: no workbook_sources row, so this invariant cannot speak for the site; if
+     a single-site registry is intended, narrow INV-WORKBOOK-PATH-TOKEN and record why
+   - REMEDY, as paged: _Set the folder path at /admin/workbook-sync to the tokenised
+     form. The save-time guard (422 folder_path_untokenised_month) refuses an
+     untokenised month, so this can only be an unmigrated row or a site with no row
+     at all._
+
+3. **`[DR3-Vision] data invariants: 4 violated, 0 unchecked`** — the digest; carries
+   the two above plus the two Tier B implausibilities that by design never page alone:
+   - INV-FLOOR-WITHIN-CAPACITY [ADR-0131] — woodland: computed on-hand **11810**
+     (program 11162 / non-program 648) is **337%** of the 3500-unit permitted maximum
+   - INV-INBOUND-PLAUSIBLE [ADR-0131] — woodland **H-138391**: 6020 program units on a
+     53' Trailer (331100 lb) delivered 2026-09-04; woodland **H-139774**: 4840 program
+     units on a 53' Trailer (266200 lb) delivered 2026-09-09; threshold 350, highest
+     ever legitimately recorded 303
+   - tally: `5 ok / 4 violated / 0 unchecked in 329ms (ok: INV-ANCHOR-POOLS-SUM
+INV-ANCHOR-UNIQUE INV-ONHAND-COMPUTABLE INV-PO` — cut at 1,020 chars by the
+     helper's 1,024-byte body cap (`src/lib/ntfy.ts` `BODY_MAX_BYTES`). **By design,
+     not a defect:** `buildDigestBody` puts the tally LAST precisely so the findings
+     are never what falls off, and the counts are already in the title. Do not spend
+     the next session on it.
+
+### Production, re-read ~02:45 PT 2026-09-14 (read-only, `dr3-vision-postgres` on svdp-dev)
+
+| Fact                                                          | Value today                                                                                                       | Meaning                                                                        |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `mymrc_hauls_mirror` H-138391 / H-139774 `program_unit_count` | **6020 / 4840**; `updated_at` 09:00:31Z today; `disappeared_at` NULL; Salesforce `lastModifiedDate` 09-08 / 09-09 | MRC has **not** corrected them. **BS-1 has not landed.**                       |
+| Woodland newest non-voided `physical` anchor                  | **2026-08-18 07:00Z** (3 live / 4 total rows)                                                                     | The Monday-09-14 count (**BS-3**) has **not** been taken.                      |
+| Eugene `physical` anchors                                     | **0 rows, ever**                                                                                                  | Absent, not stale.                                                             |
+| `workbook_sources`                                            | one row — Woodland, tokenised, `is_syncing` true                                                                  | Eugene has no source row.                                                      |
+| `sites`                                                       | eugene: `max_units_total_on_site` 6000, indoor NULL; woodland: `max_units_indoor` 3500                            | **No `active` / onboarded column exists** — the suite has nothing to scope on. |
+
+So three of the four violations are the 0.BS finding still standing (BS-1
+unlanded, BS-3 untaken) and the fourth is the Eugene-scope question 0.BS parked
+as BS-4. The pages are correct. What is missing is the repair — and the suite
+will keep paging at 02:30 every day until it lands.
+
+### Next session — diagnose and repair, in this order
+
+1. **BT-1 — WOODLAND'S PHANTOM FLOOR (INV-INBOUND-PLAUSIBLE + INV-FLOOR-WITHIN-CAPACITY). _Code + operator. First._**
+   Diagnose: re-read the two mirror rows and the newest anchor exactly as in the
+   table above — has MRC moved (payload `lastModifiedDate`), has a count landed (a
+   new non-voided `physical` snapshot)? Then repair by whichever is true:
+   - **(a) the count landed** → verify the floor collapsed (`onHand` ≤ 3,500 and
+     ~390 program), record the `reconciled_delta`, close BS-3 and this item.
+   - **(b) it has not** → it is the recommended remedy (ADR-0131 Am.1) and it
+     re-anchors past both hauls without waiting on MRC's queue. Get it taken today
+     and name who took it. Do not let this slide another day: every day it does
+     not happen is another 02:30 page.
+   - **(c) Bill wants the number right in the app before either** → build the
+     piece 0.BS declined: a per-haul **dispute/exclusion mark** that removes a named
+     `mymrc_hauls_mirror` row from `computeRunningBalance` until MRC corrects it —
+     written by a human with a reason, surfaced on the floor tile, self-clearing
+     when the mirrored value changes. Needs **ADR-0132**, because ADR-0084 forbids
+     editing the mirror and ADR-0131 Am.1 chose the count over exactly this. Never
+     hand-edit `mymrc_hauls_mirror` or `inbound_loads`.
+     Done when both invariants read `ok` on the next 02:30 run, or the exclusion is
+     live and documented.
+
+2. **BT-2 — WOODLAND'S ANCHOR IS 18 BUSINESS DAYS OLD (INV-ANCHOR-FRESH, woodland). _Operator._**
+   Same remedy as BT-1(b): the physical count. No code fixes this. The 18 already
+   excludes Labor Day (09-07) via `site_holidays`, so the arithmetic is right; it
+   clears itself on the run after the count is recorded.
+
+3. **BT-3 — EUGENE HAS NO ANCHOR AND NO WORKBOOK SOURCE (INV-ANCHOR-FRESH eugene + INV-WORKBOOK-PATH-TOKEN eugene). _Bill decides, then code._**
+   Two invariants fire daily on a site with zero rows in every flow table, zero
+   counts, no workbook source and a 6,000-unit cap. Either Eugene is operating and
+   unrecorded, or it is not onboarded and the suite cannot tell the difference.
+   Diagnose: ask Bill which. Repair:
+   - **Eugene is operating** → take a physical count there and add its
+     `workbook_sources` row at `/admin/workbook-sync`; both pages clear.
+   - **Eugene is not onboarded** → add an onboarding state to `sites` (hand-written
+     migration, TEXT ids per repo rule), scope the suite's `sites()` helper and
+     `INV-WORKBOOK-PATH-TOKEN` to onboarded sites, and say so in the invariant's
+     own comment as the code itself asks (_"narrow … and record why"_). This also
+     answers **BS-4** — a not-onboarded site should not render `0` at `text-5xl`
+     on the operator iPad.
+     Done when Eugene leaves the 02:30 output for a recorded reason.
+
+4. **BT-4 — THE 02:30 AM DELIVERY. _Bill, optional._**
+   All three reached Bill's phone at 02:30 PT, inside ADR-0037's proposed
+   22:00–07:00 quiet window. `src/lib/ntfy.ts` implements no quiet-hours buffering
+   (grep finds none) and ADR-0037 still marks quiet hours "operator-confirm
+   pending", so the timing is per current design. If Bill wants `default` pages
+   held to 07:00, either move the suite's notify to a 07:00 tick or buffer
+   `default` in the helper. Not a repair unless he says so.
+
+### What this section does NOT change
+
+- 0.BS stays open. BT-1/BT-2 are BS-1/BS-3 re-asserted with today's evidence;
+  BT-3 is BS-4 promoted from "decide" to "diagnose and repair".
+- No code, no data, no credential, no schedule changed on 2026-09-14.
+
+---
+
 ## 0.BS — 2026-09-10 the floor reads 11,020 in a 3,500-unit building — **ADR-0131 ACCEPTED; the data repair is NOT ours**
 
 Bill: _"the program units on hand are wildly and completely broken - all the way

@@ -9,6 +9,21 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-14 — The three 02:30 AM pages, registered for the next session (docs only)
+
+No code, data, credential or schedule changed.
+
+The ADR-0131 invariant suite's 02:30 PT run paged two refusals (`INV-ANCHOR-FRESH`,
+`INV-WORKBOOK-PATH-TOKEN`) and a digest (`4 violated, 0 unchecked` — those two plus
+`INV-FLOOR-WITHIN-CAPACITY` and `INV-INBOUND-PLAUSIBLE`). Bill asked for the three to be
+added to the roadmap for immediate diagnosis and repair next session. **`docs/OPEN-ITEMS.md`
+§ 0.BT** is that entry: the messages verbatim (ntfy cache ids 12002–12004), production
+re-read at ~02:45 PT (both hauls still 6,020 / 4,840 in the mirror; Woodland's anchor still
+2026-08-18; Eugene has no anchor, no workbook source, and `sites` has no onboarding column to
+scope on), and four ordered items **BT-1 … BT-4**, each with diagnose / repair / done-when.
+Also recorded so nobody chases it: the digest body's cut at 1,020 chars is the helper's
+1,024-byte cap and is by design (findings first, tally last).
+
 ## 2026-09-12 — R2 was the only copy of every photo; it isn't any more (noc-master ADR-0232)
 
 Docs only. No DR3-Vision script, unit, credential, bucket or schedule changed.
