@@ -9,6 +9,27 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-15 — Woodland re-anchored: the 09-14 hard count of 885 is live (data, one row)
+
+No code, credential or schedule changed. One production write, through the product:
+`POST /api/manager/woodland/snapshots` with an admin session minted from the app's own
+Auth.js encode (15-minute TTL), recorded 08:14 PT.
+
+Bill's 2026-09-14 hard count (**885 units, nothing on the line**) is anchor `04cb7ae2`,
+stamped Pacific midnight 09-14 as the closing position of that day, **128 program / 757
+non-program** (`measured`), ADR-0072 Tier 1 (4.1% swing against the prior 923),
+`reconciled_delta = −10,765` against a computed 11,650 — the two impossible MyMRC hauls are
+10,860 of that, so the count sits 95 units above the ledger with the phantoms removed. Audit
+row in the same transaction. Read-only re-run of the inventory invariants afterwards:
+`INV-FLOOR-WITHIN-CAPACITY` ok (was 333% of cap), `INV-POOL-NON-NEGATIVE` ok,
+`INV-ANCHOR-FRESH` names Eugene only. The split is DERIVED, not counted — Bill had a total;
+MyMRC's own pool tags do not balance (its arithmetic gives a negative program pool); Vision's
+non-program pool (757) is the only consistent figure, so program = 885 − 757. Derivation, the
+reversal path (ADR-0105 manager correction), and a new finding — MRC and the Woodland daily
+log disagree on pool tagging by 408 units over five days — are in `docs/OPEN-ITEMS.md` § 0.BT
+(BT-1, BT-2, BS-3 closed; BT-3 Eugene diagnosed and waiting on Bill; BT-5 recorded).
+`INV-INBOUND-PLAUSIBLE` stays red until MRC corrects H-138391 / H-139774 (BS-1).
+
 ## 2026-09-14 — The three 02:30 AM pages, registered for the next session (docs only)
 
 No code, data, credential or schedule changed.

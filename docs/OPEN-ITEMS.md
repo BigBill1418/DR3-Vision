@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BT — 2026-09-14 the three 02:30 AM pages — **NEXT SESSION OPENS HERE: diagnose and repair, in order** (Bill, 2026-09-14 02:32 PT)
+## 0.BT — 2026-09-14 the three 02:30 AM pages — **BT-1 + BT-2 DONE 2026-09-15 (the count landed); BT-3 WAITS ON BILL; BT-4 optional; BT-5 recorded** (Bill, 2026-09-14 02:32 PT)
 
 Bill: _"look at the last three ntfy notifications I got and add them to the roadmap
 for immediate diagnosis and repair during the next session."_ This section IS that
@@ -82,10 +82,55 @@ unlanded, BS-3 untaken) and the fourth is the Eugene-scope question 0.BS parked
 as BS-4. The pages are correct. What is missing is the repair — and the suite
 will keep paging at 02:30 every day until it lands.
 
+### 2026-09-15 08:14 PT — the count landed; Woodland is clean
+
+Bill, 2026-09-14 7:09 PM PT: _"Hard count inventory : 885 units"_; 8:53 PM: _"nothing
+was on the line - count is done when all is cleared"_ (so the count is the closing
+position of 09-14 and `units_in_processing = 0`); 9:06 PM: _"i don't seem to have
+that [the split] - what does MyMRC say?"_ Recorded 2026-09-15 08:14 PT through the
+real manager route (`POST /api/manager/woodland/snapshots`, admin session minted
+from the app's own Auth.js encode, 15-minute TTL) — not a database write.
+
+|                                                | Value                                                                                                                                                                                        |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Snapshot                                       | `04cb7ae2-06e7-47b4-b8bf-3d7a6e140a61`, `snapshot_at` 2026-09-14 07:00Z (Pacific midnight 09-14), `physical`, `manual`                                                                       |
+| Count                                          | `units_indoor` **885**, `units_in_processing` 0                                                                                                                                              |
+| Split                                          | **128 program / 757 non-program**, `pool_attribution = measured` (derived — see below)                                                                                                       |
+| Guardrail (ADR-0072)                           | Tier 1: prior anchor 923 → 885 is a 4.1% swing against the 20% threshold; no hold                                                                                                            |
+| `reconciled_delta`                             | **−10,765** (computed 11,650 at the count instant) — the phantom hauls are 10,860, so the count sits 95 units ABOVE the ledger minus the phantoms                                            |
+| Audit                                          | `audit_log` insert row, actor Bill (`c6a6ca68`), same transaction                                                                                                                            |
+| After (filtered read-only run, `notify=false`) | `INV-FLOOR-WITHIN-CAPACITY` ok · `INV-POOL-NON-NEGATIVE` ok · `INV-ANCHOR-POOLS-SUM` ok · `INV-ANCHOR-UNIQUE` ok · `INV-ONHAND-COMPUTABLE` ok · `INV-ANCHOR-FRESH` now names **Eugene only** |
+
+**How the split was derived, and why it is the only consistent one.** Bill had a
+total, not a split. MyMRC has no on-hand figure; running its own inbound and
+processing tags forward from the 08-18 anchor (201/722) gives non-program 722 +
+2,403 − 1,960 = **1,165** (more than the whole count) and program 201 + 16,798 −
+17,672 = **−673** (excluding the two impossible hauls) — MRC's pools do not
+balance, because on five days MRC and the Woodland daily log disagree about which
+pool the stripped units came from (**408 units** net; see BT-5). Vision's ledger
+uses MRC's inbound tags and the log's stripping tags, and its non-program pool is
+untouched by the phantom hauls (both carry 0 non-program): it read **757** at 9 PM
+09-14, and every leg since 08-18 reconciles exactly to the live total (923 + 27,658
+
+- 2,403 + 298 drop-offs − 17,264 − 2,368 = 11,650). So non-program = 757, program =
+  885 − 757 = **128**. Plausible: the crew stripped 1,026 program on 09-14 against
+  938 delivered, so the program floor turns over daily and stays small, while
+  non-program arrives in batches and sits. Proposed to Bill 9:15 PM 09-14 as
+  "128 / 757"; no reply overnight; recorded 08:14 the next morning on the reasoning
+  that it is reversible and every day waiting is another day the iPad reads 11,650.
+  **To change it:** manager correction (ADR-0105, `correct-count.ts`) today, or
+  admin void + re-record after — never edit the row.
+
+**Expected tomorrow (02:30 09-16):** the digest drops to **3 violated** — the two
+Eugene refusals (BT-3) and `INV-INBOUND-PLAUSIBLE`, which reads the mirror rows and
+keeps naming H-138391 / H-139774 until MRC corrects them (**BS-1, still MRC's
+action — nothing in Vision clears it**). If Woodland reappears in the digest, the
+count did not take; read the table above first.
+
 ### Next session — diagnose and repair, in this order
 
 1. **BT-1 — WOODLAND'S PHANTOM FLOOR (INV-INBOUND-PLAUSIBLE + INV-FLOOR-WITHIN-CAPACITY). _Code + operator. First._**
-   Diagnose: re-read the two mirror rows and the newest anchor exactly as in the
+   **DONE 2026-09-15 via (a)/(b): the count landed and `INV-FLOOR-WITHIN-CAPACITY` reads ok** (table above). `INV-INBOUND-PLAUSIBLE` stays red until MRC corrects the two hauls (BS-1); (c) was not built and is not needed unless Bill wants the mirror rows disputed in-app. _Original item:_ Diagnose: re-read the two mirror rows and the newest anchor exactly as in the
    table above — has MRC moved (payload `lastModifiedDate`), has a count landed (a
    new non-voided `physical` snapshot)? Then repair by whichever is true:
    - **(a) the count landed** → verify the floor collapsed (`onHand` ≤ 3,500 and
@@ -105,7 +150,7 @@ will keep paging at 02:30 every day until it lands.
      live and documented.
 
 2. **BT-2 — WOODLAND'S ANCHOR IS 18 BUSINESS DAYS OLD (INV-ANCHOR-FRESH, woodland). _Operator._**
-   Same remedy as BT-1(b): the physical count. No code fixes this. The 18 already
+   **DONE 2026-09-15** — the 09-14 count re-anchored Woodland; the read-only run after the write names Eugene only. Closes **BS-3** as well. _Original item:_ Same remedy as BT-1(b): the physical count. No code fixes this. The 18 already
    excludes Labor Day (09-07) via `site_holidays`, so the arithmetic is right; it
    clears itself on the run after the count is recorded.
 
@@ -113,15 +158,29 @@ will keep paging at 02:30 every day until it lands.
    Two invariants fire daily on a site with zero rows in every flow table, zero
    counts, no workbook source and a 6,000-unit cap. Either Eugene is operating and
    unrecorded, or it is not onboarded and the suite cannot tell the difference.
-   Diagnose: ask Bill which. Repair:
-   - **Eugene is operating** → take a physical count there and add its
-     `workbook_sources` row at `/admin/workbook-sync`; both pages clear.
-   - **Eugene is not onboarded** → add an onboarding state to `sites` (hand-written
-     migration, TEXT ids per repo rule), scope the suite's `sites()` helper and
-     `INV-WORKBOOK-PATH-TOKEN` to onboarded sites, and say so in the invariant's
-     own comment as the code itself asks (_"narrow … and record why"_). This also
-     answers **BS-4** — a not-onboarded site should not render `0` at `text-5xl`
-     on the operator iPad.
+   **Diagnosed 2026-09-15 — Eugene is SWITCHED ON and has never been used.**
+   `rollout_surfaces` for Eugene: `loads_inventory` **live** (flipped by Bill
+   2026-07-22 12:54 PT), `ipad_count` live, `ipad_inbound` live, `ipad_dropoff`
+   live; 5 active users with Eugene as primary site; **0** `inbound_loads`, **0**
+   `consumer_dropoffs`, **0** `processed_units_daily`, **0** physical counts, no
+   `workbook_sources` row; and the MyMRC mirror holds **no Eugene account at all**
+   (1,143 hauls, every one `DR3 Woodland`) — the scrape is Woodland-scoped or
+   Eugene's hauls live elsewhere. So "scope the suite to onboarded sites" would
+   NOT silence Eugene today: by the only onboarding signal the repo has, Eugene is
+   onboarded. Asked Bill 08:25 PT 09-15. Repair, by his answer:
+   - **Eugene is meant to run Loads & Inventory** → someone at Eugene takes a
+     physical count (Tier 0, no guardrail on a first count), Bill adds its daily-log
+     `workbook_sources` row at `/admin/workbook-sync`, and the MyMRC scrape needs an
+     Eugene account or a recorded reason it has none; both pages clear.
+   - **Eugene is not (yet) running it** → flip Eugene's `loads_inventory` (and the
+     `ipad_count` / `ipad_inbound` / `ipad_dropoff` seeds) back to `pilot` from
+     `/admin/rollout`, and scope the inventory suite's `sites()` helper and
+     `INV-WORKBOOK-PATH-TOKEN` to sites whose `loads_inventory` surface is `live` —
+     the ADR-0047 rollout surface already expresses onboarding, so **no new `sites`
+     column** (supersedes the migration idea recorded on 09-14). Say so in the
+     invariant's own comment as the code asks (_"narrow … and record why"_). This
+     also answers **BS-4** — a not-onboarded site should not render `0` at
+     `text-5xl` on the operator iPad.
      Done when Eugene leaves the 02:30 output for a recorded reason.
 
 4. **BT-4 — THE 02:30 AM DELIVERY. _Bill, optional._**
@@ -132,11 +191,24 @@ will keep paging at 02:30 every day until it lands.
    held to 07:00, either move the suite's notify to a 07:00 tick or buffer
    `default` in the helper. Not a repair unless he says so.
 
+5. **BT-5 — MRC AND THE DAILY LOG DISAGREE ON POOL TAGGING (recorded 2026-09-15, not acted on).**
+   Same totals, different pools, on five days since 08-18: 08-19 (log 960/110 vs MRC
+   970/100), 08-26 (1,106/35 vs 1,141/0), 08-27 (868/395 vs 1,263/0), 08-28
+   (1,069/37 vs 1,106/0), 09-03 (957/233 vs 888/302). Net **408** units the log
+   calls non-program that MRC calls program. MRC bills on program units, so MRC's
+   version bills 408 more than the log supports, or the log under-claims. Sibling
+   of BS-14 (which is about totals); same owner — whoever holds the workbook
+   decides which side is right, not code. A Tier B invariant here would fire on
+   every disagreement day. Found while deriving the 09-14 split; it is the reason
+   MRC's own records could not supply one.
+
 ### What this section does NOT change
 
-- 0.BS stays open. BT-1/BT-2 are BS-1/BS-3 re-asserted with today's evidence;
-  BT-3 is BS-4 promoted from "decide" to "diagnose and repair".
-- No code, no data, no credential, no schedule changed on 2026-09-14.
+- 0.BS stays open for BS-1 (MRC's correction of the two hauls) and BS-4 (= BT-3).
+  BS-3 is DONE (the count). BT-1/BT-2 were BS-1/BS-3 re-asserted with evidence.
+- No code, credential or schedule changed on 2026-09-14 or 2026-09-15. **Data
+  changed once, on 2026-09-15 08:14 PT:** one `site_inventory_snapshots` row and
+  its `audit_log` row, through the manager route (table above). Nothing else.
 
 ---
 
@@ -180,7 +252,7 @@ has been _filed_ by this system.
    `sites.max_units_indoor`. On today's ledger Exhibit 5 would print **~11,700
    units** for a 3,500-unit building.
 
-3. **BS-3 — TAKE A PHYSICAL COUNT AT WOODLAND. _Operator._ Bill is scheduling
+3. **BS-3 — DONE 2026-09-15 08:14 PT.** Counted 885 on 2026-09-14 (Bill, 7:09 PM PT), recorded as anchor `04cb7ae2` with `reconciled_delta = −10,765`; the floor collapsed from 11,650 to 885 and `INV-FLOOR-WITHIN-CAPACITY` reads ok. Full record: 0.BT. _Original item:_ **TAKE A PHYSICAL COUNT AT WOODLAND. _Operator._ Bill is scheduling
    this; reminder set for Monday 2026-09-14.** The anchor is 2026-08-18 — 25 days
    old as of 2026-09-12, and `INV-ANCHOR-FRESH` now reports it **past** the
    15-business-day limit. A count re-anchors the ledger, produces a
