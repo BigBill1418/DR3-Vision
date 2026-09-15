@@ -170,6 +170,17 @@ attachment, stamped_count: 1, originals_attached: 0` — a **true overlay on the
    and retire the 50 KB inline-image size heuristic is still open. It is what makes
    the `image001.jpg` filter exact rather than a guess.
 
+9. **BU-9 — residual: the deployer never proves the live SHA (recorded 2026-09-15).**
+   The `177ba39` deploy passed the ADR-0056 image-digest gate (`digests changed:
+app`, a real rebuild), the health gate (attempt 1) and the smoke test, but
+   DR3-Vision's `deployer.repos[]` entry in `noc-master/data/config.yml` runs
+   `version_assert: false` / `expected_version: null`, so a green deploy does not
+   by itself prove the running container is the pushed commit. Both sessions
+   proved it by hand instead (the app's log `version` field carries the SHA;
+   `/healthz` only shows `package.json`'s `0.1.0`). A `version_assert` wiring pass
+   on the noc-master side would let the pipeline catch a silent-stale deploy on
+   its own. Not changed here; noc-master territory.
+
 ---
 
 ## 0.BT — 2026-09-14 the three 02:30 AM pages — **BT-1 + BT-2 DONE 2026-09-15 (the count landed); BT-3 WAITS ON BILL; BT-4 optional; BT-5 recorded** (Bill, 2026-09-14 02:32 PT)
