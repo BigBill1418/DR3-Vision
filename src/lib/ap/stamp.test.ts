@@ -119,6 +119,39 @@ describe('buildStampHtml', () => {
     expect(html).toContain('invoice-4471.pdf');
     expect(html).toContain('abc123');
   });
+
+  // ADR-0132 D1/D4 — "Retrieve the original via the DR3-Vision AP queue" is the
+  // sentence accounting was sent instead of the invoice. A cover page no longer
+  // travels alone, so the copy must say the original is ON this message; the old
+  // sentence survives ONLY for the degradation where there is no original to send.
+  it('a cover page whose original rides beside it says so — and never says "retrieve it"', () => {
+    const html = buildStampHtml({
+      kind: 'attachment',
+      requestId: 'req-42',
+      subject: 'Invoice',
+      approverName: 'Morena',
+      decision: 'approved',
+      decidedAt: DECIDED_AT,
+      originalFilename: 'ledger.csv',
+      originalSha256: 'abc123',
+      originalAttached: true,
+    });
+    expect(html).toContain('attached to this message');
+    expect(html).not.toContain('Retrieve the original');
+  });
+
+  it('the R2-unavailable degradation (no original to attach) keeps the queue sentence', () => {
+    const html = buildStampHtml({
+      kind: 'attachment',
+      requestId: 'req-42',
+      subject: 'Invoice',
+      approverName: 'Morena',
+      decision: 'approved',
+      decidedAt: DECIDED_AT,
+      originalFilename: 'invoice-4471.pdf',
+    });
+    expect(html).toContain('Retrieve the original via the DR3-Vision AP queue');
+  });
 });
 
 describe('stampApproval — injected renderer, deterministic sha256', () => {

@@ -738,7 +738,13 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                       // operator is told to forward manually, not sent to click a button
                       // that will refuse again.
                       'DECIDED, but the stamped invoice exceeds the sending mailbox’s per-message limit — accounting was NOT told. Re-sending will not help at this size; open the request and forward the stamped PDF manually.'
-                    : 'decided, but the decision email failed to send. Use Re-send.';
+                    : body.mail === 'refused_no_original'
+                      ? // ADR-0132 D5 — the invoice could not be attached, so nothing
+                        // was sent. Accounting is never told about a decision without
+                        // the document it is about. The row now carries the
+                        // decided-but-unmailed badge and Re-send is the repair.
+                        'DECIDED, but the original invoice could not be attached — NO email was sent to accounting (an operator alert was raised). This request is flagged as unmailed; use Re-send once the original is retrievable.'
+                      : 'decided, but the decision email failed to send. Use Re-send.';
           setMsg(`Request ${decision}; ${mailNote}`);
         }
       } catch (e) {

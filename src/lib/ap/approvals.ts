@@ -27,6 +27,7 @@ import type { ApVarianceFlagState } from './extraction/types';
 // `second-approval-routing` for the deprecated roster surface only.
 import { requiresSecondApproval } from './second-approval-routing';
 import {
+  apRequestUrl,
   notifySecondApprovalNeeded,
   reportSecondApprovalRoutingProblem,
   notifyEquipmentRequestCreated,
@@ -45,6 +46,13 @@ import {
   type StampInput,
   type StampResult,
 } from './stamp';
+// ADR-0132 D2/D3 — the ONE content-type predicate for the whole AP module. The
+// preview surfaces have used these since ADR-0046 Amendment 6 (2026-07-22); the
+// decision mail was the holdout, and its anchored `=== 'application/pdf'` is why
+// 15 mislabelled vendor PDFs were reduced to a cover page. `resolveOverlayType`
+// adds the byte sniff on top: a sender can mislabel a type and misname a file, it
+// cannot forge its own magic number.
+import { normalizeMime, resolveOverlayType } from './inline-preview';
 
 const TABLE = 'ap_requests';
 
@@ -152,7 +160,15 @@ export type ApMailOutcome =
   // rather than routine, but it is deliberately NOT deleted: a limit still exists,
   // and a refusal that has nowhere to be reported is how the original silence
   // happened.
-  | 'too_large';
+  | 'too_large'
+  // ADR-0132 D5 — the request HAS file attachments and not one stamped original
+  // could be produced (R2 could not serve the bytes, or the artifact build failed).
+  // NOTHING was sent: a decision notice without the invoice is not a delivery, it
+  // is the thing accounting is then told to go and fetch for itself. The decision
+  // STANDS; `decision_mail_sent_at` stays NULL, which is precisely the state the
+  // ADR-0126 sweep and the AP queue badge already watch, and the existing Re-send
+  // button is already the repair. No new machinery, by design.
+  | 'refused_no_original';
 
 export interface DecideResult {
   requestId: string;
@@ -1141,16 +1157,23 @@ export async function sendDecisionEmail(
   // ADR-0046 Amendment 4 — stamp the ORIGINAL invoice (both decisions), attach the
   // stamped original(s), and archive them to R2. BODY-only originals re-render the
   // (re-)sanitized body; PDF/image attachments get a TRUE overlay (pdf-lib /
-  // Playwright); an R2-unconfigured window degrades to the stamped cover page.
-  // Fail-soft: a render/download/R2 failure must NEVER block the decision mail to
-  // accounting (the decision itself already stands). Preserve the .catch(→null).
+  // Playwright); a non-overlayable original gets a stamped cover WITH the file
+  // itself beside it (ADR-0132 D4).
+  //
+  // ADR-0132 D5 REPLACES the old `.catch(() => null)` here, whose own comment read
+  // "mail proceeds without attachment". Fail-soft is right for the DECISION — it
+  // is committed and never rolls back on a mail/render/R2 failure — but it was
+  // never right for the INVOICE: a notice that reaches accounting without the
+  // document is not a delivery, and it stamped `decision_mail_sent_at` as though
+  // it were. A request that carried originals and produced none now REFUSES.
+  //
   // D-M5-3 — on a >= $1,000 APPROVED row the stamp leads with the FIRST approver +
   // their approval time and appends the second-approval clause; every other decision
   // (sub-$1K approve, any reject, NOT-DR3) uses the single terminal approver.
   const dualApproved = isDual && req.status === 'approved';
   const stampApproverName = dualApproved ? (firstApproverName ?? approverName) : approverName;
   const stampDecidedAt = dualApproved ? (firstApprovedAt ?? decidedAt) : decidedAt;
-  const artifacts = await buildDecisionStamp(
+  const stamped = await buildDecisionStamp(
     prisma,
     req,
     stampApproverName,
@@ -1160,14 +1183,37 @@ export async function sendDecisionEmail(
     renderer,
     dualApproved ? secondApproverName : null,
     dualApproved ? secondApprovedAt : null,
-  ).catch((e) => {
+  ).catch((e): DecisionStampOutcome => {
     log.warn(
       { requestId, err: e instanceof Error ? e.message : String(e) },
-      '[ap-approvals] decision-PDF stamp failed (mail proceeds without attachment)',
+      '[ap-approvals] decision-PDF stamp failed',
     );
-    return null;
+    return { ok: false, reason: 'render_failed', attempted: 0 };
   });
-  if (artifacts && artifacts.length > 0) {
+  if (!stamped.ok) {
+    log.error(
+      { requestId, status: req.status, reason: stamped.reason, attempted: stamped.attempted },
+      '[ap-approvals] decision email REFUSED — no stamped original could be produced; nothing sent',
+    );
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'AP decision email NOT sent — the invoice could not be attached',
+      // ADR-0045 — row id + status only. Never the vendor, the amount or the
+      // filename: this body lands on a phone and in a push-notification log.
+      body: `AP request ${requestId} was decided (${req.status}) but the original invoice could not be attached (${stamped.reason}), so NO decision email was sent to accounting. The decision stands. The request shows in the AP queue's decided-but-unmailed badge and in the 06:00 digest — open it and use Re-send once the original is retrievable.`,
+      priority: 'high',
+      tags: ['error', 'ap', 'dr3-vision'],
+      // Tier-1 click target (ADR-0036): the request itself, not the queue.
+      clickUrl: apRequestUrl(requestId),
+      // Per REQUEST, not per condition: a distinct invoice must always page, while
+      // a retry on the same one inside the window must not.
+      fingerprint: `ap-decision-mail-no-original:${requestId}`,
+      cooldownMs: 6 * 60 * 60 * 1000,
+    }).catch(() => undefined);
+    return 'refused_no_original';
+  }
+  const artifacts = stamped.artifacts;
+  if (artifacts.length > 0) {
     // Archive each stamped PDF to R2 (fail-soft; a PUT miss never blocks the mail).
     // The single-value columns record the PRIMARY (first) artifact; the audit row
     // carries the full count for the rare multi-attachment invoice.
@@ -1202,11 +1248,26 @@ export async function sendDecisionEmail(
         decision_pdf_sha256: primary.sha256,
         stamped_kind: primary.kind,
         stamped_count: artifacts.length,
+        // ADR-0132 D4 — how many originals rode beside a cover page.
+        originals_attached: artifacts.filter((a) => a.original).length,
         original_attachment_sha256: originalSha,
         decision_pdf_r2_key: decisionPdfR2Key,
       },
     });
   }
+
+  const mailAttachments = artifacts.flatMap((a) => [
+    { filename: a.filename, buffer: a.pdf, contentType: 'application/pdf' },
+    ...(a.original
+      ? [
+          {
+            filename: a.original.filename,
+            buffer: a.original.bytes,
+            contentType: a.original.contentType,
+          },
+        ]
+      : []),
+  ]);
 
   // D-M5-3 — a second-approver override REJECT CCs the FIRST approver so they see
   // their approval was overridden. Resolve their address and add it to the CC set
@@ -1245,15 +1306,11 @@ export async function sendDecisionEmail(
     }) — ${subject}`.slice(0, 200),
     htmlBody,
     fromDisplayName: 'DR3-Vision AP',
-    ...(artifacts && artifacts.length > 0
-      ? {
-          attachments: artifacts.map((a) => ({
-            filename: a.filename,
-            buffer: a.pdf,
-            contentType: 'application/pdf',
-          })),
-        }
-      : {}),
+    // ADR-0132 D4 — one source attachment can yield TWO mail parts: the stamped
+    // artifact (a PDF by construction — all three renderers emit PDF) and, when
+    // that artifact is only a cover page, the untouched original under its own
+    // name and its own corrected type. The content type is therefore per part.
+    ...(mailAttachments.length > 0 ? { attachments: mailAttachments } : {}),
     db: prisma,
   });
 
@@ -1358,6 +1415,14 @@ interface StampedArtifact {
   /** Source ap_attachment id (drives the R2 archive key); null for body/cover. */
   attachmentId: string | null;
   kind: StampInput['kind'];
+  /**
+   * ADR-0132 D4 — a cover page never travels alone. When `pdf` is a COVER rather
+   * than the stamped document itself (a non-overlayable original, or an overlay
+   * that failed), the untouched original rides the same message beside it under
+   * its own filename and its CORRECTED content type. Null whenever `pdf` already
+   * IS the document (a true overlay) — attaching it twice would be noise.
+   */
+  original: { filename: string; bytes: Buffer; contentType: string } | null;
 }
 
 type StampBase = Pick<
@@ -1397,7 +1462,9 @@ interface FileAttachmentRow {
  */
 const INLINE_IMAGE_MAX_BYTES = 50_000;
 function isLikelyInlineImage(a: FileAttachmentRow): boolean {
-  const ct = (a.content_type ?? '').toLowerCase();
+  // ADR-0132 D2 — normalized, so a parameterized or whitespace-padded
+  // `image/jpeg; name="sig.jpg"` is still recognized as the signature logo it is.
+  const ct = normalizeMime(a.content_type);
   return ct.startsWith('image/') && a.byte_size != null && a.byte_size < INLINE_IMAGE_MAX_BYTES;
 }
 
@@ -1413,21 +1480,47 @@ function selectStampableAttachments(files: FileAttachmentRow[]): FileAttachmentR
 }
 
 /**
- * De-duplicate a stamped-attachment filename within one decision mail. Two source
- * files sharing a name (`invoice.pdf`) would otherwise collapse to one `approved-invoice.pdf`
- * MIME part and clobber each other; append `-<n>` before `.pdf` on collision.
+ * De-duplicate an attachment filename within one decision mail. Two source files
+ * sharing a name (`invoice.pdf`) would otherwise collapse to one MIME part and
+ * clobber each other; append `-<n>` before the extension on collision.
+ *
+ * ADR-0132 D4 — this now runs over the ORIGINALS too (a CSV rides beside its cover
+ * page), so the extension is whatever the file has, not always `.pdf`.
  */
 function dedupeFilename(name: string, used: Set<string>): string {
   if (!used.has(name)) {
     used.add(name);
     return name;
   }
-  const stem = name.endsWith('.pdf') ? name.slice(0, -'.pdf'.length) : name;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
   let n = 2;
-  let candidate = `${stem}-${n}.pdf`;
-  while (used.has(candidate)) candidate = `${stem}-${++n}.pdf`;
+  let candidate = `${stem}-${n}${ext}`;
+  while (used.has(candidate)) candidate = `${stem}-${++n}${ext}`;
   used.add(candidate);
   return candidate;
+}
+
+/**
+ * The ORIGINAL's own filename, made safe to hand the transport (ADR-0132 D4).
+ *
+ * `ap_attachments.filename` is whatever the SENDING mail client wrote — the same
+ * untrusted field the content type came from, and this one ends up as the name a
+ * recipient's mail client offers to save. So: keep the basename only (no path
+ * segments), allow the conservative set `stampedAttachmentName` already allows
+ * plus spaces, drop leading dots (no hidden files), and never return empty.
+ * Ordinary vendor names — `Invoice_IN-0320844.PDF`, `ledger.csv` — pass through
+ * untouched, which is what D4 means by "under its own filename".
+ */
+function safeOriginalFilename(filename: string | null, attId: string): string {
+  const base = (filename ?? '').split(/[\\/]/).pop() ?? '';
+  const cleaned = base
+    .replace(/[^a-zA-Z0-9._ -]/g, '_')
+    .replace(/^\.+/, '')
+    .trim()
+    .slice(0, 120);
+  return cleaned || `attachment-${attId}`;
 }
 
 /** A stable, filesystem-safe stamped-attachment filename (always `.pdf`). */
@@ -1445,20 +1538,26 @@ function stampedAttachmentName(
 }
 
 /**
- * Stamp ONE original file attachment. PDF → true pdf-lib overlay; image → HTML
- * embed + Playwright; any other type → stamped cover naming it. Returns null when
- * the ORIGINAL bytes are unavailable (R2 unconfigured / placeholder key), so the
- * caller degrades to the cover page. On an overlay error the attachment still
- * yields a stamped cover (naming it + its original sha) — one bad file never drops
- * the others, and the mail is never blocked.
+ * Stamp ONE original file attachment (ADR-0132).
+ *
+ * The render path is chosen from the RESOLVED type — sniff → MIME → extension —
+ * not from `content_type` alone: PDF → true pdf-lib overlay; image → HTML embed +
+ * Playwright; anything genuinely non-overlayable → a stamped cover page WITH the
+ * untouched original attached beside it (D4). The same shape covers an overlay
+ * that throws, so one unreadable file never costs accounting the document.
+ *
+ * Returns null only when the ORIGINAL bytes cannot be fetched at all — there is
+ * then nothing to attach, and the caller refuses the send rather than mailing a
+ * decision notice with no invoice in it (D5).
  */
 async function stampOneOriginal(
   base: StampBase,
   att: FileAttachmentRow,
   renderer?: PdfRenderer,
 ): Promise<StampedArtifact | null> {
-  const bytes = await getApAttachmentBytes(att.storage_key!).catch(() => null);
-  if (!bytes) return null;
+  const raw = await getApAttachmentBytes(att.storage_key!).catch(() => null);
+  if (!raw) return null;
+  const bytes = Buffer.from(raw);
   const originalSha256 = createHash('sha256').update(bytes).digest('hex');
   const input: StampInput = {
     ...base,
@@ -1466,23 +1565,42 @@ async function stampOneOriginal(
     originalFilename: att.filename,
     originalSha256,
   };
-  const ct = (att.content_type ?? '').toLowerCase();
   const name = stampedAttachmentName(base.decision, att.filename, att.id);
+
+  // D3 — the bytes decide; the stored label and the filename are the fallback.
+  const stored = normalizeMime(att.content_type);
+  const resolved = resolveOverlayType(bytes, att.content_type, att.filename);
+  if (resolved !== null && resolved !== stored) {
+    // The observability that did not exist: until now the substitution was silent,
+    // which is why a seven-week defect left zero `ap-approvals` lines in the logs.
+    log.info(
+      { attId: att.id, storedContentType: stored || '(none)', resolvedContentType: resolved },
+      '[ap-approvals] attachment type resolved from its bytes/filename — the stored content_type disagrees',
+    );
+  }
+
   let result: StampResult;
+  // True when `result` is a COVER rather than the document itself, so D4 has to
+  // send the original beside it.
+  let coverOnly = false;
   try {
-    if (ct === 'application/pdf') {
+    if (resolved === 'application/pdf') {
       result = await stampOntoOriginalPdf(bytes, input);
-    } else if (/^image\/(png|jpeg|jpg|webp)$/.test(ct)) {
-      result = await stampImage(input, bytes, ct, renderer);
+    } else if (resolved !== null) {
+      // The CANONICAL type (image/jpg → image/jpeg), never the stored spelling —
+      // it becomes the data: URI's media type in the render.
+      result = await stampImage(input, bytes, resolved, renderer);
     } else {
-      result = await stampApproval(input, renderer); // odd type → cover naming it
+      coverOnly = true;
+      result = await stampApproval({ ...input, originalAttached: true }, renderer);
     }
   } catch (e) {
     log.warn(
       { attId: att.id, err: e instanceof Error ? e.message : String(e) },
-      '[ap-approvals] original overlay failed — falling back to a stamped cover page',
+      '[ap-approvals] original overlay failed — stamped cover page, original attached beside it',
     );
-    result = await stampApproval(input, renderer);
+    coverOnly = true;
+    result = await stampApproval({ ...input, originalAttached: true }, renderer);
   }
   return {
     filename: name,
@@ -1491,6 +1609,15 @@ async function stampOneOriginal(
     originalSha256,
     attachmentId: att.id,
     kind: 'attachment',
+    original: coverOnly
+      ? {
+          filename: safeOriginalFilename(att.filename, att.id),
+          bytes,
+          // Corrected where we can (the sniff), the stored label otherwise, and
+          // never empty — a MIME part with no type is an unopenable download.
+          contentType: resolved ?? (stored || 'application/octet-stream'),
+        }
+      : null,
   };
 }
 
@@ -1532,6 +1659,20 @@ function stampNote(req: StampSourceRequest): string | null {
   return base ? `${base} ${suffix}` : suffix;
 }
 
+/**
+ * ADR-0132 D5 — the artifact build now has a REFUSAL, not just an empty result.
+ *
+ * `ok: false` means the request carried real file originals and not one of them
+ * could be turned into something to attach. The caller must send NOTHING: a
+ * decision notice with no invoice looks delivered, stamps `decision_mail_sent_at`,
+ * and is exactly the indistinguishable-from-success shape ADR-0126 exists to end.
+ * Every other shape — including a body-only invoice whose render failed — is
+ * `ok: true` with 0..n artifacts and sends as it always has.
+ */
+type DecisionStampOutcome =
+  | { ok: true; artifacts: StampedArtifact[] }
+  | { ok: false; reason: 'no_original' | 'render_failed'; attempted: number };
+
 async function buildDecisionStamp(
   prisma: PrismaClient,
   req: StampSourceRequest,
@@ -1544,7 +1685,7 @@ async function buildDecisionStamp(
   // stamp; null on every single-approver decision.
   secondApproverName: string | null = null,
   secondApprovedAt: Date | null = null,
-): Promise<StampedArtifact[]> {
+): Promise<DecisionStampOutcome> {
   const decision: ApDecision = req.status === 'approved' ? 'approved' : 'rejected';
   const base: StampBase = {
     requestId: req.id,
@@ -1586,48 +1727,87 @@ async function buildDecisionStamp(
     const artifacts: StampedArtifact[] = [];
     const usedNames = new Set<string>();
     for (const att of fileAtts) {
-      const artifact = await stampOneOriginal(base, att, renderer);
+      // One unreadable attachment must not cost the others their invoice, so the
+      // failure is per-file. It is still counted — see the dropped-count log below.
+      const artifact = await stampOneOriginal(base, att, renderer).catch((e) => {
+        log.warn(
+          { requestId: req.id, attId: att.id, err: e instanceof Error ? e.message : String(e) },
+          '[ap-approvals] could not build a stamped artifact for this original',
+        );
+        return null;
+      });
       if (!artifact) continue;
       artifact.filename = dedupeFilename(artifact.filename, usedNames);
+      // D4 — the original rides beside its cover page, so its name shares the same
+      // collision space as the covers (two `ledger.csv` originals must not clobber).
+      if (artifact.original) {
+        artifact.original.filename = dedupeFilename(artifact.original.filename, usedNames);
+      }
       artifacts.push(artifact);
     }
-    if (artifacts.length > 0) return artifacts;
-    // Every download failed (R2 unconfigured/placeholder) → fall through: body render
-    // if this is a body-only invoice, else the stamped cover.
+    // ADR-0132 D5 — the request HAS originals and none survived. Refuse; do NOT
+    // fall through to the body render or a bare cover page, which is how a
+    // decision notice used to leave without the document it exists to carry.
+    if (artifacts.length === 0) {
+      return { ok: false, reason: 'no_original', attempted: fileAtts.length };
+    }
+    const dropped = fileAtts.length - artifacts.length;
+    if (dropped > 0) {
+      // Partial delivery: accounting gets the invoices we could build, and the gap
+      // is named rather than silent. (D5 refuses only when NOTHING survived —
+      // withholding the documents we do have would help nobody.)
+      log.warn(
+        { requestId: req.id, dropped, attempted: fileAtts.length },
+        '[ap-approvals] some originals could not be stamped — the decision mail carries the rest',
+      );
+    }
+    return { ok: true, artifacts };
   }
 
   // No usable file attachment. Body-only invoice ⇒ re-render the sanitized body.
   if (req.body_html_sanitized && req.body_html_sanitized.trim()) {
     const input: StampInput = { ...base, kind: 'body', bodyHtmlSanitized: req.body_html_sanitized };
     const { pdf, sha256 } = await stampApproval(input, renderer);
-    return [
+    return {
+      ok: true,
+      artifacts: [
+        {
+          filename: `ap-decision-${req.id}.pdf`,
+          pdf,
+          sha256,
+          originalSha256: null,
+          attachmentId: null,
+          kind: 'body',
+          original: null,
+        },
+      ],
+    };
+  }
+
+  // No body and no usable original bytes: keep the stamped cover page (documented
+  // deviation for the R2-unconfigured window). Name a file attachment if one exists,
+  // else empty.
+  // (Reachable only for an attachment row that has no storage_key at all — bytes
+  // that were never stored, so there is nothing to attach and nothing a re-send
+  // could recover. This is the one case that keeps the "retrieve it from the AP
+  // queue" sentence, because here it is true.)
+  const coverFile = files.find((a) => a.kind === 'file');
+  const input: StampInput = coverFile
+    ? { ...base, kind: 'attachment', originalFilename: coverFile.filename }
+    : { ...base, kind: 'body', bodyHtmlSanitized: req.body_text ?? '' };
+  const { pdf, sha256 } = await stampApproval(input, renderer);
+  return {
+    ok: true,
+    artifacts: [
       {
         filename: `ap-decision-${req.id}.pdf`,
         pdf,
         sha256,
         originalSha256: null,
         attachmentId: null,
-        kind: 'body',
+        kind: input.kind,
+        original: null,
       },
-    ];
-  }
-
-  // No body and no usable original bytes: keep the stamped cover page (documented
-  // deviation for the R2-unconfigured window). Name a file attachment if one exists,
-  // else empty.
-  const coverFile = files.find((a) => a.kind === 'file');
-  const input: StampInput = coverFile
-    ? { ...base, kind: 'attachment', originalFilename: coverFile.filename }
-    : { ...base, kind: 'body', bodyHtmlSanitized: req.body_text ?? '' };
-  const { pdf, sha256 } = await stampApproval(input, renderer);
-  return [
-    {
-      filename: `ap-decision-${req.id}.pdf`,
-      pdf,
-      sha256,
-      originalSha256: null,
-      attachmentId: null,
-      kind: input.kind,
-    },
-  ];
+    ],
+  };
 }

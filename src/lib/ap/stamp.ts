@@ -76,6 +76,15 @@ export interface StampInput {
    * downloaded inline (documented deviation) — the cover page then notes it.
    */
   originalSha256?: string | null;
+  /**
+   * ADR-0132 D4 — kind='attachment': true when the untouched ORIGINAL file rides
+   * this same message beside the cover page (the non-overlayable case: CSV,
+   * Office, unknown binary). The cover then says so. False/absent is the only
+   * remaining case where there is no original to send — an attachment row whose
+   * bytes could not be fetched — and only that case keeps the old "retrieve it
+   * from the queue" sentence, which is the sentence ADR-0132 was written about.
+   */
+  originalAttached?: boolean;
 }
 
 export interface StampResult {
@@ -224,7 +233,11 @@ export function buildStampHtml(input: StampInput): string {
       : `<li>Original SHA-256: <em>not computed inline — retrieve the original from the AP queue</em></li>`;
     inner = `<section class="cover">
         <h2>Approval cover page</h2>
-        <p>This stamped cover accompanies the original attachment, which is not modified. Retrieve the original via the DR3-Vision AP queue.</p>
+        <p>This stamped cover accompanies the original attachment, which is not modified. ${
+          input.originalAttached
+            ? 'The original file is attached to this message, beside this page.'
+            : 'Retrieve the original via the DR3-Vision AP queue.'
+        }</p>
         <ul>
           <li>Original attachment: <b>${fname}</b></li>
           ${origHash}

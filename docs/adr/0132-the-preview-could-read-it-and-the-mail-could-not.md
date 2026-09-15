@@ -1,6 +1,6 @@
 # ADR-0132 — The preview could read it and the mail could not
 
-- **Status:** Proposed
+- **Status:** Accepted, implemented 2026-09-15 (Pacific)
 - **Date:** 2026-09-15 (Pacific)
 - **Context:** Bill, 2026-09-15 15:27 PT — _"in the AP approval module - I am being
   told that when the accounting team gets the approval via email that the original
@@ -322,3 +322,84 @@ Ship gate — each of these must be demonstrated, not asserted:
 
 Execution plan, task by task, with per-task verification:
 `docs/plans/2026-09-15-ap-approval-email-stamped-invoice.md`.
+
+## Implementation note (2026-09-15, Pacific — this commit)
+
+Shipped in one commit against `main`, in the order the plan laid out
+(`docs/plans/2026-09-15-ap-approval-email-stamped-invoice.md` T1–T6). What changed:
+
+- **`src/lib/ap/inline-preview.ts`** — the shared predicate module gained the D3
+  byte sniff (`sniffBinaryType`) and the resolution order (`resolveOverlayType` =
+  sniff → MIME → extension). It stays a pure module: `Uint8Array` only, no
+  `Buffer`, no `server-only`, so `ApQueueClient.tsx` still imports it safely.
+- **`src/lib/ap/approvals.ts`** — `stampOneOriginal` dispatches on the resolved
+  type instead of `ct === 'application/pdf'`; `stampImage` now receives the
+  CANONICAL type (`image/jpg` → `image/jpeg`); the inline-image size filter reads
+  `normalizeMime`, so a padded or parameterized `image/jpeg; name="sig.jpg"` is
+  still recognized as the signature logo it is. A non-overlayable original (and an
+  overlay that throws) yields the cover page **plus the untouched original**, which
+  rides the same `dedupeFilename` collision space — generalized to preserve any
+  extension, since originals are not all `.pdf`. `buildDecisionStamp` returns a
+  discriminated outcome instead of an array, and `sendDecisionEmail` refuses on
+  `ok: false`.
+- **`src/lib/ap/stamp.ts`** — `StampInput.originalAttached`. The cover page says
+  the original is attached to this message when it is; the "Retrieve the original
+  via the DR3-Vision AP queue" sentence survives only where it is true (see the
+  deviation below).
+- **`src/app/dashboard/ops/ap/ApQueueClient.tsx`** — the approver's confirmation
+  line for `refused_no_original`: decided, nothing sent, flagged unmailed, Re-send
+  is the repair.
+- **Tests** — `src/lib/ap/decision-mail-attachments.test.ts` (new, 20 cases:
+  the seven production shapes, the regression pin, D4, D5, and the
+  `original_attachment_sha256` note below), plus the sniff/resolution cases in
+  `inline-preview.test.ts` and the cover-copy cases in `stamp.test.ts`. The stamp
+  renderers are mocked but **echo the bytes they are handed**, so "the delivered
+  attachment contains the original document" is a literal assertion about what
+  flowed through the real dispatch rather than a stand-in for it; the R2 fixtures
+  carry real magic-byte prefixes so the sniff runs for real.
+
+### Four deviations from the plan, and why
+
+1. **A cover page gets its original whenever it is a cover — not only when the
+   type is non-overlayable.** T3 scoped D4 to CSV/Office/unknown binary. But an
+   overlay that _throws_ (a corrupt PDF, a pdf-lib refusal) produces the same
+   cover page, and D1 does not have an exception for it. The artifact carries a
+   `coverOnly` flag rather than a type test, so every cover page travels with its
+   original by construction.
+2. **The refusal also covers an unexpected throw.** D5 names the case "has file
+   attachments, no stamped original could be produced". An exception escaping
+   `buildDecisionStamp` (a Prisma read, a Chromium failure on a body render) used
+   to be swallowed into "mail proceeds without attachment", which is the exact
+   silence this ADR closes — so it now returns `{ ok: false, reason:
+'render_failed' }` and refuses too. A body-only invoice that renders normally
+   is untouched, as D5 requires; only its _failure_ mode changed, from a silent
+   attachment-free send to a refusal the sweep can see.
+3. **The original's filename is sanitized before it becomes a MIME part.** D4 says
+   the original keeps its own filename, and `ap_attachments.filename` is the same
+   untrusted, sender-written field the content type came from — it now becomes the
+   name a recipient's mail client offers to save. `safeOriginalFilename` keeps the
+   basename only, applies the character policy `stampedAttachmentName` already used
+   (plus spaces), drops leading dots and caps the length. Ordinary vendor names
+   (`Invoice_IN-0320844.PDF`, `ledger.csv`) pass through untouched; a test asserts
+   no delivered part carries a path separator or a control character.
+4. **A PARTIAL drop is logged, not refused.** D5 refuses when nothing survived.
+   When 2 of 3 originals survive, withholding the two we have would help nobody,
+   so the mail goes with what was built and the gap is named at `warn` with the
+   dropped count — the silence is closed without inventing a second alarm class.
+
+### Two facts the next reader should not have to rediscover
+
+- **The one remaining cover-page-alone path is real and correct.** An
+  `ap_attachments` row with a NULL `storage_key` has bytes that were never stored;
+  there is nothing to attach and no re-send can recover it. That path keeps the old
+  "retrieve it from the AP queue" sentence because there it is true. It is not
+  reachable from an R2 miss — an R2 miss on a stored key now refuses.
+- **`original_attachment_sha256` still is not evidence of stamping** (see
+  Consequences). A test now pins that: it is set identically on a true overlay and
+  on a cover-page fallback. The proof of delivery is the attachment set, which is
+  what every test in `decision-mail-attachments.test.ts` asserts.
+
+Ship gate: the whole `src/lib/ap` suite green (460 passed, 1 skipped, 27 files),
+`tsc --noEmit` clean, `eslint --max-warnings=0` clean. Verification items 1–4 are
+the new tests; item 5 (re-send one of the 9 in production) is **D6 and still waits
+on Bill** — nothing has been re-sent.

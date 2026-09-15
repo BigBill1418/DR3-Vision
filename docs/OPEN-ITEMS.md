@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BU — 2026-09-15 the decision mail that carried a cover page instead of the invoice — **CONFIRMED TRUE for 9 invoices; ADR-0132 Proposed; FIX NOT YET BUILT** (Bill, 2026-09-15 15:27 PT)
+## 0.BU — 2026-09-15 the decision mail that carried a cover page instead of the invoice — **FIX SHIPPED 2026-09-15 (ADR-0132 Accepted); BU-1..BU-5 DONE; BU-6 (re-send the 9) WAITS ON BILL** (Bill, 2026-09-15 15:27 PT)
 
 Bill: _"in the AP approval module - I am being told that when the accounting team
 gets the approval via email that the original invoice is NOT attached with the
@@ -84,36 +84,63 @@ fallback. It proves the bytes were fetched, nothing more.
 
 ### Action list — in order
 
-1. **BU-1 — T1: import the shared predicates.** `approvals.ts` uses
-   `isInlinePdf`/`isInlineImage`/`normalizeMime` from `inline-preview.ts`; delete
-   the anchored comparisons. Fixes all 9 observed cases plus the
-   `application/pdf; name="inv.pdf"` form. **Not started.**
-2. **BU-2 — T2: sniff the bytes.** Resolve type as sniff → MIME → extension; the
-   bytes are already in hand. Log when the sniff disagrees with the stored type —
-   the observability that does not exist today. **Not started.**
-3. **BU-3 — T3: a cover page never travels alone.** For genuinely non-overlayable
-   originals (CSV, Office, unknown binary) attach the **original file itself**
-   beside the stamped cover, and retire the "retrieve it from the queue" sentence.
-   This is what makes Bill's "every time" true for every type. **Not started.**
-4. **BU-4 — T4: fail loud.** Remove the `.catch(() => null)`; add outcome
-   `refused_no_original` — send nothing, leave `decision_mail_sent_at` NULL, page
-   `high` with a per-request fingerprint. The NULL stamp puts the row straight into
-   the existing ADR-0126 queue badge + 06:00 digest, and the existing re-send
-   button is the repair. No new machinery. **Not started.**
-5. **BU-5 — T5: tests that assert delivered BYTES**, not a content-type allowlist
-   (a type-table pin would pass forever while the attachment regressed). Plus the
-   ADR-0132 regression pin on the exact 9-case shape. **Not started.**
-6. **BU-6 — T7: repair the 9 — WAITS ON BILL.** After the fix deploys,
-   `POST /api/ops/ap/{id}/resend` rebuilds the artifacts from R2 under the fixed
-   dispatch and re-mails the properly stamped invoice — no migration, no data
-   entry. **Deliberately not automatic:** accounting gets a second copy of an
+1. **BU-1 — T1: import the shared predicates. DONE 2026-09-15.** `approvals.ts`
+   imports `isInlinePdf`/`isInlineImage`/`normalizeMime`/`resolveOverlayType` from
+   `inline-preview.ts`; the anchored `ct === 'application/pdf'` and the
+   `/^image\/(png|jpeg|jpg|webp)$/` test are deleted. `stampImage` now receives the
+   CANONICAL type, and the 50 KB inline-image filter reads `normalizeMime` (proved
+   by a test that goes red against the old `.toLowerCase()`).
+   _Evidence:_ `src/lib/ap/decision-mail-attachments.test.ts` — the seven
+   production shapes + the regression pin.
+2. **BU-2 — T2: sniff the bytes. DONE 2026-09-15.** `sniffBinaryType` +
+   `resolveOverlayType` (sniff → MIME → extension) live in `inline-preview.ts` —
+   one module, both callers, still pure (`Uint8Array`, no `Buffer`, no
+   `server-only`). A disagreement between the resolved and stored type logs one
+   `info` line per attachment: `[ap-approvals] attachment type resolved from its
+bytes/filename — the stored content_type disagrees`. That line is the
+   observability that did not exist.
+3. **BU-3 — T3: a cover page never travels alone. DONE 2026-09-15.** A
+   non-overlayable original (and an overlay that throws) yields the stamped cover
+   **plus the untouched original**, byte-identical, under its own name and its
+   corrected content type, de-duped in the same collision space. The cover's copy
+   now says the original is attached to this message; the "retrieve it from the AP
+   queue" sentence survives only where it is true — an attachment row with a NULL
+   `storage_key`, whose bytes were never stored and which no re-send can recover.
+   The original's filename is sanitized on the way out (`safeOriginalFilename`):
+   it is the same sender-written field the content type came from, and it now
+   becomes the name a recipient's mail client offers to save.
+4. **BU-4 — T4: fail loud. DONE 2026-09-15.** `.catch(() => null)` removed; new
+   outcome `refused_no_original` sends nothing, leaves `decision_mail_sent_at`
+   NULL, and pages `high` on `dr3-vision-system` with fingerprint
+   `ap-decision-mail-no-original:<requestId>`, 6 h cooldown, tier-1 click on the
+   request, body carrying row id + status only (ADR-0045). Asserted, not assumed:
+   a refused row satisfies `isDecisionMailUnsent` (queue badge) and
+   `isDecisionMailStuck` (06:00 digest). All three callers of `sendDecisionEmail`
+   pass the outcome through unchanged — the decision stands in every one of them.
+   The AP queue's confirmation line has its own copy for the new outcome.
+5. **BU-5 — T5: tests that assert delivered BYTES. DONE 2026-09-15.**
+   `src/lib/ap/decision-mail-attachments.test.ts` (20 cases) asserts the bytes
+   handed to the transport contain the original document, for every shape in the
+   production table; the stamp mocks echo their input so the assertion is literal,
+   and the R2 fixtures carry real magic-byte prefixes so the sniff runs for real.
+   The pre-existing test that pinned the old fail-soft behaviour ("R2 unavailable
+   … the mail STILL sends") was inverted to the refusal. `src/lib/ap` green at
+   **460 passed / 1 skipped, 27 files**; `tsc --noEmit` and
+   `eslint --max-warnings=0` clean. ADR-0132's own ship gate items 1–4 are these
+   tests; item 5 is BU-6 below.
+6. **BU-6 — T7: repair the 9 — WAITS ON BILL. STILL OPEN; nothing has been
+   re-sent.** With BU-1..BU-5 landed, the re-send path rebuilds each artifact from
+   R2 through the CORRECTED dispatch.
+   `POST /api/ops/ap/{id}/resend` re-mails the properly stamped invoice — no
+   migration, no data entry. **Deliberately not automatic:** accounting gets a second copy of an
    invoice they already actioned. **Bill's calls:** do they get a heads-up first?
    All 9, or only the recent ones? And should the duplicate-submission pair
    (`513ea80b` / `81903703`, same invoice twice) both go? Proof per re-send is a
    **changed** `decision_pdf_sha256`.
 7. **BU-7 — the 14 mixed cases.** Requests that got a correct stamped invoice
-   **plus** a spurious cover page. Lower harm — the invoice did arrive. Fixed going
-   forward by BU-1..3; whether to re-send is Bill's call and is not in T7.
+   **plus** a spurious cover page. Lower harm — the invoice did arrive. **Fixed
+   going forward as of 2026-09-15** by BU-1..3; whether to re-send the historical
+   14 is Bill's call and is not in T7. OPEN, on Bill.
 8. **BU-8 — residual, unchanged by this work.** ADR-0046's durable follow-up to
    capture Graph's `isInline`/`contentId` into an `ap_attachments.is_inline` column
    and retire the 50 KB inline-image size heuristic is still open. It is what makes

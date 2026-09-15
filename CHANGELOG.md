@@ -9,6 +9,62 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-15 — The stamped invoice now rides every AP decision email (ADR-0132 Accepted)
+
+The fix for the entry below. Accounting's decision notice carries the original
+invoice **every time** — Bill's directive, now the module's contract rather than a
+best effort — and when it cannot, the mail does not go at all.
+
+Four changes, in the order they matter:
+
+1. **One content-type predicate for the whole AP module.** `approvals.ts` imports
+   `isInlinePdf`/`isInlineImage`/`normalizeMime` from `src/lib/ap/inline-preview.ts`
+   — the module ADR-0046 Amendment 6 created for exactly this mislabelling on
+   2026-07-22 and that the decision mail never adopted. The anchored
+   `content_type === 'application/pdf'` is gone. That alone fixes all 15
+   `application/octet-stream` PDFs and the parameterized
+   `application/pdf; name="inv.pdf"` form we had not yet seen.
+2. **The bytes outrank the label.** A magic-byte sniff (`%PDF-`, PNG, JPEG,
+   `RIFF….WEBP`) resolves the type as **sniff → MIME → extension**, using the bytes
+   already in hand from R2. A sender can mislabel a type and misname a file; it
+   cannot forge its own magic number. When the resolved type disagrees with the
+   stored one, one `info` line now says so — the cover-page substitution used to be
+   completely silent, which is why it ran seven weeks with zero `ap-approvals` lines
+   in the logs.
+3. **A cover page never travels alone.** A genuinely non-overlayable original — a
+   CSV, an Office file, an unknown binary — still gets the stamped cover (it carries
+   the decision, approver, site and dual-sha record) and now **the untouched
+   original is attached beside it**, under its own filename and its corrected
+   content type. Same for an overlay that throws. The cover's own sentence
+   _"Retrieve the original via the DR3-Vision AP queue"_ — the defect stated in the
+   product's own words — now reads that the original is attached to this message,
+   and survives only on the one path where it is still true (an attachment row
+   whose bytes were never stored).
+4. **An unattachable invoice fails loud.** The `.catch(() => null)` whose comment
+   read _"mail proceeds without attachment"_ is gone. A request that carried file
+   originals and produced none returns the new outcome **`refused_no_original`**:
+   nothing is sent, `decision_mail_sent_at` stays NULL, and a `high` page fires
+   (`ap-decision-mail-no-original:<id>`, 6 h, tier-1 click on the request). No new
+   machinery by design — a NULL stamp on a decided row is exactly what the ADR-0126
+   sweep and the AP queue badge already watch, and Re-send is already the repair.
+   The decision itself always stands; a refused mail never rolls one back.
+
+Tests assert **delivered bytes**, never a content-type allowlist (a type-table pin
+would have stayed green forever while the attachment regressed — that is how this
+survived behind a working preview). `src/lib/ap/decision-mail-attachments.test.ts`
+is new: all seven production shapes, the regression pin on the exact shape of the 9
+(octet-stream `.PDF` + a sub-50 KB `image001.jpg` ⇒ one attachment, a true overlay),
+the D4 cover+original cases, the D5 refusal and its sweep pickup, and a pin on the
+fact that `original_attachment_sha256` is **not** evidence of stamping. `src/lib/ap`
+green at 460 passed / 1 skipped across 27 files; `tsc --noEmit` and
+`eslint --max-warnings=0` clean.
+
+**Not done, deliberately:** the 9 invoices that already went out with only a cover
+page are **not** re-sent. Re-sending hands accounting a second copy of an invoice
+they already actioned, so it is Bill's call — ids and the per-send proof
+(`decision_pdf_sha256` must CHANGE) are in `docs/OPEN-ITEMS.md` § 0.BU / the plan
+doc § T7. Nothing was written to production.
+
 ## 2026-09-15 — The AP decision mail that carried a cover page instead of the invoice (docs only; ADR-0132 Proposed)
 
 No code, credential, schedule or data changed. Investigation of Bill's 15:27 PT

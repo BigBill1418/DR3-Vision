@@ -2,6 +2,9 @@
 // Covers the LIVE-confirmed defect (octet-stream .pdf hidden) and the parameterized
 // content-type, plus the negative (non-pdf octet-stream stays download) and the
 // stale-URL re-mint decision.
+//
+// ADR-0132 D3 — plus the magic-byte sniff and the sniff → MIME → extension
+// resolution order that the decision-mail stamp path dispatches on.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,7 +16,21 @@ import {
   isInlinePreviewable,
   isPresignStale,
   normalizeMime,
+  resolveOverlayType,
+  sniffBinaryType,
 } from './inline-preview';
+
+/** Bytes that really are what they claim — the leading signature plus filler. */
+function magic(...head: number[]): Uint8Array {
+  return Uint8Array.from([...head, 0x0a, 0x00, 0x01, 0x02, 0x03, 0x04]);
+}
+const PDF_BYTES = magic(0x25, 0x50, 0x44, 0x46, 0x2d); // %PDF-
+const PNG_BYTES = magic(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+const JPEG_BYTES = magic(0xff, 0xd8, 0xff, 0xe0);
+const WEBP_BYTES = Uint8Array.from([
+  0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+]); // RIFF....WEBP
+const CSV_BYTES = new TextEncoder().encode('date,vendor,amount\n2026-09-15,Ramos,441.00\n');
 
 describe('normalizeMime', () => {
   it('strips parameters, trims, lowercases; null/empty → ""', () => {
@@ -80,7 +97,9 @@ describe('effectiveInlineContentType — canonical wire Content-Type', () => {
     );
   });
   it('parameterized pdf → application/pdf', () => {
-    expect(effectiveInlineContentType('application/pdf; name="x"', 'x.pdf')).toBe('application/pdf');
+    expect(effectiveInlineContentType('application/pdf; name="x"', 'x.pdf')).toBe(
+      'application/pdf',
+    );
   });
   it('image/jpg canonicalizes to image/jpeg', () => {
     expect(effectiveInlineContentType('image/jpg', null)).toBe('image/jpeg');
@@ -117,5 +136,59 @@ describe('isPresignStale — re-mint before expiry', () => {
   it('a non-positive/NaN TTL is defensively stale', () => {
     expect(isPresignStale(now, 0, now)).toBe(true);
     expect(isPresignStale(now, Number.NaN, now)).toBe(true);
+  });
+});
+
+describe('sniffBinaryType — the bytes outrank the label (ADR-0132 D3)', () => {
+  it('reads the four formats the AP module can overlay', () => {
+    expect(sniffBinaryType(PDF_BYTES)).toBe('application/pdf');
+    expect(sniffBinaryType(PNG_BYTES)).toBe('image/png');
+    expect(sniffBinaryType(JPEG_BYTES)).toBe('image/jpeg');
+    expect(sniffBinaryType(WEBP_BYTES)).toBe('image/webp');
+  });
+  it('an unknown signature is null — NOT a negative fact about the file', () => {
+    expect(sniffBinaryType(CSV_BYTES)).toBeNull();
+    expect(sniffBinaryType(Uint8Array.from([0x50, 0x4b, 0x03, 0x04]))).toBeNull(); // a zip/docx
+  });
+  it('absent or truncated bytes are null, never a throw', () => {
+    expect(sniffBinaryType(null)).toBeNull();
+    expect(sniffBinaryType(undefined)).toBeNull();
+    expect(sniffBinaryType(new Uint8Array(0))).toBeNull();
+    expect(sniffBinaryType(Uint8Array.from([0x25, 0x50]))).toBeNull(); // "%P" only
+    // RIFF with no WEBP fourcc (a .wav) is not an image.
+    expect(
+      sniffBinaryType(
+        Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45]),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('resolveOverlayType — sniff → MIME → extension (ADR-0132 D3)', () => {
+  it('THE LIVE 9: octet-stream + .PDF name + real PDF bytes → application/pdf', () => {
+    expect(
+      resolveOverlayType(PDF_BYTES, 'application/octet-stream', 'Invoice_IN-0320844.PDF'),
+    ).toBe('application/pdf');
+  });
+  it('the bytes WIN over a confident wrong label: JPEG bytes labelled application/pdf', () => {
+    expect(resolveOverlayType(JPEG_BYTES, 'application/pdf', 'invoice.pdf')).toBe('image/jpeg');
+  });
+  it('the bytes WIN over a wrong filename too: PDF bytes named .csv', () => {
+    expect(resolveOverlayType(PDF_BYTES, 'text/csv', 'export.csv')).toBe('application/pdf');
+  });
+  it('unknown bytes fall through to the MIME, then the extension', () => {
+    expect(resolveOverlayType(CSV_BYTES, 'application/pdf', 'x.pdf')).toBe('application/pdf');
+    expect(resolveOverlayType(CSV_BYTES, 'application/octet-stream', 'x.pdf')).toBe(
+      'application/pdf',
+    );
+    expect(resolveOverlayType(CSV_BYTES, 'image/jpg', 'x')).toBe('image/jpeg');
+  });
+  it('a genuinely non-overlayable original resolves to null (→ cover + original)', () => {
+    expect(resolveOverlayType(CSV_BYTES, 'text/csv', 'ledger.csv')).toBeNull();
+    expect(resolveOverlayType(CSV_BYTES, 'application/octet-stream', 'ledger.xlsx')).toBeNull();
+  });
+  it('with no bytes in hand it degrades to the shared preview predicate', () => {
+    expect(resolveOverlayType(null, 'application/octet-stream', 'inv.pdf')).toBe('application/pdf');
+    expect(resolveOverlayType(null, 'text/csv', 'ledger.csv')).toBeNull();
   });
 });

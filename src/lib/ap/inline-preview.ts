@@ -116,3 +116,60 @@ export function isPresignStale(
   const freshMs = (expiresInSeconds - PRESIGN_STALE_SKEW_SECONDS) * 1000;
   return nowMs - mintedAtMs >= freshMs;
 }
+
+// ── ADR-0132 D3 — the bytes outrank the label ────────────────────────────────
+//
+// `content_type` is whatever the SENDING mail client wrote and the filename is
+// whatever a human typed; both are claims we inherit and store verbatim. The
+// leading bytes are not a claim — a sender can mislabel a type and misname a
+// file, it cannot forge its own magic number. So wherever we already hold the
+// bytes (the decision-mail stamp path does — it downloads the original to hash
+// and overlay it), the bytes decide, and the tolerant MIME/extension predicates
+// above are the fallback for signatures we do not recognize.
+//
+// Deliberately a SMALL table: only the formats the AP module can actually
+// overlay. Anything else returns `null` meaning UNKNOWN, never "not a PDF" — an
+// unrecognized signature must not be read as a negative fact about the file, or
+// a new invoice format would be silently demoted instead of falling through to
+// the label we do have.
+
+const SIG_PDF = [0x25, 0x50, 0x44, 0x46, 0x2d] as const; // "%PDF-"
+const SIG_PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
+const SIG_JPEG = [0xff, 0xd8, 0xff] as const;
+const SIG_RIFF = [0x52, 0x49, 0x46, 0x46] as const; // "RIFF"
+const SIG_WEBP = [0x57, 0x45, 0x42, 0x50] as const; // "WEBP" at offset 8
+
+function hasSignature(bytes: Uint8Array, sig: readonly number[], offset = 0): boolean {
+  if (bytes.length < offset + sig.length) return false;
+  return sig.every((b, i) => bytes[offset + i] === b);
+}
+
+/**
+ * The content type implied by an attachment's own leading bytes, or `null` when
+ * the signature is not one we recognize (see the note above: unknown, not absent).
+ */
+export function sniffBinaryType(bytes: Uint8Array | null | undefined): string | null {
+  if (!bytes || bytes.length === 0) return null;
+  if (hasSignature(bytes, SIG_PDF)) return 'application/pdf';
+  if (hasSignature(bytes, SIG_PNG)) return 'image/png';
+  if (hasSignature(bytes, SIG_JPEG)) return 'image/jpeg';
+  if (hasSignature(bytes, SIG_RIFF) && hasSignature(bytes, SIG_WEBP, 8)) return 'image/webp';
+  return null;
+}
+
+/**
+ * The canonical type to dispatch an AP stamp/overlay on: **sniff → MIME →
+ * extension**. `null` means the original is genuinely not overlayable (a CSV, a
+ * spreadsheet, an unknown binary) — the caller then stamps a cover page AND
+ * attaches the untouched original beside it (ADR-0132 D4).
+ *
+ * Callers without the bytes in hand may pass `null` and get the MIME/extension
+ * answer the preview surfaces already use.
+ */
+export function resolveOverlayType(
+  bytes: Uint8Array | null | undefined,
+  contentType: string | null | undefined,
+  filename: string | null | undefined,
+): string | null {
+  return sniffBinaryType(bytes) ?? effectiveInlineContentType(contentType, filename);
+}

@@ -697,7 +697,13 @@ describe('stamped decision artifacts (Amendment 4)', () => {
     expect(db.requests[0]!.status).toBe('rejected');
   });
 
-  it('R2 unavailable for the original: degrades to a stamped cover; the mail STILL sends', async () => {
+  // ADR-0132 D5 — this test used to assert the OPPOSITE ("the mail STILL sends"),
+  // and that fail-soft is what let a decision notice reach accounting with no
+  // invoice in it while still looking delivered. The decision was never at risk
+  // here — it is committed before this runs — only the notice is, and a notice
+  // without the document is not a delivery. The row now falls straight into the
+  // ADR-0126 badge + digest, where Re-send is the repair.
+  it('R2 unavailable for the original: the mail is REFUSED, not degraded to a cover page', async () => {
     r2.getApAttachmentBytes.mockResolvedValue(null); // R2 unconfigured / placeholder key
     const db = newFakeDb({
       requests: [pendingReq({ id: 'req-1' })],
@@ -712,12 +718,12 @@ describe('stamped decision artifacts (Amendment 4)', () => {
       actorUserId: 'u-morena',
       siteId: 'site-w',
     });
-    expect(res.mail).toBe('sent'); // fail-soft: mail is never blocked
+    expect(res.mail).toBe('refused_no_original');
     expect(stamp.stampOntoOriginalPdf).not.toHaveBeenCalled(); // no bytes → no overlay
-    expect(stamp.stampApproval).toHaveBeenCalled(); // cover page produced instead
-    const args = notifyStaffSpy.mock.calls[0]![0] as { attachments?: unknown[] };
-    expect(args.attachments).toHaveLength(1);
-    expect(db.requests[0]!.decision_pdf_sha256).toBe('deadbeef'); // cover sha
+    expect(stamp.stampApproval).not.toHaveBeenCalled(); // and no cover page either
+    expect(notifyStaffSpy).not.toHaveBeenCalled(); // nothing left the building
+    expect(db.requests[0]!.status).toBe('approved'); // the DECISION still stands
+    expect(db.requests[0]!.decision_mail_sent_at).toBeNull(); // the sweep's hook
     expect(db.requests[0]!.decision_pdf_r2_key).toBeNull(); // nothing archived
   });
 
