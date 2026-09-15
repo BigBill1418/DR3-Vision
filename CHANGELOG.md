@@ -59,8 +59,22 @@ fact that `original_attachment_sha256` is **not** evidence of stamping. `src/lib
 green at 460 passed / 1 skipped across 27 files; `tsc --noEmit` and
 `eslint --max-warnings=0` clean.
 
-**Not done, deliberately:** the 9 invoices that already went out with only a cover
-page are **not** re-sent. Re-sending hands accounting a second copy of an invoice
+**Live at 16:29 PT** as `177ba39` (deployer: poll 16:12:57 → containers up
+16:29:13, 18m27s, `app` rebuilt). The container reports its own `version` as the
+full SHA on every log line — `/healthz` reports `package.json`'s static `0.1.0`
+and never a commit — and the built bundle carries all three new strings that were
+absent from the previous image.
+
+**The nine were then re-sent at 16:31:04–16:31:56 PT — not by the session that
+shipped this.** All nine delivered `mode:"live"`, each logged the new
+`application/octet-stream → application/pdf` resolution line, and each wrote an
+audit row reading `stamped_kind: attachment, stamped_count: 1,
+originals_attached: 0`: a true overlay on the vendor's own PDF, one attachment, no
+cover page. Accounting now holds the properly stamped invoices. `docs/OPEN-ITEMS.md`
+§ 0.BU keeps BU-6 open until whoever ran it says so, so that nobody sends a third
+copy.
+
+**Not done by this work, deliberately:** the 9 invoices were **not** re-sent by it. Re-sending hands accounting a second copy of an invoice
 they already actioned, so it is Bill's call — ids and the per-send proof
 (`decision_pdf_sha256` must CHANGE) are in `docs/OPEN-ITEMS.md` § 0.BU / the plan
 doc § T7. Nothing was written to production.

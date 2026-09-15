@@ -387,6 +387,32 @@ Shipped in one commit against `main`, in the order the plan laid out
    so the mail goes with what was built and the gap is named at `warn` with the
    dropped count — the silence is closed without inventing a second alarm class.
 
+### Live verification (2026-09-15, Pacific)
+
+Shipped as `177ba39`, auto-deployed by `swarmpilot_deployer` (poll 16:12:57 PT →
+build → containers up **16:29:13 PT**, 18m27s, service `app` rebuilt, ledger row
+`status: success / stage: complete`). The running container reports its own
+`version` as the full SHA `177ba39170319d12129ce5a2ed0cd8f2951bc5cb` on every log
+line, and the built server bundle carries all three new strings that were **absent
+from the previous image** (checked before the deploy): the D5 fingerprint
+`ap-decision-mail-no-original`, the D3 resolution log line, and the D4 cover copy.
+Note for anyone re-reading the plan: `/healthz` reports `package.json`'s static
+`0.1.0`, never a commit — the app's own log `version` field is the SHA to compare.
+
+Then the fix proved itself on the exact rows it was written for. At **16:31:04 –
+16:31:56 PT**, two minutes after the container came up, all **nine** D6/T7 request
+ids were re-sent through `POST /api/ops/ap/{id}/resend` — **not by the
+implementing session, which was instructed not to re-send anything.** Every one
+delivered (`mode:"live"`, `delivered == intended`, `oversizeRefused:false`), every
+one emitted the D3 line `storedContentType: application/octet-stream →
+resolvedContentType: application/pdf`, and every one wrote an audit row reading
+`stamped_kind: attachment, stamped_count: 1, originals_attached: 0` — i.e. a
+**true overlay on the vendor's own PDF, exactly one attachment, no cover page**.
+That is D1 satisfied in production for the nine invoices that started this.
+
+Whoever ran it should say so on `docs/OPEN-ITEMS.md` § 0.BU, because the next
+reader of BU-6 must not send accounting a **third** copy.
+
 ### Two facts the next reader should not have to rediscover
 
 - **The one remaining cover-page-alone path is real and correct.** An

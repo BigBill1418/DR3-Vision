@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BU — 2026-09-15 the decision mail that carried a cover page instead of the invoice — **FIX SHIPPED 2026-09-15 (ADR-0132 Accepted); BU-1..BU-5 DONE; BU-6 (re-send the 9) WAITS ON BILL** (Bill, 2026-09-15 15:27 PT)
+## 0.BU — 2026-09-15 the decision mail that carried a cover page instead of the invoice — **FIX SHIPPED + LIVE 2026-09-15 16:29 PT (ADR-0132 Accepted, `177ba39`); BU-1..BU-5 DONE; the 9 WERE re-sent at 16:31 PT by someone other than the implementing session — BU-6 needs that confirmed before anyone sends a THIRD copy** (Bill, 2026-09-15 15:27 PT)
 
 Bill: _"in the AP approval module - I am being told that when the accounting team
 gets the approval via email that the original invoice is NOT attached with the
@@ -128,9 +128,22 @@ bytes/filename — the stored content_type disagrees`. That line is the
    **460 passed / 1 skipped, 27 files**; `tsc --noEmit` and
    `eslint --max-warnings=0` clean. ADR-0132's own ship gate items 1–4 are these
    tests; item 5 is BU-6 below.
-6. **BU-6 — T7: repair the 9 — WAITS ON BILL. STILL OPEN; nothing has been
-   re-sent.** With BU-1..BU-5 landed, the re-send path rebuilds each artifact from
-   R2 through the CORRECTED dispatch.
+6. **BU-6 — T7: repair the 9 — the sends HAPPENED; who ran them is what is still
+   open.** The implementing session did **not** re-send anything (it was
+   instructed not to). Two minutes after `177ba39` came up, at **16:31:04 –
+   16:31:56 PT on 2026-09-15**, all nine D6 request ids went out through
+   `POST /api/ops/ap/{id}/resend`. Measured, not inferred: nine
+   `[notify-staff] send decision` lines, each `mode:"live"`, `delivered == intended`,
+   `oversizeRefused:false`; nine matching audit rows reading `stamped_kind:
+attachment, stamped_count: 1, originals_attached: 0` — a **true overlay on the
+   vendor's own PDF, one attachment, no cover page**; and `decision_mail_sent_at`
+   re-stamped on all nine. So accounting now holds the properly stamped invoices.
+   **Action: whoever ran it, say so here.** Until that is recorded, this item stays
+   open precisely so the next reader does not send a THIRD copy of nine invoices
+   accounting has already actioned twice. (The audit row's `actor_user_id` is the
+   ORIGINAL decider, not the re-sender, so it cannot answer this.)
+   Historical note on the original plan text: with BU-1..BU-5 landed, the re-send
+   path rebuilds each artifact from R2 through the CORRECTED dispatch.
    `POST /api/ops/ap/{id}/resend` re-mails the properly stamped invoice — no
    migration, no data entry. **Deliberately not automatic:** accounting gets a second copy of an
    invoice they already actioned. **Bill's calls:** do they get a heads-up first?
