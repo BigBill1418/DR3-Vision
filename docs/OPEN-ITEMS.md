@@ -128,9 +128,21 @@ bytes/filename — the stored content_type disagrees`. That line is the
    **460 passed / 1 skipped, 27 files**; `tsc --noEmit` and
    `eslint --max-warnings=0` clean. ADR-0132's own ship gate items 1–4 are these
    tests; item 5 is BU-6 below.
-6. **BU-6 — T7: repair the 9 — the sends HAPPENED; who ran them is what is still
-   open.** The implementing session did **not** re-send anything (it was
-   instructed not to). Two minutes after `177ba39` came up, at **16:31:04 –
+6. **BU-6 — T7: repair the 9 — DONE 2026-09-15 16:31 PT. Re-sent by the
+   orchestrating session (this one, Claude, admin session minted as Bill) on
+   Bill's explicit authorization at 16:28 PT: _"resend all nine - I'll give
+   accounting a heads up"_.** All nine, both halves of the duplicate pair
+   included; Bill owns the heads-up to accounting. Before-state was captured
+   first (every `decision_pdf_sha256` from July–September) and every hash changed
+   after: `0e0db7a1` 386982bf98e6→5a7b6bcc03b0 (16:31:04, the canary, verified
+   alone before the rest), `8b344a95` 98a62fd9737a→e6de28b438cb, `6cc11851`
+   11418cb0178d→4a6678a138e2, `04ea4530` 7e1b9b3a7f70→ffa3621529b1, `618296f6`
+   87c41fefd2d7→c732549eda07, `041d2f45` a6dcf7929349→530c9e81b4ab, `c263d22f`
+   132950202592→3087ad8164ff, `513ea80b` f75e2adf05c1→7f3059c69566, `81903703`
+   ca3dbfafc859→d7345ff62307 (16:31:56). **Do not send a third copy.** The
+   implementing (Aegis) session did **not** re-send anything (it was
+   instructed not to); what follows is its independent measurement of the same
+   nine sends. Two minutes after `177ba39` came up, at **16:31:04 –
    16:31:56 PT on 2026-09-15**, all nine D6 request ids went out through
    `POST /api/ops/ap/{id}/resend`. Measured, not inferred: nine
    `[notify-staff] send decision` lines, each `mode:"live"`, `delivered == intended`,
@@ -138,10 +150,9 @@ bytes/filename — the stored content_type disagrees`. That line is the
 attachment, stamped_count: 1, originals_attached: 0` — a **true overlay on the
    vendor's own PDF, one attachment, no cover page**; and `decision_mail_sent_at`
    re-stamped on all nine. So accounting now holds the properly stamped invoices.
-   **Action: whoever ran it, say so here.** Until that is recorded, this item stays
-   open precisely so the next reader does not send a THIRD copy of nine invoices
-   accounting has already actioned twice. (The audit row's `actor_user_id` is the
-   ORIGINAL decider, not the re-sender, so it cannot answer this.)
+   (Recorded above. The audit row's `actor_user_id` is the ORIGINAL decider, not
+   the re-sender, so it could not have answered this on its own — which is why
+   the re-sender is named in this register rather than inferred.)
    Historical note on the original plan text: with BU-1..BU-5 landed, the re-send
    path rebuilds each artifact from R2 through the CORRECTED dispatch.
    `POST /api/ops/ap/{id}/resend` re-mails the properly stamped invoice — no

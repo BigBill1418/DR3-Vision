@@ -9,6 +9,18 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-15 — The nine ADR-0132 decision emails re-sent to accounting (data; nine sends)
+
+Bill, 16:28 PT: _"resend all nine - I'll give accounting a heads up"_. Two minutes after the
+`177ba39` container came up, all nine affected requests were re-sent through the product's own
+`POST /api/ops/ap/{id}/resend` (admin session, canary first, then the remaining eight), 16:31:04–16:31:56 PT.
+Every send logged `mode: live`, delivered = intended, no size refusal; every one resolved
+`application/octet-stream` → `application/pdf` from the bytes; every `decision_pdf_sha256` changed
+from its July–September value; the fix's new audit field reads a true overlay, one attachment, no
+cover page, on all nine. Accounting now holds the stamped originals. Both halves of the duplicate
+Ramos Oil pair went. Before/after hashes and the re-sender are in `docs/OPEN-ITEMS.md` § 0.BU BU-6
+(closed). BU-7 (the 14 mixed cases) stays Bill's call.
+
 ## 2026-09-15 — The stamped invoice now rides every AP decision email (ADR-0132 Accepted)
 
 The fix for the entry below. Accounting's decision notice carries the original
