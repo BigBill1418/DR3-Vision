@@ -9,6 +9,57 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-15 — The AP decision mail that carried a cover page instead of the invoice (docs only; ADR-0132 Proposed)
+
+No code, credential, schedule or data changed. Investigation of Bill's 15:27 PT
+report that accounting receives the approval email **without** the stamped original
+invoice. **It is true for 9 decided invoices, and partly true for 14 more.**
+
+`stampOneOriginal` (`src/lib/ap/approvals.ts`, deployed `78bf2d2` line 1473) picks
+the stamp renderer by strict equality against Graph's declared MIME type —
+`ct === 'application/pdf'`. Anything else that is not an exact
+`image/(png|jpeg|jpg|webp)` falls through to a one-page DR3 cover sheet that
+contains none of the invoice and tells the reader to _"Retrieve the original via
+the DR3-Vision AP queue."_ **15 of 334 production file attachments are ordinary
+vendor PDFs that the sending mail client labelled `application/octet-stream`** (all
+with `.pdf`/`.PDF` filenames); 8 more are `text/csv`.
+
+The same mislabelling was found and fixed on 2026-07-22 — for the **preview**
+surface only. Commit `6efa5963` (PR #165, ADR-0046 Amendment 6) created
+`src/lib/ap/inline-preview.ts` with the tolerant predicates for exactly this
+reason; `ApQueueClient.tsx` and the attachment route use it, **`approvals.ts` does
+not import it at all.** So the approver's preview renders the invoice, the approver
+signs, and accounting gets a cover sheet — which is why it ran seven weeks
+unnoticed. Nothing regressed: the strict dispatch has been there since
+`b2053052` (2026-07-14, PR #99) shipped stamped originals, eight days before the
+tolerant predicate existed.
+
+Measured live, not inferred: `ap_notify` `live` at both sites since 2026-07-15;
+every `[notify-staff] send decision` line `delivered == intended` with no oversize
+refusals; of 131 decided requests carrying file attachments, **9 received only
+cover pages** (earliest 2026-07-27 12:01 PT, most recent 2026-09-09 15:05 PT) and
+23 carried at least one. The cover-page branch logs nothing at all — 30 days of
+container logs hold zero `ap-approvals` lines — and two neighbouring fail-soft
+paths (`buildDecisionStamp`'s `.catch(() => null)`, an R2 miss) can send a decision
+notice with **no attachment whatsoever** while still stamping
+`decision_mail_sent_at`. ADR-0126 closed _mail that never left_; this is _mail that
+left without the thing it was sent to carry_.
+
+Also recorded, because it will mislead the next reader:
+`ap_requests.original_attachment_sha256` is **not** evidence the original was
+stamped or attached — it is hashed before the overlay is attempted and is set
+identically on a true overlay and on a cover-page fallback.
+
+Written up as **ADR-0132 (Proposed)** — adopt the shared predicate, sniff the bytes
+(they outrank MIME and filename), never let a cover page travel without the
+original beside it, and make an unattachable original a loud `refused_no_original`
+that leaves `decision_mail_sent_at` NULL so the existing ADR-0126 sweep and queue
+badge catch it. Task-by-task execution in
+`docs/plans/2026-09-15-ap-approval-email-stamped-invoice.md`; findings and the
+ordered action list in `docs/OPEN-ITEMS.md` § 0.BU. **The fix is not built** —
+the 9 are repairable by re-send once it ships, which needs Bill's go because
+accounting would receive a second copy.
+
 ## 2026-09-15 — Woodland re-anchored: the 09-14 hard count of 885 is live (data, one row)
 
 No code, credential or schedule changed. One production write, through the product:

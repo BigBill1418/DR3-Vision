@@ -19,6 +19,108 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BU — 2026-09-15 the decision mail that carried a cover page instead of the invoice — **CONFIRMED TRUE for 9 invoices; ADR-0132 Proposed; FIX NOT YET BUILT** (Bill, 2026-09-15 15:27 PT)
+
+Bill: _"in the AP approval module - I am being told that when the accounting team
+gets the approval via email that the original invoice is NOT attached with the
+stamped decisions on them - is that true ? if so how did that happen ? this needs
+to be the case all the time"_
+
+**The report is true for a minority of invoices, and the mechanism is not the one
+anybody would have guessed.** Not the transport, not a size cap, not the rollout
+gate, not a refactor. Full trace, evidence and design:
+`docs/adr/0132-the-preview-could-read-it-and-the-mail-could-not.md`. Execution:
+`docs/plans/2026-09-15-ap-approval-email-stamped-invoice.md`.
+
+### What is actually happening
+
+`stampOneOriginal` (`src/lib/ap/approvals.ts`, deployed `78bf2d2` line 1473)
+dispatches the stamp renderer on a strict equality against Graph's declared MIME
+type — `ct === 'application/pdf'`. Anything else that is not an exact
+`image/(png|jpeg|jpg|webp)` falls to `stampApproval`, a **one-page DR3 cover sheet
+containing none of the invoice**, whose body reads _"Retrieve the original via the
+DR3-Vision AP queue."_
+
+15 of the 334 AP file attachments in production are ordinary vendor PDFs that the
+**sending mail client** labelled `application/octet-stream` (every one has a
+`.pdf`/`.PDF` filename); 8 more are `text/csv`. All 23 take the cover-page branch.
+
+**We already fixed this once — on the other surface.** Commit `6efa5963`
+(2026-07-22, PR #165, ADR-0046 Amendment 6) created `src/lib/ap/inline-preview.ts`
+with `isInlinePdf`/`isInlineImage`/`normalizeMime` precisely because _"some
+senders/relays mislabel PDFs as `application/octet-stream`"_. `ApQueueClient.tsx`
+and the attachment route adopted it. **`approvals.ts` never did — it does not
+import the module at all.** So the approver's preview renders the invoice fine, the
+approver signs, and accounting gets a cover sheet. That asymmetry is why this ran
+seven weeks unnoticed: the one person able to catch it is looking at the half that
+works.
+
+### Blast radius (queried live 2026-09-15)
+
+`ap_notify` is `live` at both sites since 2026-07-15 19:25 UTC, so these were real
+sends to the real accounting roster. Mail delivery itself is healthy — every
+`[notify-staff] send decision` line reads `mode:"live"`, `delivered == intended`,
+`oversizeRefused:false`.
+
+Of **131 decided requests with file attachments**: **23** had at least one
+attachment reduced to a cover page, and **9 received nothing but cover pages** —
+no invoice at all. In all 9 the only other attachment was a sub-50 KB
+`image001.jpg` Outlook signature logo, correctly dropped by the inline filter. The
+9 are listed with ids, Pacific decision times and vendors in the plan doc § T7.
+Earliest 2026-07-27 12:01 PT; most recent 2026-09-09 15:05 PT (InterState Oil Co).
+
+Three silences make it invisible: the cover-page branch **logs nothing** (30 days
+of container logs contain zero `ap-approvals` lines); `buildDecisionStamp` is
+wrapped in `.catch(() => null)` whose own comment says _"mail proceeds without
+attachment"_; and `stampOneOriginal` returns `null` on an R2 miss. All three stamp
+`decision_mail_sent_at` and look delivered. ADR-0126 closed _mail that never left_
+and left open _mail that left without the thing it was sent to carry_.
+
+**Audit note for whoever reads these columns next:**
+`ap_requests.original_attachment_sha256` is **not** evidence the original was
+stamped or attached. It is written from bytes hashed _before_ the overlay is
+attempted, so it is set identically on a true overlay and on a cover-page
+fallback. It proves the bytes were fetched, nothing more.
+
+### Action list — in order
+
+1. **BU-1 — T1: import the shared predicates.** `approvals.ts` uses
+   `isInlinePdf`/`isInlineImage`/`normalizeMime` from `inline-preview.ts`; delete
+   the anchored comparisons. Fixes all 9 observed cases plus the
+   `application/pdf; name="inv.pdf"` form. **Not started.**
+2. **BU-2 — T2: sniff the bytes.** Resolve type as sniff → MIME → extension; the
+   bytes are already in hand. Log when the sniff disagrees with the stored type —
+   the observability that does not exist today. **Not started.**
+3. **BU-3 — T3: a cover page never travels alone.** For genuinely non-overlayable
+   originals (CSV, Office, unknown binary) attach the **original file itself**
+   beside the stamped cover, and retire the "retrieve it from the queue" sentence.
+   This is what makes Bill's "every time" true for every type. **Not started.**
+4. **BU-4 — T4: fail loud.** Remove the `.catch(() => null)`; add outcome
+   `refused_no_original` — send nothing, leave `decision_mail_sent_at` NULL, page
+   `high` with a per-request fingerprint. The NULL stamp puts the row straight into
+   the existing ADR-0126 queue badge + 06:00 digest, and the existing re-send
+   button is the repair. No new machinery. **Not started.**
+5. **BU-5 — T5: tests that assert delivered BYTES**, not a content-type allowlist
+   (a type-table pin would pass forever while the attachment regressed). Plus the
+   ADR-0132 regression pin on the exact 9-case shape. **Not started.**
+6. **BU-6 — T7: repair the 9 — WAITS ON BILL.** After the fix deploys,
+   `POST /api/ops/ap/{id}/resend` rebuilds the artifacts from R2 under the fixed
+   dispatch and re-mails the properly stamped invoice — no migration, no data
+   entry. **Deliberately not automatic:** accounting gets a second copy of an
+   invoice they already actioned. **Bill's calls:** do they get a heads-up first?
+   All 9, or only the recent ones? And should the duplicate-submission pair
+   (`513ea80b` / `81903703`, same invoice twice) both go? Proof per re-send is a
+   **changed** `decision_pdf_sha256`.
+7. **BU-7 — the 14 mixed cases.** Requests that got a correct stamped invoice
+   **plus** a spurious cover page. Lower harm — the invoice did arrive. Fixed going
+   forward by BU-1..3; whether to re-send is Bill's call and is not in T7.
+8. **BU-8 — residual, unchanged by this work.** ADR-0046's durable follow-up to
+   capture Graph's `isInline`/`contentId` into an `ap_attachments.is_inline` column
+   and retire the 50 KB inline-image size heuristic is still open. It is what makes
+   the `image001.jpg` filter exact rather than a guess.
+
+---
+
 ## 0.BT — 2026-09-14 the three 02:30 AM pages — **BT-1 + BT-2 DONE 2026-09-15 (the count landed); BT-3 WAITS ON BILL; BT-4 optional; BT-5 recorded** (Bill, 2026-09-14 02:32 PT)
 
 Bill: _"look at the last three ntfy notifications I got and add them to the roadmap
