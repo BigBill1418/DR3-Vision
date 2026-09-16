@@ -9,6 +9,15 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-16 — Eugene's first physical anchor: 751 (19 program / 732 non-program) (data, one row)
+
+No code changed. Rick Albritton's end-of-day hard count, relayed by Bill at 4:07 PM PT (counted by
+Chris R, confirmed by Patrick D, nothing on the line), recorded through the manager route as
+snapshot `7232d092` — `units_total` 751 (Oregon), `measured` 19/732, Tier 0, `reconciled_delta`
++751 against a computed 0 because nothing has ever flowed at Eugene. Eugene remains in pilot and
+outside the invariant suite; the anchor is in place for whenever it is flipped live.
+Record: `docs/OPEN-ITEMS.md` § 0.BT BT-6.
+
 ## 2026-09-16 — The MyMRC error page carried a live Salesforce session cookie (ADR-0133)
 
 Bill, 04:02 PT. The ntfy page `[DR3-Vision] MyMRC sync error - woodland [outbound]` was not a

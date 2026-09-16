@@ -519,8 +519,19 @@ count did not take; read the table above first.
    every disagreement day. Found while deriving the 09-14 split; it is the reason
    MRC's own records could not supply one.
 
-6. **BT-6 — EUGENE'S FIRST HARD COUNT, expected end of day Wed 2026-09-16 (Rick
-   Albritton). _Bill → Rick → whoever records it._** Bill, 2026-09-15 9:52 PM PT:
+6. **BT-6 — DONE 2026-09-16 4:10 PM PT. Eugene's first anchor is live.** Rick's numbers
+   (relayed by Bill 4:07 PM): **751 total = 19 program + 732 non-program**, counted by
+   Chris R, double-checked and confirmed by Patrick D, nothing on the line. Recorded
+   through `POST /api/manager/eugene/snapshots` (admin session) as snapshot
+   `7232d092-e02a-4487-8bc0-8a1ff62ee29b`: `snapshot_at` 2026-09-16 07:00Z (Pacific
+   midnight, closing position of 09-16), `units_total` 751 (Oregon: total on site,
+   `units_indoor` NULL), `units_in_processing` 0, `measured` 19/732, **Tier 0** (no
+   prior anchor, no guardrail), `reconciled_delta` **+751** against a computed 0 —
+   nothing has ever flowed at Eugene, so the delta is the count itself. Audit row
+   present, actor Bill. Eugene stays out of the invariant suite while
+   `loads_inventory` is `pilot` (ADR-0131 Am. 2); the anchor is there for the day it
+   is flipped live. _Original item:_ **EUGENE'S FIRST HARD COUNT, expected end of day
+   Wed 2026-09-16 (Rick Albritton). _Bill → Rick → whoever records it._** Bill, 2026-09-15 9:52 PM PT:
    _"flip it to pilot then send me a email with a draft to rick requesting a
    hardcount at EOD 9/16"_. The draft (count after the line is cleared; report
    total, program/non-program if separable, units on the line, who and when) went
