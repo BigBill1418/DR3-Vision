@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BV — 2026-09-16 the MyMRC error page carried the session cookie — **CODE FIX SHIPPED (ADR-0133); session invalidation + stored-copy scrub owned by the orchestrating session** (Bill, 2026-09-16 04:02 PT)
+## 0.BV — 2026-09-16 the MyMRC error page carried the session cookie — **CLOSED 2026-09-16 09:02 PT: code fix LIVE (2b76166, ADR-0133), session invalidated, stored copies scrubbed; BV-7 / BV-9 residuals stand** (Bill, 2026-09-16 04:02 PT)
 
 Bill read the page on his phone at 04:02 PT and saw the cookie header in it.
 
@@ -68,13 +68,43 @@ was never one endpoint.
 - **BV-5 DONE** — the two schema comments that claimed `error` "never contains
   credentials" now describe an enforced property.
 
+- **BV-6 — DONE 2026-09-16 07:45–08:02 PT by the orchestrating session (Claude).
+  The leaked session is dead and every reachable stored copy is scrubbed.**
+  Fingerprinted the leaked `sid` from the `mymrc_sync_runs` row (md5 only, never
+  printed) and matched it to `/var/lib/dr3-vision/mymrc-auth/mymrc-admin/auth.json`
+  — the **admin** scraper session, re-persisted as recently as 07:01 PT, so it was
+  live. Then, in order:
+  1. **Session invalidated server-side** — `GET /secur/logout.jsp` with the stored
+     jar (HTTP 200); proof: the Aura list endpoint now answers
+     `markup://aura:invalidSession` to those cookies (the page probes' 200s are
+     the anonymous shell, not a login). State file retired to
+     `auth.json.invalidated-20260916`; the 08:00 PT tick logged
+     `persisted session logged-out — discarding it, fresh login (admin)`, wrote a
+     new `auth.json` at 08:01, and all four feeds ran `ok` (16 / 800 / 800 / 800).
+     The retired file was then deleted (08:02).
+  2. **`mymrc_sync_runs.error` for run `43301773-…`** — the `cookie:` line replaced
+     with `[REDACTED 2026-09-16 …]` (1,331 → 733 chars); `0` rows in that table
+     contain `sid=` afterwards. Production write, one row, one column.
+  3. **ntfy cache on BOS** — message `12149` deleted from `cache.db`
+     (`sudo sqlite3`, `changes() = 1`); `0` cached messages contain `sid=`.
+     Retention there is 7 days, so this mattered.
+  4. **Loki on BOS** — alloy on svdp-dev ships every container's stdout, and Loki
+     held exactly one matching line (30-day retention). Filed a delete request
+     `{container="dr3-vision-mymrc-scrape"} |= "sid="` over the 14 h window
+     (HTTP 204, status `received`); the compactor applies it after its 2 h delay.
+     Loki's API on BOS is port **3101** (3100 is Grafana).
+     Not scrubbed, by decision: the docker json-file on svdp-dev (BV-7), Bill's phone
+     notification, and the session transcript that triaged this — all inert with the
+     session dead. The timeout itself was transient (05:00/06:00/07:00 ticks clean;
+     MRC's portal was slow 03:00–04:00 PT, a login attempt hung the same way at
+     03:01).
+     **Verified on the redacting image (2b76166, containers recreated 08:44 PT):** the
+     09:00 PT tick logged `persisted admin session valid` (the fresh 08:01 session),
+     `woodland done — hauls=ok(15) haulsCompleted=ok(800) processed=ok(800)
+outbound=ok(800)`, and the new container log contains **zero** `sid=` lines.
+
 ### Still open
 
-- **BV-6 — session invalidation + stored-copy scrub: see the orchestrating
-  session's entry below.** That session owns invalidating the leaked Salesforce
-  session and scrubbing the stored copies (the `mymrc_sync_runs` row, and
-  whatever it decides about the ntfy cache). This section records only the code
-  half; it must not be marked closed until that half is written here.
 - **BV-7 — ACCEPTED RESIDUAL: container stdout written before this deploy still
   holds one copy** of the 04:02 PT text until the compose `logging` driver
   rotates the file out (and, downstream, until Loki's retention expires). No

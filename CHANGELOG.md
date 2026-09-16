@@ -84,6 +84,19 @@ text until the log file rotates. The credential is invalidated out of band, whic
 that copy inert; the ntfy server copy ages out with the 7-day cache. See `docs/OPEN-ITEMS.md`
 § 0.BV.
 
+### The leaked session itself, and every stored copy (orchestrating session, 07:45–09:02 PT)
+
+Data and operations, no code. The leaked `sid` was fingerprinted (md5 only) and matched to the
+**admin** scraper session, still in use at 07:01. Logged out server-side — the Aura endpoint
+now answers `aura:invalidSession` to it — and its state file retired; the 08:00 tick discarded
+it and logged in fresh (all four feeds ok), and the retired file was deleted. Stored copies:
+the `mymrc_sync_runs` row's `cookie:` line replaced with a redaction marker (0 rows with
+`sid=` remain); ntfy cache message 12149 deleted on BOS (0 remain); a Loki delete request
+filed for the one matching line (HTTP 204). Verified on the deployed image: the 09:00 tick
+reused the fresh session, all feeds ok, zero `sid=` lines in the new container log. Record:
+`docs/OPEN-ITEMS.md` § 0.BV BV-6. Residuals BV-7 (pre-deploy stdout until rotation) and
+BV-9 (deployer build map omits `scripts/`) stand.
+
 ## 2026-09-15 — The data-invariant suite speaks only for onboarded sites (ADR-0131 Amendment 2)
 
 Bill, 9:52 PM PT: _"Eugene is not running it yet - flip it to pilot"_. Eugene's five floor
