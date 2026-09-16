@@ -42,6 +42,8 @@ import type { PrismaClient } from '@prisma/client';
 import { AuthFailedError } from './portal-client';
 import { ntfyPager, type Pager } from './ntfy';
 import { sweepTargetDetail } from './enrich-details';
+// ADR-0133 — no caught error is stored, logged or published unredacted.
+import { redactSecrets } from './redact-secrets';
 import type { RecordFieldsClient } from './record-fields-client';
 import type { SfRecord } from './types';
 
@@ -80,7 +82,11 @@ export interface BackfillListPage {
  */
 export interface BackfillPortalClient {
   /** Fetch one 0-based page of a list view. Throws AuthFailedError when logged out. */
-  fetchListPage(objectApiName: string, listViewApiName: string, pageIndex: number): Promise<BackfillListPage>;
+  fetchListPage(
+    objectApiName: string,
+    listViewApiName: string,
+    pageIndex: number,
+  ): Promise<BackfillListPage>;
 }
 
 /**
@@ -171,7 +177,12 @@ interface CursorSnapshot {
 }
 
 function cursorWhere(objectApiName: string, listViewApiName: string) {
-  return { object_api_name_list_view_api_name: { object_api_name: objectApiName, list_view_api_name: listViewApiName } };
+  return {
+    object_api_name_list_view_api_name: {
+      object_api_name: objectApiName,
+      list_view_api_name: listViewApiName,
+    },
+  };
 }
 
 async function readCursor(
@@ -255,9 +266,11 @@ async function persistError(
         list_view_api_name: listViewApiName,
         last_page_index: -1,
         started_at: startedAt,
-        error: message,
+        error: redactSecrets(message),
       },
-      update: { error: message },
+      // ADR-0133 — redact AT THE SINK, idempotently, so this column cannot hold
+      // a credential even if a future caller reaches it without `describe`.
+      update: { error: redactSecrets(message) },
     })
     .catch(() => undefined); // a cursor-write failure must never mask the original wedge
 }
@@ -269,7 +282,10 @@ async function pageTarget(
   target: BackfillTarget,
   now: Date,
   log: Logger,
-): Promise<{ ok: true; recordsListed: number; pages: number; drained: boolean } | { ok: false; auth: boolean; message: string }> {
+): Promise<
+  | { ok: true; recordsListed: number; pages: number; drained: boolean }
+  | { ok: false; auth: boolean; message: string }
+> {
   const { objectApiName, listViewApiName } = target;
   const maxPages = ctx.maxPages ?? MAX_PAGES;
   const cursor = await readCursor(ctx.prisma, objectApiName, listViewApiName);
@@ -312,7 +328,10 @@ async function pageTarget(
         startedAt,
       });
       pages += 1;
-      log('info', `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} page ${pageIndex} → ${page.ids.length} ids (drained=${drained})`);
+      log(
+        'info',
+        `mymrc-backfill: ${objectApiName}/${listViewApiName || '(default)'} page ${pageIndex} → ${page.ids.length} ids (drained=${drained})`,
+      );
       if (drained) return { ok: true, recordsListed, pages, drained: true };
       pageIndex += 1;
     }
@@ -320,7 +339,10 @@ async function pageTarget(
     if (err instanceof AuthFailedError) {
       // Auth is transient (session expiry); do NOT persist as a cursor error —
       // the cursor stays clean and a re-auth'd run resumes at the same page.
-      return { ok: false, auth: true, message: err.message };
+      // ADR-0133 — via `describe`, never `err.message`: a `locator.fill:
+      // Timeout 45000ms exceeded` login failure carries the same call log (and
+      // the same headers) as the POST that leaked.
+      return { ok: false, auth: true, message: describe(err) };
     }
     const message = describe(err);
     await persistError(ctx.prisma, objectApiName, listViewApiName, message, startedAt);
@@ -346,17 +368,25 @@ async function sweepDetail(
     log,
   });
   for (const e of swept.errors) {
-    log('warn', `mymrc-backfill: ${target.objectApiName} detail ${e.recordId} ${e.state} (retry next run): ${e.message}`);
+    log(
+      'warn',
+      `mymrc-backfill: ${target.objectApiName} detail ${e.recordId} ${e.state} (retry next run): ${redactSecrets(e.message)}`,
+    );
   }
   return {
     fetched: swept.fetched,
     failures: swept.errors.length + swept.missing,
     auth: swept.auth,
-    authMessage: swept.authMessage,
+    // ADR-0133 — this text reaches a page body, a log line and a result object.
+    authMessage: redactSecrets(swept.authMessage),
   };
 }
 
-async function runTarget(ctx: BackfillContext, target: BackfillTarget, now: Date): Promise<BackfillTargetResult> {
+async function runTarget(
+  ctx: BackfillContext,
+  target: BackfillTarget,
+  now: Date,
+): Promise<BackfillTargetResult> {
   const log = ctx.log ?? noopLog;
   const pager = ctx.pager ?? ntfyPager;
   const base = {
@@ -411,7 +441,10 @@ async function runTarget(ctx: BackfillContext, target: BackfillTarget, now: Date
         fingerprint: `mymrc-backfill-auth:${target.objectApiName}`,
       })
       .catch(() => undefined);
-    log('error', `mymrc-backfill: ${target.objectApiName} AUTH FAILED (detail) — ${swept.authMessage}`);
+    log(
+      'error',
+      `mymrc-backfill: ${target.objectApiName} AUTH FAILED (detail) — ${swept.authMessage}`,
+    );
     return { ...base, status: 'auth_failed', paginationComplete: true, error: swept.authMessage };
   }
 
@@ -437,7 +470,18 @@ export async function runBackfill(ctx: BackfillContext): Promise<BackfillResult>
   return { targets: results, complete: results.every((r) => r.status === 'complete') };
 }
 
+/**
+ * Turn a caught error into storable/loggable/publishable text.
+ *
+ * ADR-0133 — the redaction boundary for this module. The 2026-09-16 leak was
+ * thrown by `backfill-portal-client.ts`'s Aura POST and rendered its own request
+ * headers, so this is the producer side of that incident, not a sibling of it.
+ */
 function describe(err: unknown): string {
+  return redactSecrets(describeRaw(err));
+}
+
+function describeRaw(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
   try {

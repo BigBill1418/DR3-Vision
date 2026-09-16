@@ -3,6 +3,7 @@ import {
   chunk,
   checkDeadman,
   computeDisappearedIds,
+  decideErrorPage,
   decidePage,
   isZeroAnomaly,
   makeSiteIdResolver,
@@ -162,6 +163,12 @@ const RF = fakeRecordFields();
 
 interface FakeOpts {
   prior?: { status: SyncRunStatus; started_at: Date } | null;
+  /**
+   * The trailing run window `syncFeed` reads for the ADR-0133 consecutive-failure
+   * grade, most-recent-first. Defaults to `[prior]` so every pre-existing case
+   * keeps its old meaning.
+   */
+  recent?: { status: SyncRunStatus; started_at: Date }[];
   lastOk?: { rows_listed: number } | null;
   needDetail?: string[]; // ids idsNeedingDetail returns
   /**
@@ -213,6 +220,10 @@ function fakePrisma(opts: FakeOpts) {
       findFirst: vi.fn(async (args: { where: { status?: string } }) =>
         args.where.status === 'ok' ? (opts.lastOk ?? null) : (opts.prior ?? null),
       ),
+      // ADR-0133 — the trailing run window, most-recent-first. `[0]` is the
+      // `prior` the ADR-0038 cross-tick dedup already used; the tail is the
+      // consecutive-failure streak the error re-grade needs.
+      findMany: vi.fn(async () => opts.recent ?? (opts.prior ? [opts.prior] : [])),
       create: ledgerCreate,
     },
     mymrcProcessedMirror: model,
@@ -736,5 +747,258 @@ describe('syncFeed — a detail is not forever (frozen-status regression, 2026-0
       where: { id: { in: ['scheduled-1'] }, detail_fetched_at: null },
       select: { id: true, external_haul_id: true },
     });
+  });
+});
+
+// ── ADR-0133: the error page is graded on the STREAK, not the first failure ──
+//
+// ADR-0037 Q3: page on crash-loop, not first restart. An hourly retry is free,
+// so one isolated feed failure is a log line; the second consecutive failure of
+// the same site+feed is a `default` page, and the third is `high`.
+//
+// `ntfy.ts` DESCRIBED this promotion ("Caller promotes to `high` after 3
+// consecutive") from the day ADR-0130 was written, and no caller ever did it —
+// the seam existed, nothing drove it, and the comment read as a shipped feature.
+
+const at = (iso: string): { status: SyncRunStatus; started_at: Date } => ({
+  status: 'error',
+  started_at: new Date(iso),
+});
+const okAt = (iso: string): { status: SyncRunStatus; started_at: Date } => ({
+  status: 'ok',
+  started_at: new Date(iso),
+});
+
+describe('decideErrorPage (ADR-0037 Q3 streak grading)', () => {
+  it('first failure: log only — the next hourly run decides', () => {
+    expect(decideErrorPage([])).toEqual({ page: false, priority: 'default', streak: 1 });
+    expect(decideErrorPage([okAt('2026-09-16T10:00:00Z')])).toMatchObject({
+      page: false,
+      streak: 1,
+    });
+  });
+
+  it('second CONSECUTIVE failure: page at default', () => {
+    expect(decideErrorPage([at('2026-09-16T10:00:00Z')])).toEqual({
+      page: true,
+      priority: 'default',
+      streak: 2,
+    });
+  });
+
+  it('third CONSECUTIVE failure: promoted to high', () => {
+    expect(decideErrorPage([at('2026-09-16T11:00:00Z'), at('2026-09-16T10:00:00Z')])).toEqual({
+      page: true,
+      priority: 'high',
+      streak: 3,
+    });
+  });
+
+  it('a success between failures RESETS the streak', () => {
+    expect(
+      decideErrorPage([okAt('2026-09-16T11:00:00Z'), at('2026-09-16T10:00:00Z')]),
+    ).toMatchObject({ page: false, streak: 1 });
+  });
+
+  it('a DIFFERENT failure status breaks the streak — this grades `error`, not "not ok"', () => {
+    expect(
+      decideErrorPage([
+        { status: 'stale_mirror', started_at: new Date('2026-09-16T11:00:00Z') },
+        at('2026-09-16T10:00:00Z'),
+      ]),
+    ).toMatchObject({ page: false, streak: 1 });
+  });
+});
+
+describe('syncFeed — the error page fires on the SECOND consecutive failure', () => {
+  const boom = (): PortalClient =>
+    fakeClient({
+      fetchListRecordIds: vi.fn(async () => {
+        throw new Error('Timeout 45000ms exceeded.');
+      }),
+    });
+
+  it('an isolated first failure is LOGGED, never paged', async () => {
+    const { prisma, ledgerCreate } = fakePrisma({ recent: [okAt('2026-09-16T10:00:00Z')] });
+    const { pager, calls } = spyPager();
+    const lines: string[] = [];
+
+    const res = await syncFeed({
+      prisma: prisma as unknown as P,
+      client: boom(),
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+      log: (_l, m) => lines.push(m),
+    });
+
+    expect(res.status).toBe('error');
+    expect(calls).toHaveLength(0);
+    expect(lines.join('\n')).toContain('NOT paging yet');
+    // The failure is still a RECORD — silence on the phone, never in the ledger.
+    expect(ledgerCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('the second consecutive failure pages at default', async () => {
+    const { prisma } = fakePrisma({ recent: [at('2026-09-16T10:00:00Z')] });
+    const { pager, calls } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client: boom(),
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.kind).toBe('error');
+    expect(calls[0]?.priority).toBe('default');
+    expect(calls[0]?.fingerprint).toBe('mymrc-error:woodland:outbound');
+    expect(calls[0]?.message).toContain('2 consecutive');
+  });
+
+  it('the third consecutive failure is promoted to high, under its OWN fingerprint', async () => {
+    const { prisma } = fakePrisma({
+      recent: [at('2026-09-16T11:00:00Z'), at('2026-09-16T10:00:00Z')],
+    });
+    const { pager, calls } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client: boom(),
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.priority).toBe('high');
+    // NOT `mymrc-error:*` — that window was claimed by the default page an hour
+    // ago and would swallow the escalation for six hours.
+    expect(calls[0]?.fingerprint).toBe('mymrc-error-sustained:woodland:outbound');
+  });
+
+  it('a success resets it: the next isolated failure is silent again', async () => {
+    const { prisma } = fakePrisma({
+      recent: [okAt('2026-09-16T11:00:00Z'), at('2026-09-16T10:00:00Z')],
+    });
+    const { pager, calls } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client: boom(),
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+    });
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it('leaves auth_failed grading alone — it still pages on the leading edge', async () => {
+    const { prisma } = fakePrisma({ recent: [okAt('2026-09-16T10:00:00Z')] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => {
+        throw new AuthFailedError('logged out');
+      }),
+    });
+    const { pager, calls } = spyPager();
+
+    await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.kind).toBe('auth_failed');
+  });
+});
+
+// ── ADR-0133: the ledger row and the page are both redaction boundaries ──────
+
+describe('syncFeed — a Playwright call log never reaches the ledger or the page', () => {
+  // The 2026-09-16 shape, SYNTHESISED (see redact-secrets.test.ts).
+  const CALL_LOG = [
+    'apiRequestContext.post: Timeout 45000ms exceeded.',
+    'Call log:',
+    '  - → POST https://mymrc.example.force.com/s/sfsites/aura?r=7',
+    '  -   cookie: BrowserId=FAKEbrowserid; sid=00Dxx0000000FAKE!AQEAQFAKEsessionFAKEtoken0000',
+    '  -   authorization: Bearer FAKEbearerFAKEtoken',
+  ].join('\n');
+
+  it('redacts the DB row, the returned error and the page body', async () => {
+    const { prisma, ledgerCreate } = fakePrisma({ recent: [at('2026-09-16T10:00:00Z')] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => {
+        throw new Error(CALL_LOG);
+      }),
+    });
+    const { pager, calls } = spyPager();
+    const lines: string[] = [];
+
+    const res = await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+      log: (_l, m) => lines.push(m),
+    });
+
+    const ledgered = (ledgerCreate.mock.calls[0]?.[0]?.data as { error: string }).error;
+    const surfaces = [ledgered, String(res.error), String(calls[0]?.message), lines.join('\n')];
+    for (const text of surfaces) {
+      expect(text).not.toContain('cookie:');
+      expect(text).not.toContain('sid=');
+      expect(text).not.toContain('Bearer');
+      expect(text).not.toMatch(/00D[0-9A-Za-z]{12,15}!/);
+    }
+    // …and the diagnosis is still there.
+    expect(ledgered).toContain('Timeout 45000ms exceeded.');
+    expect(ledgered).toContain('→ POST https://mymrc.example.force.com/s/sfsites/aura?r=7');
+  });
+
+  it('redacts an AuthFailedError message too — the login timeout is the same family', async () => {
+    const { prisma, ledgerCreate } = fakePrisma({});
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => {
+        throw new AuthFailedError(
+          'locator.fill: Timeout 45000ms exceeded.\nCall log:\n  -   cookie: sid=00Dxx0000000FAKE!AQEAQFAKEsessionFAKEtoken0000',
+        );
+      }),
+    });
+    const { pager, calls } = spyPager();
+
+    const res = await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: RF,
+      site: 'woodland',
+      feed: 'outbound',
+      pager,
+      now: NOW,
+    });
+
+    const ledgered = (ledgerCreate.mock.calls[0]?.[0]?.data as { error: string }).error;
+    for (const text of [ledgered, String(res.error), String(calls[0]?.message)]) {
+      expect(text).not.toContain('cookie:');
+      expect(text).not.toMatch(/00D[0-9A-Za-z]{12,15}!/);
+    }
   });
 });

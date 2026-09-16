@@ -589,3 +589,29 @@ describe('obscured ntfy.sh fallback topics (ADR-0194 Am.3)', () => {
     }
   });
 });
+
+// ── ADR-0133 — the app publisher is a redaction boundary too ─────────────────
+//
+// `publishUnhandledError` sends a STACK as the body. A stack from the same
+// Playwright transport that leaked on 2026-09-16 carries the same call log, and
+// this publisher reaches the same topic and the same 7-day server-side cache.
+// Secrets below are SYNTHESISED.
+describe('publishNtfy — redacts the body', () => {
+  it('never publishes a cookie header or a Salesforce session id', async () => {
+    process.env['NTFY_PUBLISHER_TOKEN'] = 'tok';
+    await publishNtfy({
+      topic: 'dr3-vision-system',
+      title: 'boom',
+      body: [
+        'apiRequestContext.post: Timeout 45000ms exceeded.',
+        'Call log:',
+        '  -   cookie: sid=00Dxx0000000FAKE!AQEAQFAKEsessionFAKEtoken0000',
+      ].join('\n'),
+      fingerprint: 'adr-0133-app-body',
+    });
+    const sent = String(fetchCalls[0]?.init.body ?? '');
+    expect(sent).not.toContain('cookie:');
+    expect(sent).not.toMatch(/00D[0-9A-Za-z]{12,15}!/);
+    expect(sent).toContain('Timeout 45000ms exceeded.');
+  });
+});

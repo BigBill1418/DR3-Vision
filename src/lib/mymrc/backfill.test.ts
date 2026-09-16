@@ -25,7 +25,10 @@ function rec(id: string): SfRecord {
 function makeFakePrisma(seed: Record<string, unknown>[] = []) {
   const cursors = new Map<string, Record<string, unknown>>();
   const key = (o: string, l: string): string => `${o} ${l}`;
-  for (const row of seed) cursors.set(key(row['object_api_name'] as string, row['list_view_api_name'] as string), { ...row });
+  for (const row of seed)
+    cursors.set(key(row['object_api_name'] as string, row['list_view_api_name'] as string), {
+      ...row,
+    });
   const compound = (where: {
     object_api_name_list_view_api_name: { object_api_name: string; list_view_api_name: string };
   }): { o: string; l: string } => ({
@@ -102,10 +105,11 @@ function makeClient(opts: {
 // The BATCHED getRecordWithFields detail transport (record-fields-client).
 // Serves one SfRecord per requested id in ONE call; `errorIds` come back as
 // per-action ERRORs (retried next run); `throwAuth` throws AuthFailedError.
-function makeRecordFields(opts?: {
-  errorIds?: string[];
-  throwAuth?: boolean;
-}): { client: RecordFieldsClient; callCount: () => number; requested: string[] } {
+function makeRecordFields(opts?: { errorIds?: string[]; throwAuth?: boolean }): {
+  client: RecordFieldsClient;
+  callCount: () => number;
+  requested: string[];
+} {
   const errorIds = new Set(opts?.errorIds ?? []);
   const requested: string[] = [];
   let calls = 0;
@@ -117,7 +121,8 @@ function makeRecordFields(opts?: {
       const errors: BatchActionError[] = [];
       for (const id of ids) {
         requested.push(id);
-        if (errorIds.has(id)) errors.push({ recordId: id, state: 'ERROR', message: 'record vanished mid-run' });
+        if (errorIds.has(id))
+          errors.push({ recordId: id, state: 'ERROR', message: 'record vanished mid-run' });
         else records.set(id, rec(id));
       }
       return { records, errors };
@@ -154,7 +159,13 @@ describe('runBackfill — pagination advances through every window to hasMoreDat
     const { target, listed } = makeTarget();
     const { pager, calls } = spyPager();
 
-    const res = await runBF({ prisma: prisma as unknown as P, client, targets: [target], pager, now: nowFn });
+    const res = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+    });
 
     expect(listed).toEqual([['a', 'b'], ['c'], ['d']]); // every window upserted, in order
     const pageArgs = (client.fetchListPage as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2]);
@@ -191,7 +202,12 @@ describe('runBackfill — resumes from the cursor (never re-pages completed wind
     const client = makeClient({ pages: { 2: { ids: ['d'], hasMoreData: false } } });
     const { target, listed } = makeTarget();
 
-    const res = await runBF({ prisma: prisma as unknown as P, client, targets: [target], now: nowFn });
+    const res = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [target],
+      now: nowFn,
+    });
 
     const pageArgs = (client.fetchListPage as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2]);
     expect(pageArgs).toEqual([2]); // resumed at page 2 — pages 0,1 never refetched
@@ -209,14 +225,27 @@ describe('runBackfill — detail is fetched in batched getRecordWithFields POSTs
   it('sweeps 9 records with one POST at the default batch size (100)', async () => {
     // Pagination already drained → engine goes straight to the detail sweep.
     const { prisma } = makeFakePrisma([
-      { object_api_name: 'Haul_Request__c', list_view_api_name: 'v1', last_page_index: 0, records_completed: 9, completed_at: NOW, started_at: NOW },
+      {
+        object_api_name: 'Haul_Request__c',
+        list_view_api_name: 'v1',
+        last_page_index: 0,
+        records_completed: 9,
+        completed_at: NOW,
+        started_at: NOW,
+      },
     ]);
     const ids = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
     const client = makeClient({});
     const rf = makeRecordFields();
     const { target, detailed } = makeTarget({ needDetail: async () => ids });
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, recordFields: rf.client, client, targets: [target], now: nowFn });
+    const res = await runBackfill({
+      prisma: prisma as unknown as P,
+      recordFields: rf.client,
+      client,
+      targets: [target],
+      now: nowFn,
+    });
 
     expect(rf.callCount()).toBe(1); // 9 ids ≤ 100 → a single POST
     expect(rf.requested.sort()).toEqual(ids); // every id requested exactly once
@@ -228,7 +257,14 @@ describe('runBackfill — detail is fetched in batched getRecordWithFields POSTs
 
   it('chunks into detailBatchSize batches (5 ids at size 2 → 3 POSTs)', async () => {
     const { prisma } = makeFakePrisma([
-      { object_api_name: 'Haul_Request__c', list_view_api_name: 'v1', last_page_index: 0, records_completed: 5, completed_at: NOW, started_at: NOW },
+      {
+        object_api_name: 'Haul_Request__c',
+        list_view_api_name: 'v1',
+        last_page_index: 0,
+        records_completed: 5,
+        completed_at: NOW,
+        started_at: NOW,
+      },
     ]);
     const client = makeClient({});
     const rf = makeRecordFields();
@@ -255,13 +291,26 @@ describe('runBackfill — detail is fetched in batched getRecordWithFields POSTs
 describe('runBackfill — a drained + fully-detailed cursor is a no-op re-run', () => {
   it('does not page, does not fetch detail', async () => {
     const { prisma } = makeFakePrisma([
-      { object_api_name: 'Haul_Request__c', list_view_api_name: 'v1', last_page_index: 2, records_completed: 4, completed_at: NOW, started_at: NOW },
+      {
+        object_api_name: 'Haul_Request__c',
+        list_view_api_name: 'v1',
+        last_page_index: 2,
+        records_completed: 4,
+        completed_at: NOW,
+        started_at: NOW,
+      },
     ]);
     const client = makeClient({});
     const rf = makeRecordFields();
     const { target } = makeTarget({ needDetail: async () => [] }); // nothing left to detail
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, recordFields: rf.client, client, targets: [target], now: nowFn });
+    const res = await runBackfill({
+      prisma: prisma as unknown as P,
+      recordFields: rf.client,
+      client,
+      targets: [target],
+      now: nowFn,
+    });
 
     expect((client.fetchListPage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     expect(rf.callCount()).toBe(0); // no null ids → never POSTs
@@ -272,13 +321,26 @@ describe('runBackfill — a drained + fully-detailed cursor is a no-op re-run', 
 
   it('a drained cursor with detail gaps sweeps details only (no re-pagination)', async () => {
     const { prisma } = makeFakePrisma([
-      { object_api_name: 'Haul_Request__c', list_view_api_name: 'v1', last_page_index: 2, records_completed: 4, completed_at: NOW, started_at: NOW },
+      {
+        object_api_name: 'Haul_Request__c',
+        list_view_api_name: 'v1',
+        last_page_index: 2,
+        records_completed: 4,
+        completed_at: NOW,
+        started_at: NOW,
+      },
     ]);
     const client = makeClient({});
     const rf = makeRecordFields();
     const { target, detailed } = makeTarget({ needDetail: async () => ['x', 'y'] });
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, recordFields: rf.client, client, targets: [target], now: nowFn });
+    const res = await runBackfill({
+      prisma: prisma as unknown as P,
+      recordFields: rf.client,
+      client,
+      targets: [target],
+      now: nowFn,
+    });
 
     expect((client.fetchListPage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
     expect(detailed.sort()).toEqual(['x', 'y']);
@@ -298,7 +360,13 @@ describe('runBackfill — a pagination wedge fails loud and stays resumable', ()
     const { target } = makeTarget();
     const { pager, calls } = spyPager();
 
-    const res = await runBF({ prisma: prisma as unknown as P, client, targets: [target], pager, now: nowFn });
+    const res = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+    });
 
     expect(res.targets[0]?.status).toBe('error');
     expect(res.targets[0]?.error).toBe('portal 500');
@@ -332,7 +400,13 @@ describe('runBackfill — a pagination wedge fails loud and stays resumable', ()
     const { pager, calls } = spyPager();
 
     // Run 1: pages 0,1 persist; page 2 wedges.
-    const run1 = await runBF({ prisma: prisma as unknown as P, client, targets: [t1], pager, now: nowFn });
+    const run1 = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [t1],
+      pager,
+      now: nowFn,
+    });
     expect(run1.targets[0]?.status).toBe('error');
     expect(listed1).toEqual([['a', 'b'], ['c']]); // only the two good pages upserted
     let cur = cursors.get(key('Haul_Request__c', 'v1'));
@@ -343,7 +417,13 @@ describe('runBackfill — a pagination wedge fails loud and stays resumable', ()
 
     // Run 2: fresh target probe, SAME persisted cursor store → resumes at page 2.
     const { target: t2, listed: listed2 } = makeTarget();
-    const run2 = await runBF({ prisma: prisma as unknown as P, client, targets: [t2], pager, now: nowFn });
+    const run2 = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [t2],
+      pager,
+      now: nowFn,
+    });
     expect(run2.targets[0]?.status).toBe('complete');
     expect(listed2).toEqual([['d']]); // ONLY the previously-failed page redone — no double upsert of a/b/c
     cur = cursors.get(key('Haul_Request__c', 'v1'));
@@ -362,7 +442,13 @@ describe('runBackfill — auth failure pages auth_failed and leaves the cursor c
     const { target } = makeTarget();
     const { pager, calls } = spyPager();
 
-    const res = await runBF({ prisma: prisma as unknown as P, client, targets: [target], pager, now: nowFn });
+    const res = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+    });
 
     expect(res.targets[0]?.status).toBe('auth_failed');
     expect(calls[0]?.kind).toBe('auth_failed');
@@ -373,14 +459,28 @@ describe('runBackfill — auth failure pages auth_failed and leaves the cursor c
 
   it('during the detail sweep aborts the run (logged-out batch)', async () => {
     const { prisma } = makeFakePrisma([
-      { object_api_name: 'Haul_Request__c', list_view_api_name: 'v1', last_page_index: 0, records_completed: 3, completed_at: NOW, started_at: NOW },
+      {
+        object_api_name: 'Haul_Request__c',
+        list_view_api_name: 'v1',
+        last_page_index: 0,
+        records_completed: 3,
+        completed_at: NOW,
+        started_at: NOW,
+      },
     ]);
     const client = makeClient({});
     const rf = makeRecordFields({ throwAuth: true });
     const { target } = makeTarget({ needDetail: async () => ['1', '2', '3', '4', '5', '6'] });
     const { pager, calls } = spyPager();
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, recordFields: rf.client, client, targets: [target], pager, now: nowFn });
+    const res = await runBackfill({
+      prisma: prisma as unknown as P,
+      recordFields: rf.client,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+    });
 
     expect(res.targets[0]?.status).toBe('auth_failed');
     expect(calls[0]?.kind).toBe('auth_failed');
@@ -394,14 +494,28 @@ describe('runBackfill — auth failure pages auth_failed and leaves the cursor c
 describe('runBackfill — a per-record detail failure is retried next run, not a wedge', () => {
   it('marks the target incomplete, counts the failure, does not page', async () => {
     const { prisma } = makeFakePrisma([
-      { object_api_name: 'Haul_Request__c', list_view_api_name: 'v1', last_page_index: 0, records_completed: 3, completed_at: NOW, started_at: NOW },
+      {
+        object_api_name: 'Haul_Request__c',
+        list_view_api_name: 'v1',
+        last_page_index: 0,
+        records_completed: 3,
+        completed_at: NOW,
+        started_at: NOW,
+      },
     ]);
     const client = makeClient({});
     const rf = makeRecordFields({ errorIds: ['bad'] }); // 'bad' comes back as a per-action ERROR
     const { target, detailed } = makeTarget({ needDetail: async () => ['ok1', 'bad', 'ok2'] });
     const { pager, calls } = spyPager();
 
-    const res = await runBackfill({ prisma: prisma as unknown as P, recordFields: rf.client, client, targets: [target], pager, now: nowFn });
+    const res = await runBackfill({
+      prisma: prisma as unknown as P,
+      recordFields: rf.client,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+    });
 
     expect(res.targets[0]?.status).toBe('incomplete');
     expect(res.targets[0]?.detailsFetched).toBe(2);
@@ -442,5 +556,86 @@ describe('runBackfill — one wedged target does not stop the others', () => {
     expect(good.listed).toEqual([['a']]); // the healthy target ran despite the earlier wedge
     expect(res.complete).toBe(false);
     expect(calls.filter((c) => c.kind === 'error')).toHaveLength(1);
+  });
+});
+
+// ── ADR-0133: the backfill cursor is a redaction boundary too ────────────────
+//
+// `mymrc_backfill_cursors.error` is the same sink class as
+// `mymrc_sync_runs.error`, fed by the SAME Playwright transport
+// (`backfill-portal-client.ts` is where the 2026-09-16 `apiRequestContext.post`
+// throw originated) and published to the SAME topic. Its column comment also
+// said "never credentials". Every secret below is SYNTHESISED.
+
+describe('runBackfill — a Playwright call log never reaches the cursor or the page', () => {
+  const CALL_LOG = [
+    'apiRequestContext.post: Timeout 45000ms exceeded.',
+    'Call log:',
+    '  - → POST https://mymrc.example.force.com/s/sfsites/aura?r=7',
+    '  -   cookie: BrowserId=FAKEbrowserid; sid=00Dxx0000000FAKE!AQEAQFAKEsessionFAKEtoken0000',
+    '  -   authorization: Bearer FAKEbearerFAKEtoken',
+  ].join('\n');
+
+  const clean = (text: string): void => {
+    expect(text).not.toContain('cookie:');
+    expect(text).not.toContain('sid=');
+    expect(text).not.toContain('Bearer');
+    expect(text).not.toMatch(/00D[0-9A-Za-z]{12,15}!/);
+  };
+
+  it('redacts a WEDGE — cursor row, returned error, page body and log line', async () => {
+    const { prisma, cursors, key } = makeFakePrisma();
+    const client = makeClient({
+      pageThrow: (i) => (i === 0 ? new Error(CALL_LOG) : undefined),
+    });
+    const { target } = makeTarget();
+    const { pager, calls } = spyPager();
+    const lines: string[] = [];
+
+    const res = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+      log: (_l, m) => lines.push(m),
+    });
+
+    const cursorError = String(cursors.get(key('Haul_Request__c', 'v1'))?.['error']);
+    clean(cursorError);
+    clean(String(res.targets[0]?.error));
+    clean(String(calls[0]?.message));
+    clean(lines.join('\n'));
+    // The diagnosis survives.
+    expect(cursorError).toContain('Timeout 45000ms exceeded.');
+  });
+
+  it('redacts an AUTH failure message on the same paths', async () => {
+    const { prisma } = makeFakePrisma();
+    const client = makeClient({
+      pageThrow: (i) =>
+        i === 0
+          ? new AuthFailedError(
+              'locator.fill: Timeout 45000ms exceeded.\nCall log:\n  -   cookie: sid=00Dxx0000000FAKE!AQEAQFAKEsessionFAKEtoken0000',
+            )
+          : undefined,
+    });
+    const { target } = makeTarget();
+    const { pager, calls } = spyPager();
+    const lines: string[] = [];
+
+    const res = await runBF({
+      prisma: prisma as unknown as P,
+      client,
+      targets: [target],
+      pager,
+      now: nowFn,
+      log: (_l, m) => lines.push(m),
+    });
+
+    expect(res.targets[0]?.status).toBe('auth_failed');
+    clean(String(res.targets[0]?.error));
+    clean(String(calls[0]?.message));
+    clean(lines.join('\n'));
   });
 });

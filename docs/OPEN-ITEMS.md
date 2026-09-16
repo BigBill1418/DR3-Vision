@@ -19,6 +19,90 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BV — 2026-09-16 the MyMRC error page carried the session cookie — **CODE FIX SHIPPED (ADR-0133); session invalidation + stored-copy scrub owned by the orchestrating session** (Bill, 2026-09-16 04:02 PT)
+
+Bill read the page on his phone at 04:02 PT and saw the cookie header in it.
+
+### The finding
+
+The ntfy page `[DR3-Vision] MyMRC sync error - woodland [outbound]` carried
+Playwright's full call log for an `apiRequestContext.post: Timeout 45000ms
+exceeded` on the Aura list endpoint — **request headers included**. The `cookie:`
+header of that authenticated POST is the live Salesforce session for the MyMRC
+admin identity: `sid`, `sid_Client`, `oid`, `BrowserId`, `renderCtx`. 1,331
+characters.
+
+Four durable copies were created in the same instant:
+
+| copy                                                                | lifetime                            |
+| ------------------------------------------------------------------- | ----------------------------------- |
+| Bill's phone (push notification)                                    | until dismissed                     |
+| `ntfy.barnardhq.com` message cache                                  | 7 days                              |
+| `mymrc_sync_runs.error`, run `43301773-4252-4124-ba9d-1d2ae7c7bd81` | forever                             |
+| this container's stdout → Alloy → Loki                              | until log rotation / Loki retention |
+
+The 03:01 PT run `d87a0d8c…` failed with `locator.fill: Timeout 45000ms exceeded`
+at the login page — the same call-log family from a different module — so this
+was never one endpoint.
+
+### The code fix — DONE, shipped 2026-09-16
+
+`docs/adr/0133-the-page-that-carried-the-session-cookie.md` (Accepted). In short:
+
+- **BV-1 DONE** — one pure, idempotent `redactSecrets()`
+  (`src/lib/mymrc/redact-secrets.ts`, app-facing `src/lib/redact-secrets.ts`)
+  that drops a Playwright call log's header block deny-by-default and masks
+  Salesforce session ids, cookie lines, `Authorization:` and the named cookie
+  pairs anywhere in any text.
+- **BV-2 DONE** — applied at **every** sink: `mymrc_sync_runs.error` (both
+  writers), `mymrc_backfill_cursors.error`, every `mymrc-sync[…]` /
+  `mymrc-backfill:` log line, the worker's `fatal:` stack print, and both ntfy
+  publishers. The MyMRC pager also caps the body at 600 chars.
+- **BV-3 DONE** — `scripts/mymrc-scrape.mjs` takes the redactor injected and
+  **fails closed**: an image predating this change withholds the error text
+  instead of publishing it.
+- **BV-4 DONE** — the `error` page re-graded per ADR-0037 Q3: first isolated
+  failure of a site+feed is log-only, second consecutive pages `default`, third
+  `high`, streak derived from `mymrc_sync_runs`, escalation under its own
+  fingerprint. Other alert kinds untouched.
+- **BV-5 DONE** — the two schema comments that claimed `error` "never contains
+  credentials" now describe an enforced property.
+
+### Still open
+
+- **BV-6 — session invalidation + stored-copy scrub: see the orchestrating
+  session's entry below.** That session owns invalidating the leaked Salesforce
+  session and scrubbing the stored copies (the `mymrc_sync_runs` row, and
+  whatever it decides about the ntfy cache). This section records only the code
+  half; it must not be marked closed until that half is written here.
+- **BV-7 — ACCEPTED RESIDUAL: container stdout written before this deploy still
+  holds one copy** of the 04:02 PT text until the compose `logging` driver
+  rotates the file out (and, downstream, until Loki's retention expires). No
+  log-surgery pass on a running host is planned: the credential is invalidated by
+  BV-6, which is what makes the copy inert. Re-open only if the invalidation
+  turns out not to have taken.
+- **BV-9 — FOUND WHILE SHIPPING THIS, not fixed here, no owner:** the fleet
+  deployer's `build_map.app.dirs` for DR3-Vision
+  (`noc-master/data/config.yml`) lists `Dockerfile`, `package.json`,
+  `package-lock.json`, `tsconfig.json`, `next.config.js`, `tailwind.config.ts`,
+  `postcss.config.js`, `src/`, `prisma/` and `public/` — **not `scripts/`**.
+  `getServicesToRebuild()` (`noc-master/api/services/deployer-worker.js:1657`)
+  matches changed paths with `startsWith` against exactly that list, so **a
+  commit that touches only `scripts/` rebuilds nothing** and the cron containers
+  keep running the old code with a "success" deploy record. The Dockerfile does
+  `COPY … /app/scripts ./scripts`, so the files are in the image — they simply
+  never get into a NEW one. This commit is unaffected (it also changes `src/` and
+  `prisma/`, so `app` rebuilds and `scripts/` rides along), which is exactly the
+  kind of incidental coverage that hides the gap. Fix is one line in the fleet
+  config: add `scripts/` to `build_map.app.dirs`. Related to BU-9 (this repo's
+  deployer entry also runs no `version_assert`).
+- **BV-8 — NOT DONE, worth porting, no owner:** the ADR-0133 D1 boundary rule
+  ("no caught error is stored, logged or published unredacted") is a fleet-shaped
+  rule and other repos publish caught errors to ntfy through their own helpers.
+  Porting it is out of scope for this change and is not scheduled.
+
+---
+
 ## 0.BU — 2026-09-15 the decision mail that carried a cover page instead of the invoice — **FIX SHIPPED + LIVE 2026-09-15 16:29 PT (ADR-0132 Accepted, `177ba39`); BU-1..BU-5 DONE; the 9 WERE re-sent at 16:31 PT by someone other than the implementing session — BU-6 needs that confirmed before anyone sends a THIRD copy** (Bill, 2026-09-15 15:27 PT)
 
 Bill: _"in the AP approval module - I am being told that when the accounting team

@@ -165,6 +165,11 @@ export {
   type FeedFreshness,
 } from './freshness';
 export { ntfyPager, fingerprint, type Pager, type PageAlert, type AlertKind } from './ntfy';
+// ADR-0133 — the ONE secret redactor. Exported from the bundle because
+// `scripts/mymrc-scrape.mjs` has no build step of its own and must take it
+// through this surface; it FAILS CLOSED (withholds the text) if it is absent,
+// so an older `dist/mymrc` degrades loudly instead of leaking.
+export { redactSecrets, REDACTED, REDACTION_PATTERNS } from './redact-secrets';
 // ADR-0130 — the durable cooldown ledger. `scripts/mymrc-scrape.mjs` MUST call
 // `setCooldownDb(prisma)` before it pages: the worker is a fresh child process
 // every hour, so without a durable ledger every cooldown resets to zero and a

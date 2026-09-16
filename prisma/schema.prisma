@@ -3089,7 +3089,7 @@ model MymrcBackfillCursor {
   records_completed       Int       @default(0)
   started_at              DateTime  @default(now())
   completed_at            DateTime? // set when hasMoreData:false reached (backfill drained)
-  error                   String? // last human failure text (never credentials)
+  error                   String? // last human failure text, REDACTED at the sink (ADR-0133) — same claim, same transport (backfill-portal-client.ts is where the 2026-09-16 throw originated), now enforced rather than asserted.
   created_at              DateTime  @default(now())
   updated_at              DateTime  @updatedAt
 
@@ -3108,7 +3108,7 @@ model MymrcSyncRun {
   rows_listed     Int             @default(0)
   rows_upserted   Int             @default(0)
   details_fetched Int             @default(0)
-  error           String? // human error text (never contains credentials)
+  error           String? // human error text, REDACTED at the sink (ADR-0133). The previous comment claimed "never contains credentials"; on 2026-09-16 run 43301773 held 1,331 chars of Playwright call log including a live Salesforce session cookie, because nothing enforced the claim. `redactSecrets` now does.
   run_id          String? // per-run correlation id (crypto.randomUUID); ties every log line of a run to this ledger row
   created_at      DateTime        @default(now())
 

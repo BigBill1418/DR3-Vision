@@ -15,6 +15,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { runMymrcScrape, recordSessionFailure } from '../../scripts/mymrc-scrape.mjs';
+// ADR-0133 — the worker takes its redactor through the injected `mymrc` surface
+// and FAILS CLOSED without one, so the fake must carry the real helper or every
+// message assertion below reads `[error text withheld: …]`. Dedicated coverage
+// for the redaction itself lives in `mymrc-scrape-redaction.test.ts`.
+import { redactSecrets } from '../lib/mymrc/redact-secrets';
 
 type PageCall = { kind: string; site: string; message: string; fingerprint: string };
 type LedgerRow = {
@@ -81,6 +86,7 @@ function harness(prisma: unknown, opts: { launchError?: Error } = {}) {
     syncSite: vi.fn(async () => []),
     checkDeadman: vi.fn(async () => undefined),
     SITE_CODES: ['eugene', 'woodland'],
+    redactSecrets,
     ntfyPager: { page: async (a: PageCall): Promise<void> => void pageCalls.push(a) },
   };
   const launchBrowser = vi.fn(async () => {
@@ -205,6 +211,7 @@ describe('recordSessionFailure — unit', () => {
       prisma,
       activeSites: ['woodland'],
       message: 'boom',
+      redact: redactSecrets,
       log: () => undefined,
     });
     expect(res).toEqual({ ledgered: true, recent: 2 });
@@ -216,6 +223,7 @@ describe('recordSessionFailure — unit', () => {
       prisma,
       activeSites: ['woodland'],
       message: 'boom',
+      redact: redactSecrets,
       log: () => undefined,
     });
     expect(first).toEqual({ ledgered: true, recent: 1 });
@@ -224,6 +232,7 @@ describe('recordSessionFailure — unit', () => {
       prisma,
       activeSites: ['woodland'],
       message: 'boom again',
+      redact: redactSecrets,
       log: () => undefined,
     });
     expect(second).toEqual({ ledgered: true, recent: 2 });
@@ -240,6 +249,7 @@ describe('recordSessionFailure — unit', () => {
       prisma,
       activeSites: ['nosuchsite'],
       message: 'boom',
+      redact: redactSecrets,
       log: () => undefined,
     });
     expect(res.ledgered).toBe(true);
@@ -256,6 +266,7 @@ describe('recordSessionFailure — unit', () => {
       prisma,
       activeSites: ['woodland'],
       message: 'boom',
+      redact: redactSecrets,
       log: () => undefined,
     });
     expect(res).toEqual({ ledgered: false, recent: Number.POSITIVE_INFINITY });

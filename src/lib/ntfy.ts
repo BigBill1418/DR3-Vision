@@ -43,6 +43,9 @@
 // ────────────────────────────────────────────────────────────────────────
 
 import { toHeaderSafe } from './ntfy-header-safe';
+// ADR-0133 — the ONE secret redactor, via its app-facing name (the impl is
+// under mymrc/ for the same rootDir reason `header-safe` is).
+import { redactSecrets } from './redact-secrets';
 import { claimCooldown, releaseCooldown, __cooldownTesting } from './ntfy-cooldown-store';
 
 const PRIMARY_BASE_DEFAULT = 'https://ntfy.barnardhq.com';
@@ -403,11 +406,19 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     return { ok: true, outcome: 'cooldown-suppressed' };
   }
 
+  // ADR-0133 — REDACT before truncating, at the one choke point every publish
+  // shares. `publishUnhandledError` sends `err.stack` as the body, which is the
+  // same class of exposure as the MyMRC page that carried a live Salesforce
+  // session cookie on 2026-09-16: a caught error is a transcript, and a
+  // transcript of an authenticated call contains the authentication. The helper
+  // is pure, dependency-free and idempotent, so this neither breaks the
+  // edge/browser bundle nor double-masks anything a caller already cleaned.
+  //
   // Truncate body at byte boundary — naive char-slice would break
   // multi-byte UTF-8 graphemes. TextEncoder is available in Node 18+
   // and edge/browser runtimes; we also guard against decoder failures
   // on partial sequences by falling back to char-slice.
-  const truncated = truncateUtf8(args.body, BODY_MAX_BYTES);
+  const truncated = truncateUtf8(redactSecrets(args.body), BODY_MAX_BYTES);
 
   const baseUrl = readBaseUrl();
   const primaryHeaders = buildHeaders({

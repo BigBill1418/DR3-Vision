@@ -58,10 +58,32 @@ export interface RecordSessionFailureArgs {
   prisma: unknown;
   /** Active recycler context codes; the first is preferred for attribution. */
   activeSites?: string[];
-  /** Human error text. Never contains credentials. */
+  /**
+   * Human error text. It MAY contain credentials on arrival — the 2026-09-16
+   * leak did — which is why `redact` below is required rather than assumed.
+   */
   message: string;
+  /**
+   * ADR-0133 — the secret redactor (`mymrc.redactSecrets`), applied to `message`
+   * before it is written to `mymrc_sync_runs.error`.
+   *
+   * REQUIRED, not optional, for the same reason `CooldownDb.$executeRawUnsafe`
+   * is (ADR-0130): a typed caller that omits it must fail at the call site. At
+   * runtime an omitted redactor does NOT fall through to the raw text — the
+   * message is WITHHELD — so the JS-only path fails closed as well.
+   */
+  redact: (text: string) => string;
+  /** Session-failure status to record (default `auth_failed`). */
+  status?: string;
   log?: (level: string, message: string) => void;
 }
+
+/**
+ * Resolve the ADR-0133 secret redactor out of the injected `mymrc` surface,
+ * failing CLOSED: a build whose `dist/mymrc` predates the helper gets a function
+ * that withholds the text entirely rather than one that passes it through.
+ */
+export function resolveRedactor(mymrc: unknown): (text: string) => string;
 
 /**
  * Ledger a session-start failure as a `feed='__session__'`, `status='auth_failed'`

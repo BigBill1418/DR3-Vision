@@ -16,6 +16,8 @@ import { FEED_NAMES } from './types';
 import { mapHaulRecord, mapOutboundRecord, mapProcessedRecord } from './mappers';
 import { measureFeedFreshness } from './freshness';
 import { fingerprint, GRADE_BY_KIND, ntfyPager, type Pager } from './ntfy';
+// ADR-0133 — no caught error is stored, logged or published unredacted.
+import { redactSecrets } from './redact-secrets';
 import { optionalFieldsForFeed, type RecordFieldsClient } from './record-fields-client';
 import { upsertScrapedHauls } from './upsert';
 import type {
@@ -59,6 +61,51 @@ export function decidePage(
   if (!prior) return true;
   if (prior.status !== failingStatus) return true;
   return now.getTime() - prior.started_at.getTime() >= repageMs;
+}
+
+/**
+ * ADR-0133 — how many CONSECUTIVE `error` runs of one site+feed a page costs.
+ *
+ * ADR-0037 Q3 is "has the system tried to self-heal first? Page on crash-loop,
+ * not first restart." The MyMRC sync retries every hour at no cost, so a single
+ * failed tick is a log line, not a buzz. Before this, `error` paged on the
+ * LEADING EDGE — the first failure after any healthy run — and `ntfy.ts`
+ * documented a promotion to `high` "after 3 consecutive" that no caller ever
+ * performed: the seam was real, nothing drove it, and the comment read as a
+ * shipped feature for as long as it existed.
+ */
+export const ERROR_PAGE_AFTER = 2;
+/** Consecutive `error` runs at which the page is promoted to `high`. */
+export const ERROR_ESCALATE_AFTER = 3;
+
+/**
+ * Grade an `error` run from the trailing run window.
+ *
+ * `recent` is the site+feed's prior runs, MOST RECENT FIRST, excluding the run
+ * being graded (its ledger row is written after the paging decision). The streak
+ * therefore counts this run plus the unbroken run of `error` rows behind it.
+ *
+ * The count comes from `mymrc_sync_runs` and NOT from a process-local counter
+ * for the reason ADR-0130 records at length: `scripts/mymrc-scrape.mjs` is a
+ * fresh child process every hour, so any in-memory streak is 1 forever.
+ *
+ * Deliberately keyed on `status === 'error'` rather than "not ok": a
+ * `stale_mirror` or `auth_failed` tick between two errors is a DIFFERENT
+ * condition with its own page and its own grade, and folding them together
+ * would let one alert's escalation be driven by another alert's failures.
+ */
+export function decideErrorPage(recent: readonly { status: SyncRunStatus }[]): {
+  page: boolean;
+  priority: 'default' | 'high';
+  streak: number;
+} {
+  let streak = 1; // the run being graded
+  for (const run of recent) {
+    if (run.status !== 'error') break;
+    streak += 1;
+  }
+  if (streak < ERROR_PAGE_AFTER) return { page: false, priority: 'default', streak };
+  return { page: true, priority: streak >= ERROR_ESCALATE_AFTER ? 'high' : 'default', streak };
 }
 
 /** Active mirror ids no longer present in the latest full list. */
@@ -451,11 +498,16 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     await ctx.prisma.site.findMany({ select: { id: true, code: true } }),
   );
 
-  const prior = await ctx.prisma.mymrcSyncRun.findFirst({
+  // The trailing run window, most-recent-first. `[0]` is the `prior` the
+  // ADR-0038 cross-tick dedup has always used; the tail is the consecutive-
+  // failure streak the ADR-0133 `error` grade reads. One query, not two.
+  const recentRuns = await ctx.prisma.mymrcSyncRun.findMany({
     where: { site_id: siteId, feed: ctx.feed },
     orderBy: { started_at: 'desc' },
+    take: ERROR_ESCALATE_AFTER - 1,
     select: { status: true, started_at: true },
   });
+  const prior = recentRuns[0] ?? null;
   const lastOk = await ctx.prisma.mymrcSyncRun.findFirst({
     where: { site_id: siteId, feed: ctx.feed, status: 'ok' },
     orderBy: { started_at: 'desc' },
@@ -476,6 +528,37 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     if (!decidePage(prior, status, nowFn())) return;
     await pager
       .page({ kind, site: ctx.site, feed: ctx.feed, message, fingerprint: fp })
+      .catch(() => undefined);
+  }
+
+  /**
+   * ADR-0133 — the `error` page, graded on the consecutive-failure streak
+   * instead of the leading edge (ADR-0037 Q3). The escalation publishes under
+   * its OWN fingerprint: re-using `mymrc-error:*` would hand the promotion to
+   * the 6 h cooldown window the `default` page claimed an hour earlier, so the
+   * `high` page would be suppressed by the very page it escalates.
+   */
+  async function pageErrorStreak(message: string): Promise<void> {
+    const verdict = decideErrorPage(recentRuns);
+    if (!verdict.page) {
+      log(
+        'warn',
+        `mymrc-sync: ${tag} first failure in this streak - NOT paging yet, the next hourly run decides (ADR-0037 Q3)`,
+      );
+      return;
+    }
+    await pager
+      .page({
+        kind: 'error',
+        site: ctx.site,
+        feed: ctx.feed,
+        message: `${message}\n\n${verdict.streak} consecutive failed run(s) of ${ctx.site}/${ctx.feed}.`,
+        fingerprint:
+          verdict.priority === 'high'
+            ? fingerprint.errorSustained(ctx.site, ctx.feed)
+            : fingerprint.error(ctx.site, ctx.feed),
+        priority: verdict.priority,
+      })
       .catch(() => undefined);
   }
 
@@ -583,18 +666,22 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
     );
     return finalize();
   } catch (err) {
+    // ADR-0133 — `describe` is the boundary: EVERY branch turns the caught error
+    // into text through it, and it redacts. `err.message` was read directly here
+    // before, which is how a `locator.fill: Timeout 45000ms exceeded` login
+    // failure could carry the same header block as the Aura POST that leaked.
     if (err instanceof AuthFailedError) {
       status = 'auth_failed';
-      error = err.message;
-      await pageOnce('auth_failed', fingerprint.authFailed(ctx.site), err.message);
+      error = describe(err);
+      await pageOnce('auth_failed', fingerprint.authFailed(ctx.site), error);
     } else if (err instanceof PortalContractDriftError) {
       status = 'contract_drift';
-      error = err.message;
-      await pageOnce('contract_drift', fingerprint.contractDrift(ctx.site, ctx.feed), err.message);
+      error = describe(err);
+      await pageOnce('contract_drift', fingerprint.contractDrift(ctx.site, ctx.feed), error);
     } else {
       status = 'error';
       error = describe(err);
-      await pageOnce('error', fingerprint.error(ctx.site, ctx.feed), error);
+      await pageErrorStreak(error);
     }
     log('error', `mymrc-sync: ${tag} FAILED (${status}) — ${error}`);
     return finalize();
@@ -615,7 +702,11 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
           rows_listed: rowsListed,
           rows_upserted: rowsUpserted,
           details_fetched: detailsFetched,
-          error,
+          // ADR-0133 — redact AT THE SINK as well as at `describe`. The column
+          // comment claimed "never contains credentials" for months while
+          // nothing enforced it; `redactSecrets` is idempotent, so a value that
+          // arrived clean is unchanged and one that did not cannot be stored.
+          error: error === null ? null : redactSecrets(error),
           run_id: runId,
         },
       });
@@ -778,7 +869,19 @@ export async function checkDeadman(args: {
   }
 }
 
+/**
+ * Turn a caught error into storable/loggable/publishable text.
+ *
+ * ADR-0133 — this is the redaction boundary for this module. A Playwright error
+ * is a TRANSCRIPT, not a message: `apiRequestContext.post: Timeout 45000ms
+ * exceeded` renders the request headers of the call it was making, and the
+ * `cookie:` header of an authenticated Aura POST is a live Salesforce session.
+ */
 function describe(err: unknown): string {
+  return redactSecrets(describeRaw(err));
+}
+
+function describeRaw(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
   return JSON.stringify(err);

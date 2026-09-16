@@ -43,13 +43,43 @@ const HEADLESS = (process.env.MYMRC_HEADLESS ?? 'true').toLowerCase() !== 'false
 // Where an operator enters/rotates the admin credential. Surfaced in the D9 page
 // so the alert is directly actionable (ADR-0037 gate Q5).
 const ADMIN_SURFACE_URL =
-  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() ||
-  'https://dr3-vision.svdp.us/admin/mrc-scrape';
+  process.env.MYMRC_ADMIN_SURFACE_URL?.trim() || 'https://dr3-vision.svdp.us/admin/mrc-scrape';
 
 function log(level, message) {
   const line = `mymrc-sync[${new Date().toISOString()}]: ${message}`;
   if (level === 'error' || level === 'warn') console.error(line);
   else console.log(line);
+}
+
+// ── ADR-0133: the redaction boundary for this worker ────────────────────────
+//
+// On 2026-09-16 04:02 PT the page `[DR3-Vision] MyMRC sync error - woodland
+// [outbound]` carried Playwright's call log for a timed-out Aura POST, request
+// headers included — i.e. the live Salesforce session cookie for Bill's MyMRC
+// admin identity. The identical string was written to `mymrc_sync_runs.error`
+// and to this container's stdout. The rule that follows from it: NO CAUGHT ERROR
+// IS STORED, LOGGED OR PUBLISHED UNREDACTED.
+//
+// This file is a `.mjs` with no build step, so it cannot import the TypeScript
+// redactor; it takes it through the same injected `mymrc` surface it already
+// takes `syncSite`, `checkDeadman` and `ntfyPager` through.
+
+/** What a build without the helper writes instead of the error text. */
+const WITHHELD = '[error text withheld: redactSecrets is unavailable in this build (ADR-0133)]';
+
+/**
+ * Resolve the redactor, FAIL CLOSED.
+ *
+ * `dist/mymrc` is built from `src/lib/mymrc` at image build time, so a container
+ * running an older image has no `redactSecrets`. Falling back to the raw text
+ * there would re-open this hole in exactly the situation nobody is watching, so
+ * the fallback withholds the text instead. The failure itself stays LOUD — the
+ * ledger row, the page and the non-zero exit are unaffected; only the transcript
+ * is dropped.
+ */
+export function resolveRedactor(mymrc) {
+  const fn = mymrc && typeof mymrc.redactSecrets === 'function' ? mymrc.redactSecrets : null;
+  return fn ?? (() => WITHHELD);
 }
 
 /**
@@ -76,9 +106,13 @@ export function resolveActiveSites({ explicit, envValue, known, log: logFn = log
   const cleaned = raw.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
   const valid = cleaned.filter(ok);
   const dropped = cleaned.filter((s) => !ok(s));
-  if (dropped.length) logFn('warn', `mymrc: ignoring unknown MYMRC_ACTIVE_SITES token(s): ${dropped.join(', ')}`);
+  if (dropped.length)
+    logFn('warn', `mymrc: ignoring unknown MYMRC_ACTIVE_SITES token(s): ${dropped.join(', ')}`);
   if (valid.length === 0) {
-    logFn('warn', 'mymrc: no valid active sites resolved from MYMRC_ACTIVE_SITES — falling back to pilot default (woodland)');
+    logFn(
+      'warn',
+      'mymrc: no valid active sites resolved from MYMRC_ACTIVE_SITES — falling back to pilot default (woodland)',
+    );
     return DEFAULT;
   }
   return valid;
@@ -120,8 +154,14 @@ export async function recordSessionFailure({
   activeSites,
   message,
   status = 'auth_failed',
+  redact,
   log: logFn = log,
 }) {
+  // ADR-0133 — the `error` column is a sink, so it redacts here too and does not
+  // trust its caller. `redactSecrets` is idempotent, so a message the caller
+  // already cleaned is unchanged; a caller that supplied NO redactor gets the
+  // withheld marker rather than whatever it happened to be holding.
+  const safeMessage = typeof redact === 'function' ? redact(message) : WITHHELD;
   try {
     const code = Array.isArray(activeSites) ? activeSites[0] : undefined;
     const site =
@@ -139,7 +179,7 @@ export async function recordSessionFailure({
         started_at: now,
         finished_at: now,
         status,
-        error: message,
+        error: safeMessage,
       },
     });
     // Count per-FEED, not per-status: a login failure followed by a launch
@@ -152,7 +192,8 @@ export async function recordSessionFailure({
     });
     return { ledgered: true, recent };
   } catch (err) {
-    logFn('warn', `mymrc: could not ledger the session failure (${describeErr(err)}) — paging anyway`);
+    const why = typeof redact === 'function' ? redact(describeErr(err)) : WITHHELD;
+    logFn('warn', `mymrc: could not ledger the session failure (${why}) — paging anyway`);
     return { ledgered: false, recent: Number.POSITIVE_INFINITY };
   }
 }
@@ -170,8 +211,23 @@ export async function recordSessionFailure({
  *   - log:           structured logger.
  * Returns the process exit code; the caller owns `process.exit`.
  */
-export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn = log, activeSites }) {
-  // ── ADR-0130: the cooldown ledger, FIRST ────────────────────────────────
+export async function runMymrcScrape({
+  mymrc,
+  prisma,
+  launchBrowser,
+  log: logFn = log,
+  activeSites,
+}) {
+  // ── ADR-0133: the redactor, FIRST OF ALL ────────────────────────────────
+  //
+  // Resolved before anything can throw, because the very first thing that CAN
+  // throw here — `loadAdminCredentials` — is already on a path that stores,
+  // logs and publishes the caught error.
+  const redact = resolveRedactor(mymrc);
+  /** Every caught error in this worker becomes text through here. */
+  const safeErr = (err) => redact(describeErr(err));
+
+  // ── ADR-0130: the cooldown ledger ───────────────────────────────────────
   //
   // This worker is a fresh child process every hour (`mymrc-cron.mjs` spawns it
   // and reaps it), so the module-scope cooldown Map that used to back ADR-0037
@@ -190,7 +246,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     const message = notConfigured
       ? `MyMRC admin credentials not configured — enter them at ${ADMIN_SURFACE_URL}. ` +
         `Sync cannot run until credentials are set.`
-      : `MyMRC admin credentials could not be loaded/decrypted: ${describeErr(err)}. ` +
+      : `MyMRC admin credentials could not be loaded/decrypted: ${safeErr(err)}. ` +
         `Check MYMRC_CRED_KEY on this container and re-enter credentials at ${ADMIN_SURFACE_URL} if needed.`;
     logFn('error', message);
     // Fail LOUD (no silent skip, no fallback — no service accounts exist).
@@ -216,13 +272,14 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
   try {
     browser = await launchBrowser();
   } catch (err) {
-    const msg = describeErr(err);
+    const msg = safeErr(err);
     logFn('error', `browser launch failed: ${msg}`);
     const { recent } = await recordSessionFailure({
       prisma,
       activeSites,
       message: `browser launch failed: ${msg}`,
       status: 'error',
+      redact,
       log: logFn,
     });
     if (recent < SESSION_PAGE_AFTER) {
@@ -253,12 +310,13 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     try {
       client = await mymrc.createPortalClient(browser, creds, { log: logFn });
     } catch (err) {
-      const msg = describeErr(err);
+      const msg = safeErr(err);
       logFn('error', `admin session start failed: ${msg}`);
       const { recent } = await recordSessionFailure({
         prisma,
         activeSites,
         message: msg,
+        redact,
         log: logFn,
       });
       if (recent < SESSION_PAGE_AFTER) {
@@ -337,7 +395,13 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
     try {
       // One admin session; the per-site passes reuse it (feeds are not login-scoped).
       for (const site of sites) {
-        const results = await mymrc.syncSite({ prisma, client: listClient, recordFields, site, log: logFn });
+        const results = await mymrc.syncSite({
+          prisma,
+          client: listClient,
+          recordFields,
+          site,
+          log: logFn,
+        });
         const summary = results
           .map((r) => `${r.feed}=${r.status}(listed:${r.rowsListed},detail:${r.detailsFetched})`)
           .join(' ');
@@ -358,7 +422,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
             `reconcile-feed — ${fr.queued} new candidate(s) queued (${fr.skippedExisting} already queued)`,
           );
         } catch (err) {
-          logFn('error', `reconcile-feed failed (non-fatal): ${describeErr(err)}`);
+          logFn('error', `reconcile-feed failed (non-fatal): ${safeErr(err)}`);
         }
       }
 
@@ -381,7 +445,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
             `processed-bridge — ins:${br.inserted} upd:${br.updated} skip:${br.skippedGuarded} same:${br.unchanged}`,
           );
         } catch (err) {
-          logFn('error', `processed-bridge failed (non-fatal): ${describeErr(err)}`);
+          logFn('error', `processed-bridge failed (non-fatal): ${safeErr(err)}`);
         }
       }
 
@@ -405,7 +469,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
             `inbound-bridge — ins:${ir.inserted} upd:${ir.updated} skip:${ir.skippedGuarded} same:${ir.unchanged} undated:${ir.haulsUndated}`,
           );
         } catch (err) {
-          logFn('error', `inbound-bridge failed (non-fatal): ${describeErr(err)}`);
+          logFn('error', `inbound-bridge failed (non-fatal): ${safeErr(err)}`);
         }
       }
 
@@ -461,7 +525,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
             }
           }
         } catch (err) {
-          logFn('error', `dateless-haul check failed (non-fatal): ${describeErr(err)}`);
+          logFn('error', `dateless-haul check failed (non-fatal): ${safeErr(err)}`);
         }
       }
 
@@ -491,7 +555,7 @@ export async function runMymrcScrape({ mymrc, prisma, launchBrowser, log: logFn 
               .join(' ')}`,
           );
         } catch (err) {
-          logFn('error', `mirror-freshness failed (non-fatal): ${describeErr(err)}`);
+          logFn('error', `mirror-freshness failed (non-fatal): ${safeErr(err)}`);
         }
       }
     } finally {
@@ -528,6 +592,7 @@ async function main() {
 
   const require = createRequire(import.meta.url);
   const mymrc = require(resolve(__dirname, '..', 'dist', 'mymrc'));
+  loadedMymrc = mymrc; // ADR-0133 — so the fatal handler can redact too
   const prisma = new PrismaClient();
 
   let code = 1;
@@ -544,6 +609,17 @@ async function main() {
   process.exit(code);
 }
 
+/**
+ * The compiled surface, captured for the top-level fatal handler.
+ *
+ * ADR-0133 — that handler prints `err.stack`, which is the WIDEST of this
+ * worker's stdout sinks: a Playwright error's stack carries the same call log
+ * (and therefore the same request headers) as its message. Null until `main`
+ * has resolved `dist/mymrc`, and `resolveRedactor(null)` withholds, which is the
+ * correct answer for a failure that happened before the bundle even loaded.
+ */
+let loadedMymrc = null;
+
 // Only run as the entrypoint — keeps the module importable for unit tests without
 // spawning Prisma/Chromium or requiring a built `dist/` (mirrors the guard in
 // scripts/bonus-period-close.mjs).
@@ -551,7 +627,9 @@ const isEntrypoint =
   process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
 if (isEntrypoint) {
   main().catch((err) => {
-    log('error', `fatal: ${err && err.stack ? err.stack : err}`);
+    // ADR-0133 — redact the stack; never print a caught error raw.
+    const redact = resolveRedactor(loadedMymrc);
+    log('error', `fatal: ${redact(String(err && err.stack ? err.stack : err))}`);
     process.exit(1);
   });
 }

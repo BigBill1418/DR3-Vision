@@ -16,6 +16,11 @@ import { toHeaderSafe } from './header-safe';
 // reason `header-safe` is: this bundle has no `@/` alias and cannot import above
 // `src/lib/mymrc`. The app-facing name is `src/lib/ntfy-cooldown-store.ts`.
 import { claimCooldown, releaseCooldown } from './cooldown-store';
+// ADR-0133 — the ONE secret redactor, at a relative path for the same reason
+// `header-safe` and `cooldown-store` are: this bundle has no `@/` alias and
+// cannot import above `src/lib/mymrc`. The app-facing name is
+// `src/lib/redact-secrets.ts`.
+import { redactSecrets } from './redact-secrets';
 import type { FeedName } from './types';
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
@@ -46,6 +51,18 @@ const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
 const INGESTION_CLICK_URL =
   process.env['MYMRC_ADMIN_SURFACE_URL']?.trim() || 'https://dr3-vision.svdp.us/admin/mrc-scrape';
 const TIMEOUT_MS = 5_000;
+
+/**
+ * ADR-0133 — how much of a message may ride a page.
+ *
+ * A page is a POINTER; `mymrc_sync_runs.error` is the record. The 2026-09-16
+ * body was 1,331 characters of Playwright transcript on a phone notification,
+ * which is unreadable as a notification AND is the shape that hides a credential
+ * in the tail. 600 characters after redaction carries the first line, the
+ * request line and the run context — everything an operator reads before opening
+ * the admin surface.
+ */
+const BODY_MAX_CHARS = 600;
 
 export type AlertKind =
   | 'auth_failed'
@@ -219,7 +236,12 @@ export const ntfyPager: Pager = {
       0,
       250,
     );
-    const body = `${alert.message}\n\nfingerprint=${alert.fingerprint}`;
+    // ADR-0133 — REDACT, THEN CAP, and do both HERE even though every caller
+    // already redacts at its own sink. A publisher that trusts its callers is
+    // one forgetful caller away from putting a live session cookie on a phone
+    // and into a public-facing push server's 7-day cache, which is exactly what
+    // happened. `redactSecrets` is idempotent, so the double pass costs nothing.
+    const body = `${capForPage(redactSecrets(alert.message))}\n\nfingerprint=${alert.fingerprint}`;
     // ADR-0130 §6 — per KIND, not a blanket `high`. Until this change every MyMRC
     // alert was `high`, which is the grade that made four days of hourly pages
     // land as four days of hourly URGENT-adjacent buzzes rather than a daily note.
@@ -252,4 +274,25 @@ export const fingerprint = {
   zeroAnomaly: (site: string, feed: FeedName): string => `mymrc-zero-anomaly:${site}:${feed}`,
   deadman: (site: string, feed: FeedName): string => `mymrc-deadman:${site}:${feed}`,
   error: (site: string, feed: FeedName): string => `mymrc-error:${site}:${feed}`,
+  /**
+   * ADR-0133 — the SUSTAINED-failure escalation gets its own fingerprint.
+   *
+   * The `error` grade is now two pages, not one: `default` on the second
+   * consecutive failure of a site+feed and `high` on the third. Publishing the
+   * escalation under `mymrc-error:*` would hand it to that fingerprint's own
+   * 6 h cooldown — claimed one hour earlier by the `default` page it escalates —
+   * and the promotion would be suppressed by the thing it is escalating past.
+   * An escalation is a NEW fact; it gets a new key.
+   */
+  errorSustained: (site: string, feed: FeedName): string => `mymrc-error-sustained:${site}:${feed}`,
 };
+
+/**
+ * Trim a redacted message to what a notification can usefully carry, saying so
+ * rather than cutting silently. The fingerprint line is appended AFTER this, so
+ * the dedup key and the ledger handle always survive the cap.
+ */
+function capForPage(message: string): string {
+  if (message.length <= BODY_MAX_CHARS) return message;
+  return `${message.slice(0, BODY_MAX_CHARS)}\n[truncated - the full text is on the mymrc_sync_runs row]`;
+}

@@ -9,6 +9,81 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-16 — The MyMRC error page carried a live Salesforce session cookie (ADR-0133)
+
+Bill, 04:02 PT. The ntfy page `[DR3-Vision] MyMRC sync error - woodland [outbound]` was not a
+sentence — it was Playwright's **call log** for an `apiRequestContext.post: Timeout 45000ms
+exceeded` against the Aura list endpoint, and a call log renders **the request headers of the
+call it was making**. The `cookie:` header of that authenticated POST is the live Salesforce
+session for the MyMRC admin identity: `sid`, `sid_Client`, `oid`, `BrowserId`, `renderCtx`.
+1,331 characters, and the same string reached four durable places at once: Bill's phone, the
+ntfy server's 7-day message cache, `mymrc_sync_runs.error` (run `43301773…`), and this
+container's stdout on its way to Loki.
+
+A caught error is not a message. It is a **transcript**, and a transcript of an authenticated
+request contains the authentication. Two schema comments said otherwise —
+`// human error text (never contains credentials)` and `// last human failure text (never
+credentials)` — and both had been false since the day the Playwright transport was written,
+because nothing enforced them. Full trace, alternatives and the residual:
+`docs/adr/0133-the-page-that-carried-the-session-cookie.md`.
+
+### The code fix
+
+- **One pure redactor**, `src/lib/mymrc/redact-secrets.ts` (re-exported as
+  `src/lib/redact-secrets.ts`). Zero imports, zero I/O, **idempotent** — which is what lets the
+  producer and every sink each redact without either knowing about the other. Forced under
+  `mymrc/` by the same `rootDir` that forces `header-safe.ts` and `cooldown-store.ts`.
+  It drops a call log's header block **deny-by-default** (an allowlist cannot see the header the
+  next Playwright version adds) while keeping the first line and the `→ POST <url>` with its
+  query string, and masks `00D…!…` session ids, whole `cookie:`/`set-cookie:` lines,
+  `Authorization:` values and `sid=`/`sid_Client=`/`oid=`/`BrowserId=`/`renderCtx=`/`password=`
+  pairs anywhere in any text. Each pattern carries a comment saying **what it matched in this
+  leak**.
+- **Applied at every sink, not just the pager** — three of the four copies were not the pager,
+  and the database copy has the longest life: `mymrc_sync_runs.error` (both writers),
+  `mymrc_backfill_cursors.error`, every `mymrc-sync[…]` / `mymrc-backfill:` log line, and the
+  worker's top-level `fatal:` stack print.
+- **The publishers redact again and cap.** `ntfyPager` redacts what it is handed and trims to
+  600 characters before the fingerprint line — _a page is a pointer, the sync-run row is the
+  record._ The app publisher (`src/lib/ntfy.ts`) redacts at its single choke point too, because
+  `publishUnhandledError` sends a **stack** as its body to the same topic.
+- **The `.mjs` worker fails CLOSED.** `scripts/mymrc-scrape.mjs` has no build step, so it takes
+  the redactor through the same injected `mymrc` surface it already takes `syncSite` and
+  `ntfyPager` through. A container running an image that predates this change **withholds the
+  error text** rather than passing it through — a fail-open fallback would re-open the hole in
+  exactly the situation nobody is watching. The failure stays loud: ledger row, page and
+  non-zero exit are unchanged. `redact` is typed **required**, so a typed caller that omits it
+  fails at the call site.
+- The two schema comments now describe an enforced property instead of an aspiration.
+
+### The `error` page, re-graded (ADR-0037 Q3)
+
+_Page on crash-loop, not first restart._ A feed that retries every hour for free should not page
+on its first failed tick, and it did.
+
+| consecutive `error` runs of one site+feed | before                         | after            |
+| ----------------------------------------- | ------------------------------ | ---------------- |
+| 1                                         | page, `default`                | **log only**     |
+| 2                                         | silent (inside the 6 h window) | page, `default`  |
+| 3+                                        | silent                         | page, **`high`** |
+
+The streak comes from `mymrc_sync_runs` — read from the two rows the run already fetches
+`prior` from, one query, **no new table** — because the worker is a fresh child process every
+hour and an in-memory counter is 1 forever (ADR-0130). The escalation publishes under its **own**
+fingerprint `mymrc-error-sustained:<site>:<feed>`: under `mymrc-error:*` the promotion would be
+swallowed by the 6 h cooldown the `default` page claimed an hour earlier — suppressed by the
+very thing it escalates past. Only `error` moves; `auth_failed`, `contract_drift`,
+`zero_anomaly`, `stale_mirror`, `deadman` and `dateless_hauls` keep their ADR-0130 §6 rows.
+
+Recorded because it will otherwise be re-discovered: `ntfy.ts` has carried the sentence _"Caller
+promotes to `high` after 3 consecutive"_ since ADR-0130, and **no caller ever did it**. The seam
+was real, nothing drove it, and the comment read as a shipped feature. It is now true.
+
+**Accepted residual:** stdout written _before_ this deploy still holds one copy of the 04:02 PT
+text until the log file rotates. The credential is invalidated out of band, which is what makes
+that copy inert; the ntfy server copy ages out with the 7-day cache. See `docs/OPEN-ITEMS.md`
+§ 0.BV.
+
 ## 2026-09-15 — The data-invariant suite speaks only for onboarded sites (ADR-0131 Amendment 2)
 
 Bill, 9:52 PM PT: _"Eugene is not running it yet - flip it to pilot"_. Eugene's five floor
