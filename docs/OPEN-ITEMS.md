@@ -405,6 +405,37 @@ count did not take; read the table above first.
    every disagreement day. Found while deriving the 09-14 split; it is the reason
    MRC's own records could not supply one.
 
+6. **BT-6 — EUGENE'S FIRST HARD COUNT, expected end of day Wed 2026-09-16 (Rick
+   Albritton). _Bill → Rick → whoever records it._** Bill, 2026-09-15 9:52 PM PT:
+   _"flip it to pilot then send me a email with a draft to rick requesting a
+   hardcount at EOD 9/16"_. The draft (count after the line is cleared; report
+   total, program/non-program if separable, units on the line, who and when) went
+   to bill.barnard@svdp.us from `dr3-vision@svdp.us` at ~10:05 PM (Graph 202,
+   request-id `f5566877-…`); Bill forwards it to rick.albritton@svdp.us himself —
+   the Microsoft 365 connector on his account is read-only (no `Mail.Send`), so
+   nothing was sent to Rick by this system. **When the number arrives:** Eugene is
+   in pilot, so Rick cannot enter it; record it as an admin through
+   `POST /api/manager/eugene/snapshots` with `countedAt: 2026-09-16`,
+   **`units_total`** (Eugene is Oregon — total on site, not `units_indoor`),
+   `units_in_processing` per Rick, and the split if he has one (`measured`) else
+   `pool_attribution: legacy` and say so. Tier 0: a first count has no guardrail.
+   Note the suite will NOT then start paging for Eugene — it is out of scope while
+   `loads_inventory` is `pilot` (ADR-0131 Am. 2); the anchor simply waits for the
+   day Eugene is flipped live. Done when the row exists with an audit entry and
+   Bill has the `reconciled_delta` (which will equal the count: nothing has ever
+   flowed at Eugene).
+
+7. **BT-7 — residual: a timing-sensitive payroll test flakes under host load
+   (recorded 2026-09-15 10:57 PM PT).** The pre-push gate refused a docs-only push
+   once tonight: `src/lib/bonus/payroll-delivery.test.ts` › _"ADR-0117 — claims the
+   attempt BELOW the refusal gates"_ saw `sendPayrollPdf` called once when it
+   expected zero calls. Same file passed 3/3 in isolation immediately after and 4/4
+   in the gate earlier today; the code has not changed since ADR-0117 (`ec526ee`);
+   HSH load average was ~10 at the time (sibling agents building). The test fires
+   `triggerPayrollDelivery` and waits a fixed 20 ms before asserting the negative —
+   a race by construction. Worth replacing the sleep with an awaited settle point
+   when someone is next in that file; not a payroll defect.
+
 ### What this section does NOT change
 
 - 0.BS stays open for **BS-1 only** (MRC's correction of the two hauls). BS-3 is
