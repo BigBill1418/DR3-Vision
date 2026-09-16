@@ -183,7 +183,7 @@ app`, a real rebuild), the health gate (attempt 1) and the smoke test, but
 
 ---
 
-## 0.BT — 2026-09-14 the three 02:30 AM pages — **BT-1 + BT-2 DONE 2026-09-15 (the count landed); BT-3 WAITS ON BILL; BT-4 optional; BT-5 recorded** (Bill, 2026-09-14 02:32 PT)
+## 0.BT — 2026-09-14 the three 02:30 AM pages — **BT-1 + BT-2 + BT-3 DONE 2026-09-15; BT-4 optional; BT-5 recorded** (Bill, 2026-09-14 02:32 PT)
 
 Bill: _"look at the last three ntfy notifications I got and add them to the roadmap
 for immediate diagnosis and repair during the next session."_ This section IS that
@@ -318,8 +318,47 @@ count did not take; read the table above first.
    excludes Labor Day (09-07) via `site_holidays`, so the arithmetic is right; it
    clears itself on the run after the count is recorded.
 
-3. **BT-3 — EUGENE HAS NO ANCHOR AND NO WORKBOOK SOURCE (INV-ANCHOR-FRESH eugene + INV-WORKBOOK-PATH-TOKEN eugene). _Bill decides, then code._**
-   Two invariants fire daily on a site with zero rows in every flow table, zero
+3. **BT-3 — EUGENE HAS NO ANCHOR AND NO WORKBOOK SOURCE (INV-ANCHOR-FRESH eugene + INV-WORKBOOK-PATH-TOKEN eugene). — DONE 2026-09-15.**
+
+   **Bill's answer, 2026-09-15 9:52 PM PT:** _"Eugene is not running it yet - flip
+   it to pilot"_ — i.e. the second branch below. Both halves executed the same
+   evening.
+
+   **(a) The flip — data, done ~9:58 PM PT** by the orchestrating session through
+   the product's own admin route (`PATCH /api/admin/rollout/{id}`, admin session,
+   one `audit_log` row each), never a database write. All **five** Eugene surfaces
+   `live → pilot`: `loads_inventory`, `ipad_count`, `ipad_inbound`, `ipad_dropoff`,
+   `ipad_queue`. Each carries the criteria note _"Eugene is not running Loads &
+   Inventory yet (Bill, 2026-09-15 9:52 PM PT). Back to pilot until a first hard
+   count and a daily-log workbook source exist; the invariant suite is being scoped
+   to sites whose loads_inventory surface is live. OPEN-ITEMS 0.BT BT-3."_
+   Woodland's `loads_inventory` is untouched and stays `live`.
+
+   **(b) The code — ADR-0131 Amendment 2.** One shared predicate,
+   `src/lib/invariants/scope.ts`, reading the ADR-0047 `loads_inventory` surface
+   through the existing `isUiSurfaceLive` resolver — **no new `sites` column**, which
+   supersedes the migration idea recorded on 09-14 (the onboarding signal already
+   existed; it was in `rollout_surfaces`). Applied to the inventory `sites()` helper
+   (`INV-ANCHOR-FRESH`, `INV-ONHAND-COMPUTABLE`, `INV-POOL-NON-NEGATIVE`,
+   `INV-FLOOR-WITHIN-CAPACITY`), to `INV-WORKBOOK-PATH-TOKEN`, and to
+   `INV-INBOUND-PLAUSIBLE` (keyed on `mymrc_hauls_mirror.site_id`). The narrowing is
+   recorded in the invariants' own comments as the code asked for — the
+   `INV-WORKBOOK-PATH-TOKEN` comment that said _"narrow this invariant deliberately
+   and say so HERE"_ now does. `INV-ANCHOR-POOLS-SUM` and `INV-ANCHOR-UNIQUE` stay
+   global by decision: they iterate snapshot ROWS, and a stray count at a pilot site
+   is a finding worth keeping. A scope that resolves to ZERO onboarded sites returns
+   `indeterminate`, never `ok`.
+
+   **Re-entry is automatic.** Flip a site `live` at `/admin/rollout` and it is a
+   subject again on the next 02:30 run with no deploy — and `INV-ANCHOR-FRESH` then
+   demands its first physical count immediately, as designed. That is the mechanism
+   that makes this reversible, and it is a test, not a promise
+   (`src/lib/inventory/invariants.test.ts`).
+
+   **Not silenced:** `INV-INBOUND-PLAUSIBLE` keeps naming Woodland H-138391 /
+   H-139774 until MRC corrects them (**BS-1**, still MRC's action).
+
+   _Original item:_ Two invariants fire daily on a site with zero rows in every flow table, zero
    counts, no workbook source and a 6,000-unit cap. Either Eugene is operating and
    unrecorded, or it is not onboarded and the suite cannot tell the difference.
    **Diagnosed 2026-09-15 — Eugene is SWITCHED ON and has never been used.**
@@ -368,15 +407,19 @@ count did not take; read the table above first.
 
 ### What this section does NOT change
 
-- 0.BS stays open for BS-1 (MRC's correction of the two hauls) and BS-4 (= BT-3).
-  BS-3 is DONE (the count). BT-1/BT-2 were BS-1/BS-3 re-asserted with evidence.
-- No code, credential or schedule changed on 2026-09-14 or 2026-09-15. **Data
-  changed once, on 2026-09-15 08:14 PT:** one `site_inventory_snapshots` row and
-  its `audit_log` row, through the manager route (table above). Nothing else.
+- 0.BS stays open for **BS-1 only** (MRC's correction of the two hauls). BS-3 is
+  DONE (the count) and BS-4 is CLOSED with a named residual (see 0.BS). BT-1/BT-2
+  were BS-1/BS-3 re-asserted with evidence.
+- No code, credential or schedule changed on 2026-09-14. **On 2026-09-15 data
+  changed twice** — 08:14 PT, one `site_inventory_snapshots` row and its
+  `audit_log` row through the manager route (table above); ~21:58 PT, five Eugene
+  `rollout_surfaces` rows `live → pilot` and their five `audit_log` rows through
+  the admin rollout route (BT-3) — **and code changed once**, the ADR-0131
+  Amendment 2 scoping of the invariant suite. No credential or schedule changed.
 
 ---
 
-## 0.BS — 2026-09-10 the floor reads 11,020 in a 3,500-unit building — **ADR-0131 ACCEPTED; the data repair is NOT ours**
+## 0.BS — 2026-09-10 the floor reads 11,020 in a 3,500-unit building — **ADR-0131 ACCEPTED; BS-3 + BS-4 CLOSED 2026-09-15; only BS-1 (MRC's correction) is still open**
 
 Bill: _"the program units on hand are wildly and completely broken - all the way
 around - this needs to be totally fixed"_ and, separately, _"we need to stop
@@ -436,11 +479,33 @@ has been _filed_ by this system.
    entry is the durable record. If the count has been taken, close this item and
    record the `reconciled_delta`.
 
-4. **BS-4 — DECIDE WHAT EUGENE'S INVENTORY SURFACES SHOULD SAY. _Bill._**
-   Eugene has **no physical anchor, ever**, and zero rows in all five flow
-   tables. `onHand` therefore returns exactly `0` — not null, not an error — and
-   "not yet onboarded" renders identically to "nothing on the floor", at
-   `text-5xl` on the operator iPad. Options: keep `0`; render "—" with an
+4. **BS-4 — DECIDE WHAT EUGENE'S INVENTORY SURFACES SHOULD SAY. — CLOSED 2026-09-15 by BT-3, with one residual named below.**
+
+   Bill decided it at the root instead of at the tile: Eugene is **not onboarded**
+   (BT-3), so its five floor surfaces are back in `pilot` and the suite no longer
+   speaks for it (ADR-0131 Amendment 2). What an operator sees is settled. What a
+   MANAGER sees is not, and the claim "a pilot site no longer renders the `0` tile"
+   is only true of the iPad — checked in code 2026-09-15, not assumed:
+
+   | Surface                                         | Gate                                                                                         | After the flip                                                                                                                                                                                                                                                  |
+   | ----------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `/operator/eugene/today` — the `text-5xl` block | `ipad_today_summary` (`today/page.tsx`, no admin bypass)                                     | Not rendered — and **never was**: that surface has been `pilot` at BOTH sites since 2026-07-28, so the `text-5xl` `0` this item describes was already unreachable when the item was written. The hub now renders the heading plus "not activated" and no cards. |
+   | `/dashboard/eugene/loads-inventory`             | `loads_inventory`, admins bypass (`loads-inventory/page.tsx`)                                | A Eugene manager gets "Not yet activated". **An admin still passes the gate** and sees `FloorInventoryTile` reading `0 / 0 / 0` with a `measured` anchor badge. Intended: the admin bypass is how a surface is validated in pilot (ADR-0047 §4.2).              |
+   | `/dashboard/eugene` — the "On the floor" card   | **none** (`OpsOverviewPanel.tsx`; `page.tsx` gates only the reimbursement tile and EOD link) | **RESIDUAL.** Still renders `0 units total · 0 program · 0 non-program` to any admin **and to Eugene's 4 active managers**. `computeOpsOverview` calls `computeFloorInventoryTile` ungated.                                                                     |
+
+   **The residual, stated plainly:** the ops-overview stat card is the one place
+   "not yet onboarded" still renders identically to "nothing on the floor", to a
+   real audience. It is a one-line UI gate (read `loads_inventory` beside the
+   existing `reimbursementTileLive` / `eodLive` reads and render `—` with
+   "Not activated for this site"), deliberately **not** bundled into the
+   invariant-suite change: it is a product decision about a manager screen, it
+   touches no data path, and it does not affect the 02:30 output this section is
+   about. **Bill's call**, tracked here rather than reopened as its own section.
+
+   _Original item:_ Eugene has **no physical anchor, ever**, and zero rows in all
+   five flow tables. `onHand` therefore returns exactly `0` — not null, not an
+   error — and "not yet onboarded" renders identically to "nothing on the floor",
+   at `text-5xl` on the operator iPad. Options: keep `0`; render "—" with an
    explanation when no anchor has ever existed; or refuse the tile. A product
    decision, not a bug. (`INV-COR-HAS-ANCHOR`, ADR-0131 D8 #10, closes the
    regulatory half either way.)

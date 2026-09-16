@@ -9,6 +9,43 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-15 — The data-invariant suite speaks only for onboarded sites (ADR-0131 Amendment 2)
+
+Bill, 9:52 PM PT: _"Eugene is not running it yet - flip it to pilot"_. Eugene's five floor
+surfaces (`loads_inventory`, `ipad_count`, `ipad_inbound`, `ipad_dropoff`, `ipad_queue`) went
+`live → pilot` through `/admin/rollout` the same evening, one `audit_log` row each. This is the
+code half.
+
+The ADR-0131 suite is scoped to sites **onboarded to Loads & Inventory** — those whose
+`loads_inventory` UI surface (ADR-0047) is `live`. One shared predicate,
+`src/lib/invariants/scope.ts`, built on the existing `isUiSurfaceLive` resolver:
+
+- **No new `sites` column.** The onboarding signal already existed in `rollout_surfaces` — the
+  same admin-flipped, audited row `assertLoadsInventoryActivated` uses to refuse every
+  loads/inventory write. A second answer to one question is a second answer to drift from. This
+  supersedes the migration floated in OPEN-ITEMS on 09-14.
+- **Applied everywhere the suite iterates sites:** the inventory `sites()` helper
+  (`INV-ANCHOR-FRESH`, `INV-ONHAND-COMPUTABLE`, `INV-POOL-NON-NEGATIVE`,
+  `INV-FLOOR-WITHIN-CAPACITY`), `INV-WORKBOOK-PATH-TOKEN`, and `INV-INBOUND-PLAUSIBLE`, which is
+  keyed on `mymrc_hauls_mirror.site_id`.
+- **`INV-ANCHOR-POOLS-SUM` and `INV-ANCHOR-UNIQUE` stay global**, by decision: they iterate
+  snapshot ROWS, and a stray count at a site that is not supposed to have one is a finding worth
+  keeping.
+- **Zero onboarded sites is `indeterminate`, never `ok`** — the check says so itself, naming
+  `loads_inventory` as the reason, on top of the runner's vacuity guard. `isUiSurfaceLive` is
+  fail-closed, so a database the suite cannot read produces silence, not an all-clear.
+- **Re-entry is automatic.** Flip a site `live` and it is a subject again on the next 02:30 run
+  with no deploy — `INV-ANCHOR-FRESH` then demands its first physical count immediately, as
+  designed. Asserted as a test, not promised in a comment.
+- **Nothing is silenced at Woodland.** `INV-INBOUND-PLAUSIBLE` keeps naming H-138391 / H-139774
+  until MRC corrects them (OPEN-ITEMS BS-1). The scope is the site list; the threshold is
+  untouched.
+
+Effect on the 02:30 PT digest: Eugene's two nightly refusal pages — no physical anchor ever, no
+`workbook_sources` row, on a site with zero rows in every flow table — stop. Closes OPEN-ITEMS
+0.BT BT-3 and 0.BS BS-4; BS-4 carries one named residual, the ungated "On the floor" card on the
+manager site dashboard, which is Bill's call.
+
 ## 2026-09-15 — The nine ADR-0132 decision emails re-sent to accounting (data; nine sends)
 
 Bill, 16:28 PT: _"resend all nine - I'll give accounting a heads up"_. Two minutes after the

@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const findMany = vi.fn();
 const count = vi.fn();
-const siteFindMany = vi.fn(async () => [{ id: 'site-w', code: 'woodland' }]);
+const siteFindMany = vi.fn();
+const isUiSurfaceLive = vi.fn();
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     mymrcHaulsMirror: {
@@ -12,11 +13,25 @@ vi.mock('@/lib/prisma', () => ({
     site: { findMany: (...a: unknown[]) => siteFindMany(...(a as [])) },
   },
 }));
+vi.mock('@/lib/notify/rollout', async (orig) => ({
+  ...(await orig<typeof import('@/lib/notify/rollout')>()),
+  isUiSurfaceLive: (...a: unknown[]) => isUiSurfaceLive(...a),
+}));
 
 import { LOADS_INVARIANTS, HAUL_UNIT_PLAUSIBILITY_MAX } from './invariants';
 
 const inv = LOADS_INVARIANTS.find((i) => i.id === 'INV-INBOUND-PLAUSIBLE')!;
 const ctx = { now: new Date('2026-09-11T08:00:00Z') };
+
+const EUGENE = { id: 'site-e', code: 'eugene' };
+const WOODLAND = { id: 'site-w', code: 'woodland' };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  siteFindMany.mockResolvedValue([EUGENE, WOODLAND]);
+  // Production, 2026-09-15: Woodland live, Eugene flipped back to pilot.
+  isUiSurfaceLive.mockImplementation(async (_c: string, siteId: string) => siteId === 'site-w');
+});
 
 function haul(over: Record<string, unknown> = {}) {
   return {
@@ -93,5 +108,47 @@ describe('INV-INBOUND-PLAUSIBLE', () => {
     await inv.check(ctx);
     expect(findMany).toHaveBeenCalled();
     expect(HAUL_UNIT_PLAUSIBILITY_MAX).toBe(350);
+  });
+});
+
+// ── ADR-0131 Amendment 2 — the mirror is read only for onboarded sites ───────
+describe('INV-INBOUND-PLAUSIBLE is scoped to onboarded sites', () => {
+  it('asks the mirror only about sites whose loads_inventory is live', async () => {
+    count.mockResolvedValue(1131);
+    findMany.mockResolvedValue([]);
+    await inv.check(ctx);
+    expect(count.mock.calls[0]![0].where.site_id).toEqual({ in: ['site-w'] });
+    expect(findMany.mock.calls[0]![0].where.site_id).toEqual({ in: ['site-w'] });
+  });
+
+  it('widens the moment a second site is flipped live', async () => {
+    isUiSurfaceLive.mockResolvedValue(true);
+    count.mockResolvedValue(1131);
+    findMany.mockResolvedValue([]);
+    await inv.check(ctx);
+    expect(count.mock.calls[0]![0].where.site_id).toEqual({ in: ['site-e', 'site-w'] });
+  });
+
+  it('is indeterminate — never ok — when no site is onboarded', async () => {
+    isUiSurfaceLive.mockResolvedValue(false);
+    const out = await inv.check(ctx);
+    expect(out.status).toBe('indeterminate');
+    expect(out.subjectsChecked).toBe(0);
+    expect(out.note).toMatch(/loads_inventory/);
+    // And it must not have gone to the mirror at all: a site-less `in: []` filter
+    // matches nothing, which would have read as a clean 0-of-0 pass.
+    expect(count).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps naming Woodland H-138391 — BS-1 is not silenced by the narrowing', async () => {
+    // The one thing this change must NOT do. H-138391 / H-139774 wait on MRC; a
+    // scope that quietly swallowed them would be the false all-clear the suite exists
+    // to prevent.
+    count.mockResolvedValue(1131);
+    findMany.mockResolvedValue([haul()]);
+    const out = await inv.check(ctx);
+    expect(out.status).toBe('violated');
+    expect(out.violations[0]!.subject).toBe('woodland H-138391');
   });
 });

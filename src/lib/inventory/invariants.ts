@@ -13,6 +13,7 @@
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
 import { onHand, snapshotTotalUnits, type RunningBalance } from '@/lib/inventory/running-balance';
 import { businessDaysBetween } from '@/lib/mymrc/business-days';
+import { noOnboardedSites, onboardedSites } from '@/lib/invariants/scope';
 import { prisma } from '@/lib/prisma';
 import { dayISO, pacificDayISO } from '@/lib/time';
 import type {
@@ -68,11 +69,43 @@ interface SiteRow {
   max_units_total_on_site: number | null;
 }
 
-function sites(): Promise<SiteRow[]> {
-  return prisma.site.findMany({
+/**
+ * The sites this suite speaks for — ADR-0131 Amendment 2, 2026-09-15.
+ *
+ * NOT every row in `sites`. A site is in scope only when its `loads_inventory` UI
+ * surface (ADR-0047) is `live`, which is this repo's existing, admin-flipped,
+ * audited answer to "is this site running Loads & Inventory?". Every invariant
+ * below asserts something about a floor being operated on — a fresh anchor,
+ * non-negative pools, a balance inside the permitted storage — and none of those
+ * is a meaningful claim about a site that has never recorded a single flow.
+ *
+ * WHY, concretely: Eugene's surfaces were switched on 2026-07-22 12:54 PT and were
+ * never used — 0 `inbound_loads`, 0 `consumer_dropoffs`, 0 `processed_units_daily`,
+ * 0 physical counts, ever. `INV-ANCHOR-FRESH` therefore paged at 02:30 PT every
+ * night from 2026-09-12 saying Eugene has no count, which was true, actionable by
+ * nobody, and indistinguishable in the digest from Woodland's real staleness. Bill,
+ * 2026-09-15 9:52 PM PT: _"Eugene is not running it yet - flip it to pilot"_; the
+ * five Eugene surfaces went back to `pilot` the same evening.
+ *
+ * RE-ENTRY IS AUTOMATIC. Flip a site `live` at `/admin/rollout` and it is back in
+ * this list on the next 02:30 run with no deploy — and `INV-ANCHOR-FRESH` will then
+ * demand a first physical count from it immediately. That is the designed behaviour:
+ * a floor being worked and never counted is precisely what it exists to notice.
+ *
+ * Callers must handle an EMPTY result with {@link noOnboardedSites} rather than
+ * `verdict(0, [])`, which would read `ok` until the runner rewrote it.
+ *
+ * Deliberately NOT narrowed: `INV-ANCHOR-POOLS-SUM` and `INV-ANCHOR-UNIQUE`, which
+ * iterate snapshot ROWS. A count row with a broken pool split is wrong wherever it
+ * sits, and a stray count at a site that is not supposed to have one is a finding
+ * worth keeping, not an out-of-scope subject.
+ */
+async function sites(): Promise<SiteRow[]> {
+  const all = await prisma.site.findMany({
     select: { id: true, code: true, max_units_indoor: true, max_units_total_on_site: true },
     orderBy: { code: 'asc' },
   });
+  return onboardedSites(all);
 }
 
 export const INVENTORY_INVARIANTS: readonly Invariant[] = [
@@ -149,9 +182,10 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
   {
     id: 'INV-ANCHOR-FRESH',
     tier: 'refusal',
-    title: 'Every site has a non-voided physical anchor newer than the count cadence',
+    title: 'Every onboarded site has a non-voided physical anchor newer than the count cadence',
     adr: 'ADR-0037',
-    assumption: 'Every active site has a non-voided physical anchor newer than the count cadence.',
+    assumption:
+      'Every site ONBOARDED to Loads & Inventory - its `loads_inventory` UI surface is `live` - has a non-voided physical anchor newer than the count cadence. Narrowed from "every active site" by ADR-0131 Amendment 2; a site in `pilot` is not being operated on, so it has nothing to anchor.',
     severity: 'default',
     gate:
       'q1 actionable in 5min? NO - the fix is to schedule a floor count. q2 customer-visible? ' +
@@ -161,6 +195,7 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
       'Schedule a floor count at the named site. Until one exists, every number computed forward from the anchor - floor tile, COR, MRC invoice - rests on an unverified base.',
     async check(ctx): Promise<InvariantOutcome> {
       const all = await sites();
+      if (all.length === 0) return noOnboardedSites();
       const holidayRows = await prisma.siteHoliday.findMany({
         select: { site_id: true, holiday_date: true },
       });
@@ -254,7 +289,7 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
   {
     id: 'INV-ONHAND-COMPUTABLE',
     tier: 'refusal',
-    title: 'The live on-hand balance computes at every site without refusing',
+    title: 'The live on-hand balance computes at every onboarded site without refusing',
     adr: 'ADR-0037',
     assumption:
       'Refused rather than summed: an untaught kind added to the program pool by default is a silent mis-billing.',
@@ -281,6 +316,7 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
       // resolved `legacy` while a measured count exists, which silently moves the
       // whole floor into the program pool.
       const all = await sites();
+      if (all.length === 0) return noOnboardedSites();
       const violations: Violation[] = [];
       for (const s of all) {
         try {
@@ -315,7 +351,7 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
   {
     id: 'INV-POOL-NON-NEGATIVE',
     tier: 'refusal',
-    title: 'No inventory pool is negative at any site',
+    title: 'No inventory pool is negative at any onboarded site',
     adr: 'ADR-0037',
     assumption:
       'Inventory is two ledgers - program / non-program - because MRC is billed on PROGRAM units only.',
@@ -331,6 +367,7 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
       // possible (the balance subtracts freely) and physically impossible, so it is
       // a pure statement about the data.
       const all = await sites();
+      if (all.length === 0) return noOnboardedSites();
       const violations: Violation[] = [];
       let checked = 0;
       for (const s of all) {
@@ -384,6 +421,7 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
       // uses. CA grades on the indoor cap, OR on the total on-site cap; there is no
       // outdoor addend (ADR-0037 addendum 2026-07-22).
       const all = await sites();
+      if (all.length === 0) return noOnboardedSites();
       const violations: Violation[] = [];
       let checked = 0;
       for (const s of all) {

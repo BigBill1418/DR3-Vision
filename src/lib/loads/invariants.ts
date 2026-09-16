@@ -7,6 +7,7 @@
 // `@/lib/prisma` breaks `npm run build:mymrc` with TS6059 (the same forced
 // placement recorded in `cooldown-store.ts` and `ntfy-header-safe.ts`).
 
+import { noOnboardedSites, onboardedSites } from '@/lib/invariants/scope';
 import { prisma } from '@/lib/prisma';
 import type { Invariant, InvariantOutcome, Violation } from '@/lib/invariants/types';
 import { verdict } from '@/lib/invariants/types';
@@ -46,9 +47,11 @@ export const LOADS_INVARIANTS: readonly Invariant[] = [
   {
     id: 'INV-INBOUND-PLAUSIBLE',
     tier: 'implausibility',
-    title: 'No delivered haul carries more program units than a trailer can hold',
+    title:
+      'No delivered haul at an onboarded site carries more program units than a trailer can hold',
     adr: 'ADR-0131',
-    assumption: 'No Delivered General haul carries more units than the largest container can hold.',
+    assumption:
+      'No Delivered General haul carries more units than the largest container can hold - asked of hauls at sites ONBOARDED to Loads & Inventory (`loads_inventory` UI surface `live`), the only sites whose hauls reach a running balance (ADR-0131 Amendment 2).',
     severity: 'default',
     gate:
       'ADR-0131 D1/D6 put this in Tier B, and the reason is not caution: there is no ' +
@@ -72,11 +75,29 @@ export const LOADS_INVARIANTS: readonly Invariant[] = [
       //
       // `disappeared_at IS NULL` matters as much: a withdrawn row is a correction MRC
       // has already made, and reporting it would page about the fix.
-      const [subjects, offenders, sites] = await Promise.all([
-        prisma.mymrcHaulsMirror.count({ where: { ...LIVE_DELIVERED_GENERAL } }),
+      //
+      // ADR-0131 Amendment 2 — scoped to ONBOARDED sites, the same predicate the
+      // inventory and workbook-sync invariants now use, because this one is keyed on
+      // `mymrc_hauls_mirror.site_id` and an implausible haul only matters where it
+      // reaches a floor. Two things make the narrowing safe rather than a new blind
+      // spot: (1) `inbound-bridge.ts` already filters `site_id: { not: null }`, so an
+      // UNATTRIBUTED mirror row never reaches `inbound_loads` and never moves any
+      // balance — a site-keyed scope loses nothing the ledger can see; (2) the scope
+      // is the site list, never the threshold, so Woodland's H-138391 / H-139774 keep
+      // being named until MRC corrects them upstream (OPEN-ITEMS BS-1).
+      const sites = await onboardedSites(
+        await prisma.site.findMany({ select: { id: true, code: true } }),
+      );
+      if (sites.length === 0) return noOnboardedSites();
+      const siteIds = sites.map((s) => s.id);
+      const [subjects, offenders] = await Promise.all([
+        prisma.mymrcHaulsMirror.count({
+          where: { ...LIVE_DELIVERED_GENERAL, site_id: { in: siteIds } },
+        }),
         prisma.mymrcHaulsMirror.findMany({
           where: {
             ...LIVE_DELIVERED_GENERAL,
+            site_id: { in: siteIds },
             program_unit_count: { gt: HAUL_UNIT_PLAUSIBILITY_MAX },
           },
           select: {
@@ -94,11 +115,10 @@ export const LOADS_INVARIANTS: readonly Invariant[] = [
           // the true denominator.
           take: 20,
         }),
-        // `mymrc_hauls_mirror.site_id` is a BARE column, not a Prisma relation (the
-        // mirror is a copy of someone else's org and deliberately owns no edges), so
-        // the site code is resolved here rather than through an include.
-        prisma.site.findMany({ select: { id: true, code: true } }),
       ]);
+      // `mymrc_hauls_mirror.site_id` is a BARE column, not a Prisma relation (the
+      // mirror is a copy of someone else's org and deliberately owns no edges), so
+      // the site code is resolved here rather than through an include.
       const codeById = new Map(sites.map((s) => [s.id, s.code]));
 
       const violations: Violation[] = offenders.map((h) => {
@@ -113,7 +133,8 @@ export const LOADS_INVARIANTS: readonly Invariant[] = [
         };
       });
 
-      // The OPPORTUNITY count is every live haul, not the offenders. Reporting only
+      // The OPPORTUNITY count is every live haul AT AN ONBOARDED SITE, not the
+      // offenders and not every row in the mirror. Reporting only
       // the filtered rows would make a clean run `ok` over zero subjects, which the
       // runner rewrites to indeterminate — leaving the invariant permanently
       // "unchecked" and therefore permanently ignored.

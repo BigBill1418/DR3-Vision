@@ -488,3 +488,101 @@ rows it was built for. The lesson is the ADR's own: a number in a decision recor
 that nobody can re-derive is indistinguishable from a number that was never true,
 and the fix is to state the query, not the result. Every figure in the table above
 came from a query recorded in `docs/2026-09-10-woodland-program-floor-overstatement.md`.
+
+---
+
+## Amendment 2 — 2026-09-15: the suite speaks only for onboarded sites
+
+**Date:** 2026-09-15 · **Status:** Accepted (Bill's decision, 9:52 PM PT) · **Closes:** OPEN-ITEMS 0.BT BT-3, 0.BS BS-4
+
+### The decision
+
+The data-invariant suite is narrowed to sites **onboarded to Loads & Inventory** —
+those whose `loads_inventory` UI rollout surface (ADR-0037 D7, made data-driven by
+ADR-0047) is `live`. Everything that iterates sites is scoped by one shared
+predicate in `src/lib/invariants/scope.ts`:
+
+| Invariant                                   | Before                 | After                     |
+| ------------------------------------------- | ---------------------- | ------------------------- |
+| `INV-ANCHOR-FRESH`                          | every row in `sites`   | onboarded sites           |
+| `INV-ONHAND-COMPUTABLE`                     | every row in `sites`   | onboarded sites           |
+| `INV-POOL-NON-NEGATIVE`                     | every row in `sites`   | onboarded sites           |
+| `INV-FLOOR-WITHIN-CAPACITY`                 | every row in `sites`   | onboarded sites           |
+| `INV-WORKBOOK-PATH-TOKEN`                   | every row in `sites`   | onboarded sites           |
+| `INV-INBOUND-PLAUSIBLE`                     | every live mirror haul | hauls at onboarded sites  |
+| `INV-ANCHOR-POOLS-SUM`, `INV-ANCHOR-UNIQUE` | snapshot ROWS          | **unchanged — see below** |
+
+Bill, 2026-09-15 9:52 PM PT: _"Eugene is not running it yet - flip it to pilot"_.
+The flip was executed the same evening through `PATCH /api/admin/rollout/{id}` —
+five Eugene surfaces (`loads_inventory`, `ipad_count`, `ipad_inbound`,
+`ipad_dropoff`, `ipad_queue`) to `pilot`, one `audit_log` row each, criteria note
+citing 0.BT BT-3. Woodland's `loads_inventory` stays `live`. This amendment is the
+code half of that decision.
+
+### Why the rollout surface, and not a new `sites` column
+
+The obvious alternative — `sites.onboarded_at`, or an `is_active` boolean — was
+considered and rejected. The repo would then hold **two** answers to "is this site
+running Loads & Inventory?", and the day they disagree is the day a site is
+operating behind a gate the suite has stopped watching. `loads_inventory` is
+already the admin-flipped, audited switch that decides whether operators and
+managers can reach the flow at all: `assertLoadsInventoryActivated` in
+`src/lib/loads/record-guards.ts` refuses every loads/inventory write behind it. A
+site nobody may write to is a site with nothing to assert about. The predicate also
+reads through `isUiSurfaceLive` — the one resolver — rather than its own
+`rolloutSurface` query, because a second reader is the same drift in smaller print.
+
+On 2026-09-14 this was recorded the other way round: the BT-3 diagnosis noted that
+"no `active`/onboarded column exists — the suite has nothing to scope on" and
+floated a migration. That is superseded. The signal existed; it was in
+`rollout_surfaces`.
+
+### Why the two row-scanners are not narrowed
+
+`INV-ANCHOR-POOLS-SUM` and `INV-ANCHOR-UNIQUE` iterate `site_inventory_snapshots`
+rows, not sites. A count row whose pools do not sum is wrong wherever it sits, and
+a stray physical count at a site that is not supposed to have one is a finding
+worth keeping rather than an out-of-scope subject. Scoping them would buy nothing
+(Eugene has never had a snapshot) and would cost the one case where they earn
+their keep.
+
+### Zero onboarded sites is `indeterminate`, never `ok`
+
+`verdict(0, [])` returns `ok`, and the runner's vacuity guard rewrites that to
+`indeterminate`. That backstop is kept, and a second, explicit guard is added in
+front of it: a check whose scope resolves empty returns `indeterminate` **itself**,
+with a note naming `loads_inventory` as the reason. Two reasons the redundancy is
+deliberate — anything calling `check()` directly (a test included) would otherwise
+read a green the runner has not yet corrected, and the runner's generic note
+("examined 0 subjects") cannot distinguish "nobody is onboarded" from "my query
+broke". `isUiSurfaceLive` is fail-closed, so a database the suite cannot read
+produces an empty scope, which now produces silence — not an all-clear.
+
+### Consequences
+
+- **Eugene leaves the 02:30 PT output.** The two refusal-tier pages it produced
+  every night since 2026-09-12 — no physical anchor ever, no `workbook_sources`
+  row — were both true and actionable by nobody: Eugene has 0 `inbound_loads`, 0
+  `consumer_dropoffs`, 0 `processed_units_daily`, 0 physical counts in its entire
+  history, and no account in the MyMRC mirror. The digest drops to the findings
+  that name a floor someone is standing on.
+- **Re-entry is automatic and needs no deploy.** Flip a site's `loads_inventory`
+  `live` at `/admin/rollout` and it is a subject again on the next 02:30 run.
+  `INV-ANCHOR-FRESH` will then immediately demand a first physical count from it.
+  That is the designed behaviour, not a regression: a floor being worked and never
+  counted is exactly what that invariant exists to notice, and it is the mechanism
+  that makes this narrowing safe to reverse.
+- **Nothing is silenced at Woodland.** `INV-INBOUND-PLAUSIBLE` keeps naming
+  H-138391 and H-139774 until MRC corrects them upstream (0.BS BS-1). The scope is
+  the site list; the threshold is untouched.
+- **The mirror's unattributed rows.** `INV-INBOUND-PLAUSIBLE` now filters
+  `site_id IN (onboarded)`, which also drops rows with a NULL `site_id`. That
+  loses nothing the ledger can see: `src/lib/mymrc/inbound-bridge.ts` already
+  filters `site_id: { not: null }`, so an unattributed mirror row never reaches
+  `inbound_loads` and never moves a balance. Production carries none today (1,131
+  live Delivered General rows, all Woodland).
+- **The honest cost.** The suite can no longer see a pilot site that is quietly
+  being operated on. That case is covered from the other side: writes are refused
+  by `assertLoadsInventoryActivated`, so operating a pilot site requires an admin
+  acting deliberately — and `INV-ANCHOR-POOLS-SUM` / `INV-ANCHOR-UNIQUE`, which
+  stay global, would still see any snapshot row such a site produced.
