@@ -638,6 +638,65 @@ describe('awaiting-2nd badge count', () => {
     expect(await awaitingSecondApprovalCount(p, { userId: 'u-shannon', role: 'manager' })).toBe(1); // Eugene only
     expect(await awaitingSecondApprovalCount(p, { userId: 'u-morena', role: 'manager' })).toBe(0);
   });
+
+  // ADR-0066 incident (2026-09-18). The badge counted the pre-0066 per-site
+  // `ap_second_approvers` roster, which holds ONE row (Shannon/eugene). Every routed
+  // peer therefore saw 0 — so on top of being shown no Approve button, the four
+  // managers were never told a >= $1,000 invoice was waiting on their signature.
+  it('THE REGRESSION: the ROUTED PEER is counted even with no ap_second_approvers row', async () => {
+    const db = newFakeDb({
+      // Morena first-approved a WOODLAND invoice; routing sends the second signature
+      // to Janette, who is single-site Woodland and holds no legacy roster row.
+      requests: [awaitingReq({ id: 'r-w', site_id: 'site-w', first_approver_id: 'u-morena' })],
+      users,
+      sites,
+      secondApprovers, // still only Shannon/eugene — the production shape
+      approvalRouting: [
+        {
+          id: 'ar-mg-jt',
+          first_approver_id: 'u-morena',
+          second_approver_id: 'u-janette',
+          fallback_approver_id: null,
+          fallback_after_hours: 24,
+          active: true,
+        },
+      ],
+    });
+    const p = fp(db);
+    expect(await awaitingSecondApprovalCount(p, { userId: 'u-janette', role: 'manager' })).toBe(1);
+    // Hard rule #2 — Shannon is the only name in the legacy roster, but she is
+    // Eugene and this invoice is Woodland. If the count ever tracks that table
+    // again, this becomes 1 and fails.
+    expect(await awaitingSecondApprovalCount(p, { userId: 'u-shannon', role: 'manager' })).toBe(0);
+  });
+
+  it('a NOT-DR3 row is never counted for anyone but an admin', async () => {
+    const db = newFakeDb({
+      requests: [
+        awaitingReq({
+          id: 'r-w',
+          site_id: 'site-w',
+          first_approver_id: 'u-morena',
+          filed_not_dr3: true,
+        }),
+      ],
+      users,
+      sites,
+      secondApprovers,
+      approvalRouting: [
+        {
+          id: 'ar-mg-jt',
+          first_approver_id: 'u-morena',
+          second_approver_id: 'u-janette',
+          fallback_approver_id: null,
+          fallback_after_hours: 24,
+          active: true,
+        },
+      ],
+    });
+    const p = fp(db);
+    expect(await awaitingSecondApprovalCount(p, { userId: 'u-janette', role: 'manager' })).toBe(0);
+  });
 });
 
 describe('stamp — dual-approval visible line', () => {

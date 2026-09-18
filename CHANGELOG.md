@@ -9,6 +9,37 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-18 — Four managers could not act as second signer, and the config was never wrong (ADR-0134)
+
+Bill relayed that Morena, Janette, Rick and Shannon could not second-sign AP invoices >= $1,000
+"even though the routing configuration says they should be able to." The configuration was in fact
+correct — seven active `ap_approval_routing` rows on the right manager accounts, five unexpired
+`ap_approvers` rows, correct sites, nothing expired. The production record was the tell: of the 38
+second approvals ever fulfilled (2026-07-27 → 2026-09-18), **Bill fulfilled 38.** Not one routed
+peer ever signed.
+
+ADR-0066 replaced per-site second-approval routing with person→person routing and converted the
+write leg and the notify leg to one shared resolver. It left **two read paths** on the superseded
+per-site `ap_second_approvers` check — `GET /api/ops/ap/[id]`, which produces the
+`secondApproval.eligible` flag, and `awaitingSecondApprovalCount`, which produces the AP tile badge.
+That table holds exactly one row (Shannon/`eugene`), so both answered "no" for every peer ADR-0066
+had just made eligible. The Approve/Reject panel renders behind `{sa?.eligible ? …}`, so the failure
+was an **absent button** — no 403, no error, no log line — while `decideSecondApproval` would have
+accepted the signature all along. The UI refused a decision the server would have taken.
+
+Both read paths now go through `canFulfillSecondApprovalByRouting`, with the same arguments the
+decide leg passes; the badge resolves per row through it so it is correct by construction rather
+than by a parallel query that can drift again. Hard rule #2 is untouched — Shannon still cannot sign
+a Woodland invoice. The superseded checker is `@deprecated` and fenced, not deleted.
+
+Consequence worth stating plainly: for 52 days the "second" signature on every >= $1,000 invoice was
+Bill's, which is not the control the $1,000 threshold exists to provide.
+
+Two pins, both confirmed FAILING against the pre-fix code (not merely passing after it):
+`src/app/api/ops/ap/[id]/route.test.ts` (`expected false to be true`) and the routed-peer case in
+`src/lib/ap/second-approval.test.ts` (`expected +0 to be 1`).
+Record: `docs/adr/0134-the-panel-that-asked-the-superseded-question.md`; residuals `docs/OPEN-ITEMS.md` § 0.BW (BW-1 operator confirmation, BW-2/BW-3 decisions).
+
 ## 2026-09-16 — Eugene's first physical anchor: 751 (19 program / 732 non-program) (data, one row)
 
 No code changed. Rick Albritton's end-of-day hard count, relayed by Bill at 4:07 PM PT (counted by
