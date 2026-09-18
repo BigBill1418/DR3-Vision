@@ -19,6 +19,52 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BW — 2026-09-18 four managers could not act as second signer — **FIX SHIPPED; BW-1 (operator confirmation) and BW-2 + BW-3 (decisions) stand** (Bill, 2026-09-18)
+
+Bill relayed that Morena, Janette, Rick and Shannon could not second-sign AP
+invoices >= $1,000 "even though the routing configuration says they should be
+able to." The configuration was correct and had been since 2026-08-27. The
+production record was the tell: of the 38 second approvals ever fulfilled
+(2026-07-27 → 2026-09-18), **Bill fulfilled 38** — no routed peer ever signed
+one.
+
+Root cause: ADR-0066 moved second-approval authorization to person→person
+routing and converted the write and notify legs to the shared resolver, but
+left **two read paths** on the superseded per-site `ap_second_approvers` check
+— the `secondApproval.eligible` flag from `GET /api/ops/ap/[id]` and the
+`awaitingSecondApprovalCount` badge. That table holds one row
+(Shannon/`eugene`), so both answered "no" for every eligible peer. The panel
+renders behind `{sa?.eligible ? …}`, so the symptom was an **absent button** —
+no error, no log line — while the server would have accepted the write.
+Full record: `docs/adr/0134-the-panel-that-asked-the-superseded-question.md`.
+
+### Open
+
+- **BW-1 — OPERATOR CONFIRMATION (Bill / the four managers): have one of them
+  actually sign one.** The fix is verified in code, in CI, and against the live
+  schema, but the only proof that matters is a routed peer seeing the
+  Approve/Reject panel and using it. There were **zero** rows in
+  `pending_second_approval` at fix time, so there was nothing live to confirm
+  against — the next >= $1,000 invoice is the first real test. Ask Morena or
+  Janette (Woodland is where the volume is) to confirm the panel appears and
+  the badge counts it. If it does not, say so before anyone re-approves through
+  Bill.
+- **BW-2 — DECISION (Bill): drop `ap_second_approvers`?** It now has **no live
+  reader** — one row (Shannon/`eugene`), retained only as a test fixture and to
+  keep the legacy checker's tests honest. Dropping the table plus
+  `canFulfillSecondApproval` / `activeSecondApproversForSite` /
+  `secondApproverSiteLabel` would make this class of drift impossible rather
+  than merely deprecated. Deferred out of the incident window, not declined.
+- **BW-3 — DECISION (Bill): should a first approver be able to self-fulfil?**
+  Observed while fixing, deliberately **not changed**. `resolveSecondApproval`
+  authorises admins plus the routed peer, so a non-admin first approver is not
+  in their own authorized set — which means the self-fulfilment path built in
+  D-M5-3 decision (c) (the re-confirm checkbox + 30-second wait) is reachable
+  only by an admin. That is a consequence of ADR-0066's person→person model,
+  not of this fix. Tightening it (delete the dead path) or loosening it (let a
+  manager self-fulfil with the re-confirm) are both defensible; it is a control
+  decision, not an engineering one.
+
 ## 0.BV — 2026-09-16 the MyMRC error page carried the session cookie — **CLOSED 2026-09-16 09:02 PT: code fix LIVE (2b76166, ADR-0133), session invalidated, stored copies scrubbed; BV-7 / BV-9 residuals stand** (Bill, 2026-09-16 04:02 PT)
 
 Bill read the page on his phone at 04:02 PT and saw the cookie header in it.
