@@ -49,6 +49,20 @@ sees is the fleet, not a blank name box.
   still needs reach). The similar-name lookup is fleet-wide.
 - Migration `20260862_adr0135_equipment_identity` (additive + `site_id DROP NOT NULL` + two unique
   indexes; `down.sql` provided).
+
+### Changed (data, production)
+
+- 281577 / 282876 / 284460 — each seeded at one yard and re-created at the other — merged into ONE
+  FLEET-WIDE record each (2:49 AM PDT, `mergeEquipment`, audited `system:cross-site-trailer-merge`);
+  links and spend conserved (3 / $495.41). Backup first:
+  `svdp-dev:~/backups-adhoc/dr3-adr0135-pre-deploy-20260923-023235-PT.dump` (restore-tested).
+
+### Verified (production)
+
+- Deployed `8907900`, app recreated 2:46 AM PDT (new digest), migration applied; the prod-verify
+  script passed 14/14 (search-first, `161053.` refused, audited override, throughput-repointing
+  merge — writes rolled back). ADR-0135 §8 has the evidence.
+
 ## 2026-09-23 — An invoice is approved once (ADR-0136); Bill's equipment calls executed (ADR-0135 BX-3/BX-6)
 
 Invoice 6646 (United Fleet Maintenance, $201.84) was approved twice — 2026-08-13 5:32 AM PT and

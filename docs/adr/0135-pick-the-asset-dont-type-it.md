@@ -237,8 +237,15 @@ Fruehauf 28 Ft …` cannot match a query for trailer `28`. Merged losers are nev
 - **Probable duplicate** = same VIN, same name, or the query's first unit number on
   a live row where the unit is ≥3 characters OR both rows are the same kind of
   asset (trailer / truck / forklift / baler / shredder, from the structured type or
-  the name). `21` on a trailer vs a truck is shown, not blocked. Fleet-wide: both
-  yards, always.
+  the name). Fleet-wide: both yards, always. **The fleet-class word before the
+  number is identity** (added after the first prod run of the queue, below):
+  `Truck 12`, `Van 12`, `Bus 12` are three vehicles and `LIFT 1` is not trailer `1`
+  — different words are never a probable duplicate (still a search hit); one side
+  bare counts only for a ≥3-char number or when the word names the other row's kind.
+  First prod run without that rule: 18 queue pairs, mostly `Truck N`/`Van N`/`Bus N`
+  noise; with it: **4** (`2 — Great Dane`/`2 — Trailmobile` and `908`/`Truck 908`
+  cross-site; `3` Fruehauf/Wabash and `Truck 9` ×2 at Eugene — the last two are the
+  ADR-0087 known-distinct pairs, for "Different assets").
 - **The hard gate** — `createEquipmentInTx` runs the matcher over the whole registry
   before every insert (admin create AND equipment-request resolve). A probable
   duplicate is refused (`409 probable_duplicate` + the rows) unless the caller sends
@@ -312,3 +319,31 @@ Fruehauf 28 Ft …` cannot match a query for trailer `28`. Merged losers are nev
   audit). Admin-only, like the merge.
 
 ### Deferred, unchanged: H (`pg_trgm`), J (approval of every asset), K (VLM feed).
+
+### Deployed and verified in production (2026-09-23, Pacific)
+
+- Backup before the migration: `svdp-dev:~/backups-adhoc/dr3-adr0135-pre-deploy-20260923-023235-PT.dump`
+  (`-Fc`: equipment, ap_equipment_links, ap_equipment_requests, equipment_daily_throughput,
+  equipment_throughput_gap_alerts; 74,870 bytes; sha256 `167a5d6f…eb5b`; mode 600). Restore-tested
+  into a scratch DB (schema + data-only): 578 / 163 / 32 / 354 / 9 rows = live; scratch dropped.
+  Prod had ZERO live case/whitespace-duplicate names fleet-wide immediately before.
+- Pushed `8907900` to `main` 2:33 AM PDT; the deployer built on CHAD-HQ, the image-digest gate
+  passed (app digest changed → `sha256:47c7132e…`), the migrate container applied
+  `20260862_adr0135_equipment_identity` and exited 0, app recreated 2:46:41 AM PDT, health + smoke
+  green. On prod: `site_id` nullable, `equipment_live_name_ci_key` / `equipment_live_vin_serial_key`
+  / `equipment_distinct_pairs` present, 477 of 578 rows got a backfilled `unit_number`; the new
+  routes answer 401/307-to-login unauthenticated.
+- `scripts/one-off/2026-09-23-adr0135-prod-verify.ts` against prod — 14/14 PASS: search returns the
+  existing asset for `161053.`, `Trailer # 19`, `trailer 32-48`; `48-68` does not surface `4868`;
+  creating `161053.` is REFUSED (`probable_duplicate`, Freightliner row attached, no write); the
+  override (inside a rolled-back transaction) creates, audits reason + matched rows + actor, and
+  writes a distinct-pair row; a cross-site merge into fleet-wide (rolled back) repoints 1 throughput
+  - 1 gap-alert row. Both transactions verified to leave nothing behind.
+- **BX-2 executed 2:49 AM PDT** — `scripts/one-off/2026-09-23-cross-site-trailer-merge.ts --apply`:
+  `Trailer 281577` (Eugene) → `281577 — Great Dane`, `Trailer 282876` (Eugene) → `282876 — Strick
+28 Ft …`, `Trailer #284460` (Woodland) → `284460 — Great Dane 28 Ft …`; each survivor now
+  FLEET-WIDE; 1 link + 1 resolved request moved per pair; links 3 → 3, spend $495.41 → $495.41;
+  nothing left on a loser; 6 audit rows under `system:cross-site-trailer-merge`. Registry: 578 rows,
+  532 active, 12 merged, 3 fleet-wide.
+- Not verifiable from here: anything that needs a signed-in browser (the click-paths). Bill's
+  checklist is in OPEN-ITEMS § 0.BX BX-11.

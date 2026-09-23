@@ -137,6 +137,26 @@ export function identifyingUnits(name: string, unitNumber?: string | null): stri
   return col && !fromName.includes(col) ? [col, ...fromName] : fromName;
 }
 
+/** Filler between a class word and its number: `Trailer Number #7677`, `Unit No. 5`. */
+const PREFIX_FILLER = new Set(['NUMBER', 'NO', 'NUM', 'UNIT', 'NBR']);
+
+/**
+ * The fleet-class word written directly in front of `unit` in the identifying
+ * part of a name (`Truck 12 — Isuzu …` → `TRUCK`; `Trailer Number #7677` →
+ * `TRAILER`), singularised; null when the number stands alone (`161053 — …`).
+ */
+export function unitPrefix(name: string, unit: string): string | null {
+  const head = name.split(/\s[\u2012\u2013\u2014\u2015\u2212-]\s/)[0] ?? name;
+  const toks = prepare(head).match(/[A-Z0-9#]+(?:-[A-Z0-9]+)*/g) ?? [];
+  const at = toks.findIndex((t) => fixOcrLookalikes(t.replace(/#/g, '')) === unit);
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const t = toks[i] ?? '';
+    if (t === '#' || PREFIX_FILLER.has(t)) continue;
+    return /^[A-Z]+$/.test(t) ? t.replace(/S$/, '') : null;
+  }
+  return null;
+}
+
 /** The canonical unit key for a single typed unit number, or '' when there is none. */
 export function unitKey(raw: string): string {
   return unitTokens(raw)[0] ?? '';
@@ -273,7 +293,21 @@ export function matchEquipment<T extends MatchableEquipment>(
         qKind !== null && rowKind !== null
           ? qKind === rowKind
           : !query.category || query.category === row.category;
-      const probableDuplicate = long || sameKind;
+      // The fleet-class word in front of the number is part of the identity in
+      // this registry: `Truck 12`, `Van 12` and `Bus 12` are three vehicles, and
+      // `LIFT 1` is not trailer `1`. Different words → never a probable
+      // duplicate (still a search hit). One side bare → a long number still
+      // counts; a short one only when the word names the other row's kind.
+      const unit = shared[0] ?? '';
+      const qPre = unitPrefix(query.text, unit);
+      const rPre = unitPrefix(row.displayName, unit);
+      let probableDuplicate: boolean;
+      if (qPre && rPre) probableDuplicate = qPre === rPre;
+      else if (qPre || rPre) {
+        const word = (qPre ?? rPre) as string;
+        const other = qPre ? rowKind : qKind;
+        probableDuplicate = long || (other !== null && assetKind(word) === other);
+      } else probableDuplicate = long || sameKind;
       // The query's FIRST unit is what it is "about"; a hit there outranks a hit
       // on an incidental number (a length, `28 Ft`).
       const primary = shared.includes(qUnits[0] ?? '');

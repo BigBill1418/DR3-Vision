@@ -11,6 +11,7 @@ import {
   pickerMatches,
   probableDuplicates,
   unitKey,
+  unitPrefix,
   unitTokens,
   type MatchableEquipment,
 } from './match';
@@ -201,5 +202,46 @@ describe('generateDisplayName — the seed convention, generated', () => {
 
   it('nameKey folds case, spacing and punctuation', () => {
     expect(nameKey('Terex  Machine')).toBe(nameKey('terex machine'));
+  });
+});
+
+describe('the fleet-class word is part of the identity (prod queue, 2026-09-23)', () => {
+  const FLEET: MatchableEquipment[] = [
+    row('t12', 'Truck 12 — Isuzu Box Truck'),
+    row('v12', 'Van 12 — Chevrolet Passenger Van'),
+    row('b12', 'Bus 12 — Ford Passenger Van'),
+    row('lift1', 'LIFT 1 — Ford'),
+    row('c1', '1 — Comet', { siteId: WDL }),
+    row('t908', 'Truck 908 — Volvo Semi Truck (Day Cab)'),
+    row('t19', 'Trailer #19'),
+    row('tr19', '19 — Fruehauf 28 Ft Roll Up Door Trailer'),
+  ];
+  const dupIds = (text: string) =>
+    probableDuplicates({ text }, FLEET)
+      .map((m) => m.row.id)
+      .sort();
+
+  it('Truck 12 / Van 12 / Bus 12 are three vehicles', () => {
+    expect(dupIds('Truck 12')).toEqual(['t12']);
+    expect(dupIds('Van 12')).toEqual(['v12']);
+  });
+
+  it('`LIFT 1` is not trailer `1`', () => {
+    const others = FLEET.filter((r) => r.id !== 'c1');
+    expect(probableDuplicates({ text: '1 — Comet' }, others)).toEqual([]);
+  });
+
+  it('a bare LONG number still meets its prefixed twin (`908` / `Truck 908`)', () => {
+    expect(dupIds('908')).toEqual(['t908']);
+  });
+
+  it('`Trailer # 19` meets both trailer 19s, not a truck', () => {
+    expect(dupIds('Trailer # 19')).toEqual(['t19', 'tr19']);
+  });
+
+  it('unitPrefix reads the class word, skipping filler', () => {
+    expect(unitPrefix('Trailer Number #7677', '7677')).toBe('TRAILER');
+    expect(unitPrefix('Trucks 9 — GMC', '9')).toBe('TRUCK');
+    expect(unitPrefix('161053 — Freightliner', '161053')).toBeNull();
   });
 });

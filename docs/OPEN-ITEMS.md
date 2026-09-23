@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-8 duplicate approvals await AP; BX-2 (48-68) / BX-4 / BX-5 / BX-9 / BX-10 stand** (Bill, 2026-09-22/23)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-8 duplicate approvals await AP; BX-2 (48-68) / BX-4 / BX-5 / BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -101,6 +101,17 @@ Trailer`. `Trailer # 5327` — no 5327 at either site, so created as `5327 — T
 - **BX-9 — QUESTIONS (Morena):** which machine was the Grainger "relay order from Aleks"
   for; add Woodland's `95` (2005 Wabash, register G3) to the registry?; are 53489 / 5340
   / 282859 real Woodland trailers (282859 is close to `282876`)?
+- **BX-11 — CHECK (Bill, in a browser — could not be done without a sign-in):**
+  1. `/admin/ap/equipment-requests` → an open request (EQ24 or a green-baler one) → **Find it in
+     the fleet**: results come up ranked, with **Use this one** as the main button.
+  2. On the same card, **Add a new asset instead** → pick **Trailer**, unit `161053.` → the name
+     preview reads `161053 — Trailer` → Add → it is REFUSED showing `161053 — Freightliner…` with
+     **Use this one** and **It's a different asset** (reason required). Press Never mind — do not
+     create it.
+  3. `/admin/equipment?site=fleet` lists the three fleet-wide trailers.
+  4. `/admin/equipment/duplicates` shows 4 pairs (see ADR-0135 §8); mark `3` Fruehauf/Wabash and
+     the two `Truck 9`s **Different assets** if they are, and decide `2` and `908`.
+  5. Next AP approval that needs the hatch: **Equipment not in list** now asks Type + Unit #.
 - **BX-10 — NEW (ADR-0135): work the duplicates queue.** `/admin/equipment/duplicates` lists
   every live pair the matcher flags (short unit numbers on the same kind of asset included). Each
   pair is Merge (survivor + its site) or "Different assets" (reason recorded). Owner: Bill / admin.
