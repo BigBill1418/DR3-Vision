@@ -173,3 +173,11 @@ describe('withEquipmentListQuery', () => {
     ).toBe('/admin/equipment/new');
   });
 });
+
+describe('ADR-0135 — the client fleet-wide filter value', () => {
+  it('equals the server FLEET_SITE_FILTER (two copies because the server module is not client-safe)', async () => {
+    const { FLEET_SITE_CODE } = await import('./list-url');
+    const { FLEET_SITE_FILTER } = await import('@/lib/admin-equipment');
+    expect(FLEET_SITE_CODE).toBe(FLEET_SITE_FILTER);
+  });
+});
