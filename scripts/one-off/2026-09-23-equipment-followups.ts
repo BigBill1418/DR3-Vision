@@ -263,7 +263,8 @@ async function resolve(r: Resolve): Promise<void> {
   await prisma.$transaction(async (tx) => {
     let equipmentId: string;
     let equipmentDisplayName: string;
-    let siteId: string;
+    // string | null since ADR-0135 made site_id nullable (fleet-wide); this record ran before that.
+    let siteId: string | null;
     let mode: 'existing' | 'create';
     if ('existing' in r.target) {
       const t = await tx.equipment.findUnique({ where: { id: r.target.existing } });
