@@ -180,6 +180,24 @@ async function seedSites() {
   }
 }
 
+// BX-12 (ADR-0137) — every site needs an EXPLICIT throughput-machine designation;
+// a site with none fails loudly on every equipment surface. A dev database has no
+// Terex row, so each seeded site is designated "no machine". Create-only (ON
+// CONFLICT DO NOTHING): a designation that already exists — production's, set by
+// migration 20260863 — is never overwritten by a seed run.
+async function seedThroughputMachineDesignations() {
+  const sites = await prisma.site.findMany({ select: { id: true } });
+  await prisma.siteThroughputMachine.createMany({
+    data: sites.map((s) => ({
+      site_id: s.id,
+      equipment_id: null,
+      reason: 'Seed default: no throughput machine designated for this site.',
+      set_label: 'system:seed',
+    })),
+    skipDuplicates: true,
+  });
+}
+
 async function seedTransporters() {
   const rows = parseCsv('transporters.csv');
   for (const r of rows) {
@@ -2133,6 +2151,7 @@ async function resolveSurveyOwnerId() {
 async function main() {
   console.log('▶ seeding sites');
   await seedSites();
+  await seedThroughputMachineDesignations();
   console.log('▶ seeding transporters');
   await seedTransporters();
   console.log('▶ seeding outbound recyclers + recycling rates (ADR-0055)');

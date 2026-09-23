@@ -16,7 +16,7 @@ import { checkManagerForSite } from '@/lib/auth-helpers';
 import { computeEquipmentThroughput } from '@/lib/equipment/throughput';
 import { computeTerexLedger, siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
-import { prisma } from '@/lib/prisma';
+import { resolveSiteThroughputMachine } from '@/lib/equipment/site-machine';
 import { EquipmentClient } from './EquipmentClient';
 
 export const dynamic = 'force-dynamic';
@@ -80,25 +80,14 @@ export default async function EquipmentPage({ params }: Props) {
   // Only offered when the caller can actually open it: pilot ⇒ admin-only, so a
   // manager is never shown a link that lands on "Not yet activated". Merged-away
   // rows are excluded — their attribution has moved to the survivor.
-  const machines =
-    isAdmin || ledgerLive
-      ? await prisma.equipment.findMany({
-          where: {
-            site_id: result.ctx.siteId,
-            category: 'terex',
-            is_active: true,
-            merged_into_id: null,
-            // …AND the Terex invoices actually resolve here. `category: 'terex'`
-            // alone is the ADR-0062 seed's category for SHEAR MACHINES — four of
-            // the five such rows in production are `EQ## — Shear Machine`, one of
-            // them at Eugene, none with a ledger worth opening. Mirrors
-            // `isSiteTerexMachine` in the ledger, which refuses them outright.
-            links: { some: {} },
-          },
-          select: { id: true, display_name: true },
-          orderBy: { display_name: 'asc' },
-        })
-      : [];
+  //
+  // The machine is the site's DESIGNATED throughput machine (BX-12, ADR-0137).
+  // This list used to be every `terex`-category row with an invoice link, ordered
+  // by name — so once `EQ24 — Shear Machine` was invoiced (2026-09-02) it sorted
+  // ahead of `Terex` and the metrics band below rendered the shear.
+  const designated =
+    isAdmin || ledgerLive ? await resolveSiteThroughputMachine(result.ctx.siteId) : null;
+  const machines = designated ? [designated] : [];
 
   // ADR-0081 — the machine metrics band. Bill: "populate this terex page with
   // relevant data metrics for this equipment."
@@ -106,8 +95,8 @@ export default async function EquipmentPage({ params }: Props) {
   // REUSES `computeTerexLedger` rather than querying the three tables here. That
   // module carries the guards the totals depend on — confirmed rows only, ONE
   // absorbed revision only (the difference between $77,067.94 and $231,203.82),
-  // and the `isSiteTerexMachine` refusal of the four `terex`-CATEGORY shear
-  // machines — and those guards are pinned against exactly one implementation.
+  // and the `isSiteTerexMachine` refusal of every row that is not the site's
+  // designated machine (BX-12) — and those guards are pinned against exactly one implementation.
   //
   // Gated identically to `machines` above, and not by a second rule: the band
   // renders the ledger surface's own numbers, so offering it wider than the
@@ -144,7 +133,7 @@ export default async function EquipmentPage({ params }: Props) {
           throughput={throughput}
           showTrend={showTrend}
           showEntry={showEntry}
-          machines={machines.map((m) => ({ id: m.id, displayName: m.display_name }))}
+          machines={machines}
           machineLabel={machineLabel}
           ledger={ledger}
         />

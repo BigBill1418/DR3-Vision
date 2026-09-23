@@ -84,6 +84,11 @@ function mergeFailureResponse(reason: MergeFailure, conflictDates: string[]): Ne
         { error: M.equipment.throughputConflict(conflictDates), code: reason, conflictDates },
         { status: 409 },
       );
+    case 'throughput_machine_site':
+      return NextResponse.json(
+        { error: M.equipment.throughputMachineSite, code: reason },
+        { status: 409 },
+      );
     case 'site_not_found':
       return NextResponse.json({ error: M.errors.siteNotFound }, { status: 422 });
     case 'not_found':

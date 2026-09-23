@@ -76,14 +76,6 @@ interface FindManyWhere {
   throughput_date?: { gte: Date; lte: Date };
 }
 
-interface EquipmentWhere {
-  site_id: string;
-  category: string;
-  is_active: boolean;
-  merged_into_id: null;
-  links: { some: Record<string, never> };
-}
-
 const store = {
   rows: [] as Row[],
   audits: [] as AuditRow[],
@@ -117,6 +109,8 @@ function assertPartialUnique(equipmentId: string, day: Date, ignoreId?: string) 
     );
   }
 }
+
+let designatedSite = '';
 
 vi.mock('@/lib/prisma', () => {
   const tx = {
@@ -161,14 +155,21 @@ vi.mock('@/lib/prisma', () => {
   };
   return {
     prisma: {
-      equipment: {
-        findFirst: async ({ where }: { where: EquipmentWhere }) => {
-          expect(where.category).toBe('terex');
-          expect(where.is_active).toBe(true);
-          expect(where.merged_into_id).toBeNull();
-          expect(where.links).toEqual({ some: {} });
-          return store.machine;
+      // BX-12 (ADR-0137) — the machine is the site's DESIGNATED row
+      // (`site_throughput_machines`), never inferred from category + invoice links.
+      // `store.machine` is the designation for whichever site is asked; null is the
+      // explicit "no machine" designation (Eugene's shape).
+      siteThroughputMachine: {
+        findUnique: async ({ where }: { where: { site_id: string } }) => {
+          designatedSite = where.site_id;
+          return { equipment_id: store.machine?.id ?? null };
         },
+      },
+      equipment: {
+        findUnique: async ({ where }: { where: { id: string } }) =>
+          store.machine && where.id === store.machine.id
+            ? { ...store.machine, site_id: designatedSite, is_active: true, merged_into_id: null }
+            : null,
       },
       equipmentDailyThroughput: {
         // Real Prisma hands back a DETACHED plain object, so a later `update` does

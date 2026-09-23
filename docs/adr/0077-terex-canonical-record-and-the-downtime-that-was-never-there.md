@@ -619,3 +619,14 @@ merged, because both edit `src/lib/equipment/throughput.ts`. The originating
 handoff named `terex-ledger.ts` as the target; that was wrong — verified by
 reading the code — and the real target is `throughput.ts` plus `EquipmentClient`,
 `OpsOverviewPanel` and `ops-overview.ts`.
+
+## Amendment 4 (2026-09-23) — the identity rule is superseded (ADR-0137)
+
+D1's rule — "the machine is the `terex`-category row the Terex invoices resolve to" — was a
+proxy, and this ADR said so. It failed the way proxies do: on 2026-09-02 6:21 AM PDT the
+`EQ24 — Shear Machine` row (same category, older) got a shear-welding invoice, and every
+throughput surface switched to the shear for three weeks (OPEN-ITEMS §0.BX BX-12).
+**ADR-0137** replaces it with an explicit designation (`site_throughput_machines`): one per
+site, "no machine" as a recorded decision, and a loud failure when a site is not configured.
+`isSiteTerexMachine` now asks the designation; nothing reads `category` + invoice links as
+identity any more.

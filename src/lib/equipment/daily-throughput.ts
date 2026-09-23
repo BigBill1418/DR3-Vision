@@ -16,8 +16,8 @@
 //
 // Site-scoped (CLAUDE.md hard rule #2). Every write is audited (hard rule #6 —
 // append-only, never deleted). There is NO hard delete: removal is a soft-void.
-// The machine is resolved from the equipment REGISTRY (ADR-0077's identity rule),
-// never a hardcoded id.
+// The machine is the site's DESIGNATED throughput machine (BX-12, ADR-0137 —
+// `site_throughput_machines`), never inferred and never a hardcoded id.
 //
 // DAY DISCIPLINE (D4, as amended by ADR-0106): today is the PACIFIC day,
 // everywhere. Same-day entry and edit are free and audited. A prior day INSIDE
@@ -33,6 +33,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { appToday, dayISO, monthStartOfDayKey } from '@/lib/time';
 import type { AnyActorContext } from '@/lib/admin-equipment';
+import { resolveSiteThroughputMachine } from './site-machine';
 
 const TABLE = 'equipment_daily_throughput';
 
@@ -264,40 +265,11 @@ export function assertDailyThroughputShape(
 }
 
 /**
- * ADR-0077's identity rule, as a resolver — the ONE place this feature learns
- * which machine it is talking about.
- *
- * A `terex`-CATEGORY row is not the test: the ADR-0062 seed uses `terex` as the
- * category for SHEAR MACHINES, so production carries five `terex`-category rows at
- * Woodland/Eugene of which exactly one is the machine. The evidence that
- * distinguishes it is that the Terex INVOICES actually resolve to it
- * (`links: { some: {} }`) — the same test `isSiteTerexMachine` and
- * `siteMachineLabel` already apply.
- *
- * Merged-away rows (ADR-0075) and deactivated rows are excluded, so a duplicate
- * can never quietly accumulate a parallel day-history.
- *
- * Site-DERIVED, never hardcoded: Eugene honestly resolves to `null` (it has no
- * such machine) and a Terex arriving there tomorrow is picked up with no code
- * change. The canonical Woodland machine is `7e35a4aa` today — reached through
- * this query, never written down.
+ * The site's throughput machine — DESIGNATED, never inferred (BX-12, ADR-0137).
+ * Lives in `./site-machine`; re-exported here because every throughput consumer
+ * already imports it from this module.
  */
-export async function resolveSiteThroughputMachine(
-  siteId: string,
-): Promise<{ id: string; displayName: string } | null> {
-  const machine = await prisma.equipment.findFirst({
-    where: {
-      site_id: siteId,
-      category: 'terex',
-      is_active: true,
-      merged_into_id: null,
-      links: { some: {} },
-    },
-    select: { id: true, display_name: true },
-    orderBy: { created_at: 'asc' },
-  });
-  return machine ? { id: machine.id, displayName: machine.display_name } : null;
-}
+export { resolveSiteThroughputMachine };
 
 export interface DailyThroughputView {
   id: string;

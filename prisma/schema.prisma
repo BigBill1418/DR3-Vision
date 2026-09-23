@@ -5169,6 +5169,30 @@ model EquipmentDistinctPair {
   @@map("equipment_distinct_pairs")
 }
 
+/// BX-12 (ADR-0137) — WHICH equipment row is a site's throughput machine,
+/// DESIGNATED rather than inferred. `resolveSiteThroughputMachine` used to pick
+/// "the oldest `terex`-category row with an invoice link"; the seed files shear
+/// machines under `terex`, and the day `EQ24 — Shear Machine` got its first
+/// invoice (2026-09-02) Woodland's Terex readings started landing on the shear.
+///
+/// `site_id` is the PRIMARY KEY — one designation per site, by construction.
+/// `equipment_id` NULL is a DECISION ("this site has no throughput machine",
+/// Eugene); a MISSING row is not configured and every reader fails loudly.
+/// `equipment_id` is unique (one machine cannot serve two sites). Both FKs are
+/// bare, in the migration. A merge repoints `equipment_id` at the survivor
+/// (`MERGE_REPOINTED_REFERENCES`) — the survivor is the same physical machine.
+model SiteThroughputMachine {
+  site_id      String   @id
+  equipment_id String?  @unique
+  reason       String
+  /// Bare FK → users.id; NULL for a named system actor (`set_label`).
+  set_by       String?
+  set_label    String?
+  set_at       DateTime @default(now())
+
+  @@map("site_throughput_machines")
+}
+
 /// ADR-0046 Amendment 5 (D-M5-6) — join of an Approve decision to the equipment it
 /// referenced. Distinct row per selected asset; a SINGLE row with
 /// `is_not_equipment_related=true` (and `equipment_id` null) records the explicit

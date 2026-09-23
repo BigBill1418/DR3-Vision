@@ -29,36 +29,11 @@
 
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { resolveSiteThroughputMachine } from './site-machine';
 
 /** Free-text `equipment_code` the ADR-0048 history importer writes. */
 const TEREX_EVENT_CODE = 'terex';
 
-/**
- * Is this equipment row THE Terex machine for its site?
- *
- * It has to be asked, because two of this ledger's three panels are keyed on the
- * SITE, not on an equipment id: `doc_terex_maintenance_rows` is scoped by
- * `site_id` (ADR-0069 Am.2) and `equipment_events` by the free-text
- * `equipment_code='terex'` with no FK into the registry (ADR-0048 D3). Hand that
- * pairing a different equipment row and it renders the Terex's maintenance log
- * and downtime under someone else's name.
- *
- * `category` alone is NOT that test, which is the trap this guard exists for.
- * The ADR-0062 seed uses `terex` as the category for SHEAR MACHINES, so
- * production carries five `terex`-category rows: `EQ24/EQ43/EQ74 — Shear
- * Machine` at Woodland, `EQ65 — Sheer Machine Shear Machine` at EUGENE, and the
- * actual machine. Bill confirmed on 2026-08-06 that the Terex operates
- * exclusively at Woodland and Eugene has no use for this data at all — so a
- * ledger offered for that Eugene row would be wrong twice over.
- *
- * The second half of the test is that the Terex-tagged invoices resolve HERE.
- * That is a proxy for identity rather than a declaration of it — the schema has
- * no "this row is the machine the log describes" marker — but it is an
- * evidence-based one: it self-corrects if attribution moves, it needs no
- * hardcoded id or site, and today it selects exactly `7e35a4aa` and nothing
- * else. Recorded as a residual; the real fix is a link from the absorbed rows
- * (or `equipment_events`) to an equipment id.
- */
 /**
  * The version whose confirmed rows ARE the maintenance log right now.
  *
@@ -89,8 +64,25 @@ async function latestConfirmedVersionId(siteId: string): Promise<string | null> 
   return newest?.doc_source_version_id ?? null;
 }
 
-function isSiteTerexMachine(category: string, apLinkCount: number): boolean {
-  return category === 'terex' && apLinkCount > 0;
+/**
+ * Is this equipment row THE Terex machine for its site?
+ *
+ * It has to be asked, because two of this ledger's three panels are keyed on the
+ * SITE, not on an equipment id: `doc_terex_maintenance_rows` is scoped by
+ * `site_id` (ADR-0069 Am.2) and `equipment_events` by the free-text
+ * `equipment_code='terex'` with no FK into the registry (ADR-0048 D3). Hand that
+ * pairing a different equipment row and it renders the Terex's maintenance log
+ * and downtime under someone else's name.
+ *
+ * `category` is NOT that test: the ADR-0062 seed files the shear machines under
+ * `terex` (`EQ24/EQ43/EQ74` at Woodland, `EQ65` at Eugene). Neither is "has an
+ * invoice link" — the proxy this used until BX-12: `EQ24` got a shear-welding
+ * invoice on 2026-09-02 and passed it. The answer is the site's DESIGNATED
+ * throughput machine (`site_throughput_machines`, ADR-0137) and nothing else.
+ */
+async function isSiteTerexMachine(siteId: string, equipmentId: string): Promise<boolean> {
+  const machine = await resolveSiteThroughputMachine(siteId);
+  return machine?.id === equipmentId;
 }
 
 export interface TerexMaintenanceEvent {
@@ -259,9 +251,9 @@ export async function computeTerexLedger(
     }),
   ]);
 
-  // A `terex`-category row with no Terex invoices behind it is a shear machine,
-  // not the machine — refuse it exactly as we refuse a merged-away or off-site id.
-  if (!isSiteTerexMachine(equipment.category, links.length)) {
+  // Any row that is not the site's DESIGNATED machine — a shear, invoiced or not —
+  // is refused exactly as we refuse a merged-away or off-site id.
+  if (!(await isSiteTerexMachine(siteId, equipment.id))) {
     return {
       equipment: null,
       maintenance: {
@@ -336,23 +328,13 @@ export async function computeTerexLedger(
  * a deliberate call, and the wrong one: Bill asked for the rename explicitly and
  * noticed it missing (ADR-0077 Amendment 1).
  *
- * Site-derived rather than hardcoded, because the surface is parameterised by
- * site and only Woodland has the machine. Same evidence as
- * `isSiteTerexMachine` — a `terex`-category row that the Terex invoices actually
- * resolve to — so Eugene keeps the generic name honestly instead of advertising a
- * machine it does not have, and a Terex arriving at Eugene tomorrow renames that
- * site's surface with no code change.
+ * The site's DESIGNATED throughput machine (BX-12, ADR-0137), so Eugene — which
+ * has none, by decision — keeps the generic name instead of advertising a machine
+ * it does not have. Until BX-12 this was "a `terex`-category row with an invoice
+ * link" with NO ordering, so once `EQ24 — Shear Machine` was invoiced (2026-09-02)
+ * Woodland's label was whichever of the two rows Postgres returned first.
  */
 export async function siteMachineLabel(siteId: string): Promise<string> {
-  const machine = await prisma.equipment.findFirst({
-    where: {
-      site_id: siteId,
-      category: 'terex',
-      is_active: true,
-      merged_into_id: null,
-      links: { some: {} },
-    },
-    select: { display_name: true },
-  });
-  return machine?.display_name ?? 'Equipment';
+  const machine = await resolveSiteThroughputMachine(siteId);
+  return machine?.displayName ?? 'Equipment';
 }

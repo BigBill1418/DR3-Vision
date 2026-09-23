@@ -6,15 +6,6 @@ import { Prisma } from '@prisma/client';
 
 const MACHINE = { id: 'eq-terex-1', display_name: 'Terex' };
 
-/** The ADR-0077 identity-rule where-clause the resolver must issue. */
-interface EquipmentWhere {
-  site_id: string;
-  category: string;
-  is_active: boolean;
-  merged_into_id: null;
-  links: { some: Record<string, never> };
-}
-
 const store = {
   lastEvent: null as null | {
     event_date: Date;
@@ -28,6 +19,8 @@ const store = {
   machine: MACHINE as { id: string; display_name: string } | null,
 };
 
+let designatedSite = '';
+
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     equipmentEvent: {
@@ -36,13 +29,18 @@ vi.mock('@/lib/prisma', () => ({
         return store.lastEvent;
       },
     },
-    equipment: {
-      findFirst: async ({ where }: { where: EquipmentWhere }) => {
-        // The ADR-0077 identity rule, not a hardcoded id.
-        expect(where.category).toBe('terex');
-        expect(where.links).toEqual({ some: {} });
-        return store.machine;
+    // BX-12 (ADR-0137) — the DESIGNATED machine, never category + invoice links.
+    siteThroughputMachine: {
+      findUnique: async ({ where }: { where: { site_id: string } }) => {
+        designatedSite = where.site_id;
+        return { equipment_id: store.machine?.id ?? null };
       },
+    },
+    equipment: {
+      findUnique: async ({ where }: { where: { id: string } }) =>
+        store.machine && where.id === store.machine.id
+          ? { ...store.machine, site_id: designatedSite, is_active: true, merged_into_id: null }
+          : null,
     },
     equipmentDailyThroughput: {
       findMany: async ({ where }: { where: { voided_at: null } }) => {

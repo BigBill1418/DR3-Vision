@@ -302,6 +302,8 @@ export const adminMessages = {
     fleetWideShort: 'fleet',
     throughputConflict: (dates: string[]) =>
       `Both machines logged throughput on ${dates.slice(0, 5).join(', ')}${dates.length > 5 ? ` and ${dates.length - 5} more day(s)` : ''}. Void the wrong reading on one of them first, then merge.`,
+    throughputMachineSite:
+      "One of these is a site's throughput machine (BX-12). The surviving asset must stay at that site, and two throughput machines cannot merge. Change the throughput machine first, then merge.",
     mergeSurvivorSite: 'Where does the surviving asset live?',
     distinctReasonRequired:
       'Say why these are different assets (at least 10 characters) — the note stays on the record.',

@@ -14,15 +14,6 @@ import { Prisma } from '@prisma/client';
 
 const MACHINE = { id: 'eq-terex-1', display_name: 'Terex' };
 
-/** The ADR-0077 identity-rule where-clause the resolver must issue. */
-interface EquipmentWhere {
-  site_id: string;
-  category: string;
-  is_active: boolean;
-  merged_into_id: null;
-  links: { some: Record<string, never> };
-}
-
 const store = {
   closes: [] as {
     production_date: Date;
@@ -46,6 +37,8 @@ const store = {
   machine: MACHINE as { id: string; display_name: string } | null,
 };
 
+let designatedSite = '';
+
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     processedUnitsDaily: {
@@ -64,18 +57,21 @@ vi.mock('@/lib/prisma', () => ({
             e.event_date.getTime() <= where.event_date.lte.getTime(),
         ),
     },
-    // ADR-0077 identity rule — the resolver must ask for the machine by its
-    // EVIDENCE (terex category + active + not merged away + has AP links), never
-    // by a literal id. Asserted here so a future edit that hardcodes `7e35a4aa`
-    // fails this suite rather than shipping.
-    equipment: {
-      findFirst: async ({ where }: { where: EquipmentWhere }) => {
-        expect(where.category).toBe('terex');
-        expect(where.is_active).toBe(true);
-        expect(where.merged_into_id).toBeNull();
-        expect(where.links).toEqual({ some: {} });
-        return store.machine;
+    // BX-12 (ADR-0137) — the machine is the site's DESIGNATED row
+    // (`site_throughput_machines`), never inferred from category + invoice links.
+    // `store.machine` is the designation for whichever site is asked; null is the
+    // explicit "no machine" designation (Eugene's shape).
+    siteThroughputMachine: {
+      findUnique: async ({ where }: { where: { site_id: string } }) => {
+        designatedSite = where.site_id;
+        return { equipment_id: store.machine?.id ?? null };
       },
+    },
+    equipment: {
+      findUnique: async ({ where }: { where: { id: string } }) =>
+        store.machine && where.id === store.machine.id
+          ? { ...store.machine, site_id: designatedSite, is_active: true, merged_into_id: null }
+          : null,
     },
     equipmentDailyThroughput: {
       findMany: async ({

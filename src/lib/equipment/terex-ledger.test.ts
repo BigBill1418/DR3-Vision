@@ -80,33 +80,33 @@ const store = {
     voided_at: Date | null;
     hours_down: Prisma.Decimal | null;
   }[],
+  designations: new Map<string, string | null>(),
 };
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     equipment: {
       findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
-        // `siteMachineLabel` queries WITHOUT an id, by category + links instead.
-        // The `links` clause is honoured ONLY when the query supplies it — an
-        // earlier version enforced it unconditionally, so dropping it from the
-        // source changed nothing and the guard measured the mock.
-        if (where['id'] === undefined) {
-          const requiresLinks = where['links'] !== undefined;
-          const row = store.equipment.find(
-            (e) =>
-              e.site_id === where['site_id'] &&
-              e.category === where['category'] &&
-              e.merged_into_id === null &&
-              (!requiresLinks || store.links.some((l) => l.equipment_id === e.id)),
-          );
-          return row ?? null;
-        }
         const row = store.equipment.find(
           (e) =>
             e.id === where['id'] && e.site_id === where['site_id'] && e.merged_into_id === null,
         );
         return row ?? null;
       }),
+      // BX-12 — `resolveSiteThroughputMachine` reads the designated row by id.
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const row = store.equipment.find((e) => e.id === where.id);
+        return row ? { ...row, is_active: true } : null;
+      }),
+    },
+    // BX-12 (ADR-0137) — the DESIGNATION, keyed by site. A site absent from the
+    // map is unconfigured; `null` is the explicit "no machine" (Eugene).
+    siteThroughputMachine: {
+      findUnique: vi.fn(async ({ where }: { where: { site_id: string } }) =>
+        store.designations.has(where.site_id)
+          ? { equipment_id: store.designations.get(where.site_id) ?? null }
+          : null,
+      ),
     },
     docTerexMaintenanceRow: {
       // `status` is filtered ONLY when the caller supplies it. That is what makes
@@ -187,6 +187,7 @@ vi.mock('@/lib/prisma', () => ({
 }));
 
 import { computeTerexLedger, siteMachineLabel } from './terex-ledger';
+import { ThroughputMachineNotConfiguredError } from './site-machine';
 
 let seq = 0;
 function maint(
@@ -260,9 +261,9 @@ function seedProductionShape(): void {
 }
 
 /**
- * The machine, minimally: the equipment row PLUS one Terex invoice. The invoice
- * is not decoration — `isSiteTerexMachine` uses it to tell the machine apart
- * from the shear machines that share its `terex` category.
+ * The machine, minimally: the equipment row PLUS one Terex invoice. Since BX-12
+ * the invoice no longer decides identity (the designation does); it stays so the
+ * AP panel has something to total.
  */
 function seedMachine(): void {
   store.equipment.push({
@@ -288,6 +289,10 @@ function seedMachine(): void {
 }
 
 beforeEach(() => {
+  // Production's designations (migration 20260863): Woodland → Terex, Eugene → none.
+  store.designations.clear();
+  store.designations.set(WOODLAND, TEREX);
+  store.designations.set(EUGENE, null);
   store.equipment.length = 0;
   store.maint.length = 0;
   store.links.length = 0;
@@ -667,6 +672,38 @@ describe('computeTerexLedger — scoping', () => {
     expect(l.ap.totalCents).toBe(0);
   });
 
+  // BX-12 — the regression itself. EQ24 got a shear-welding invoice on
+  // 2026-09-02; the old "has an invoice link" proxy then admitted it. The
+  // designation must refuse it however many invoices it carries.
+  it('refuses the INVOICED EQ24 shear — an invoice is not an identity (BX-12)', async () => {
+    seedProductionShape();
+    store.equipment.push({
+      id: 'eq24',
+      site_id: WOODLAND,
+      display_name: 'EQ24 — Shear Machine',
+      category: 'terex',
+      merged_into_id: null,
+    });
+    store.links.push({
+      id: 'link-eq24',
+      request_id: 'req-eq24',
+      equipment_id: 'eq24',
+      created_at: new Date('2026-09-02T13:21:41Z'),
+      request: {
+        received_at: new Date('2026-09-02T13:00:00Z'),
+        vendor: 'Kelliher',
+        vendor_freeform: null,
+        amount_cents: null,
+        confirmed_amount_cents: 50_000,
+      },
+    });
+
+    const l = await computeTerexLedger(WOODLAND, 'eq24');
+    expect(l.equipment).toBeNull();
+    expect(l.maintenance.totalRepairCents).toBeNull();
+    expect(l.ap.totalCents).toBe(0);
+  });
+
   it('still admits the real machine — the guard is narrow, not a blanket refusal', async () => {
     seedProductionShape();
     const l = await computeTerexLedger(WOODLAND, TEREX);
@@ -740,6 +777,27 @@ describe('siteMachineLabel (ADR-0077 Am.1)', () => {
   it('stays generic at a site with no Terex — Eugene is not renamed', async () => {
     seedProductionShape();
     expect(await siteMachineLabel(EUGENE)).toBe('Equipment');
+  });
+
+  it('names the DESIGNATED Terex even when an older, invoiced shear exists (BX-12)', async () => {
+    store.equipment.push({
+      id: 'eq24',
+      site_id: WOODLAND,
+      display_name: 'EQ24 — Shear Machine',
+      category: 'terex',
+      merged_into_id: null,
+    });
+    seedMachine();
+    store.links.push({ ...store.links[0]!, id: 'link-eq24', equipment_id: 'eq24' });
+    expect(await siteMachineLabel(WOODLAND)).toBe('Terex');
+  });
+
+  it('FAILS LOUDLY at a site with no designation — it never guesses (BX-12)', async () => {
+    seedMachine();
+    store.designations.delete(WOODLAND);
+    await expect(siteMachineLabel(WOODLAND)).rejects.toBeInstanceOf(
+      ThroughputMachineNotConfiguredError,
+    );
   });
 
   it('stays generic for a terex-CATEGORY shear machine with no invoices', async () => {

@@ -9,6 +9,38 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-23 — The throughput machine is designated, not inferred (BX-12, ADR-0137)
+
+Bill approved 2026-09-23 ~7:20 AM PDT. Woodland's daily Terex readings had been saved on
+`EQ24 — Shear Machine` since 2026-09-02 6:21 AM PDT, when the shear (same `terex` category,
+two days older than `Terex`) got its first invoice and the "oldest `terex` row with an invoice
+link" resolver switched to it.
+
+### Fixed
+
+- **`site_throughput_machines`** (migration `20260863_bx12_site_throughput_machine`): one
+  designation per site (PK), one site per machine (unique), NULL = "no machine" by decision.
+  Production: Woodland → `Terex` (`7e35a4aa…`), Eugene → none.
+- **`resolveSiteThroughputMachine`** (now `src/lib/equipment/site-machine.ts`) reads the
+  designation. A site with none, or a designated row that is merged / inactive / off-site,
+  throws `ThroughputMachineNotConfiguredError` — the form answers **503** with the reason; the
+  gap watchdog records `machine_unconfigured` and pages `dr3-vision-system`. It never guesses.
+- The four inline copies of the proxy are gone: `siteMachineLabel` (unordered — Woodland's
+  label was whichever row Postgres returned first), the equipment page's ledger list (ordered by
+  name, so the metrics band rendered `EQ24…`), the admin ledger link and the ledger's identity
+  guard now all read the designation.
+- **Merges** repoint the designation (`MERGE_REPOINTED_REFERENCES`, pinned to `pg_constraint`)
+  and refuse (`throughput_machine_site`, 409) when it would end up off its site.
+- `prisma/seed.mjs` designates "none" for seeded sites (create-only).
+
+### Tests
+
+- `site-machine.test.ts` (three states + every stale-designation case),
+  `site-machine.db.test.ts` (real PG16: the production shape — an OLDER, INVOICED shear — the
+  old query picks the shear, the resolver and a real `upsertDailyThroughput` pick the Terex;
+  missing designation refuses the write; PK / unique / actor CHECK / FK; merge carries it),
+  gap-watchdog page on an unconfigured site, ledger refuses the invoiced EQ24, merge refusals.
+
 ## 2026-09-23 — Equipment: Morena's answers applied (OPEN-ITEMS §0.BX BX-2 `48-68`, BX-4, BX-5)
 
 Data only — no application code changed. Morena Gomez (Woodland manager) answered the three open

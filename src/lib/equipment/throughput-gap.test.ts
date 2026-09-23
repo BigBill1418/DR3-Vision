@@ -52,6 +52,7 @@ import {
   isWorkingDayISO,
   renderThroughputGapHtml,
 } from './throughput-gap';
+import { ThroughputMachineNotConfiguredError } from './site-machine';
 
 // ── Fake DB ──────────────────────────────────────────────────────────────────
 
@@ -375,6 +376,28 @@ describe('never fires', () => {
       { siteCode: 'woodland', status: 'skipped_no_machine', gapDateISO: '2026-08-07' },
     ]);
     expect(notifyStaff).not.toHaveBeenCalled();
+  });
+
+  // BX-12 (ADR-0137) — an UNDESIGNATED site is a configuration fault, not "no
+  // machine". Skipping it silently is the state this watchdog exists to end.
+  it('at a site with NO designation — pages dr3-vision-system, never guesses (BX-12)', async () => {
+    resolveSiteThroughputMachine.mockRejectedValue(
+      new ThroughputMachineNotConfiguredError('site-w', 'no designation for this site'),
+    );
+    const summary = await runThroughputGapScan(at9amPacific('2026-08-10'), fakeDb(state()));
+
+    expect(summary.outcomes).toEqual([
+      { siteCode: 'woodland', status: 'machine_unconfigured', gapDateISO: '2026-08-07' },
+    ]);
+    expect(notifyStaff).not.toHaveBeenCalled();
+    expect(publishNtfy).toHaveBeenCalledOnce();
+    expect(publishNtfy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        topic: 'dr3-vision-system',
+        priority: 'high',
+        fingerprint: 'throughput-machine-unconfigured:woodland',
+      }),
+    );
   });
 
   it('on a site holiday — Tuesday after a holiday Monday asks about Friday', async () => {

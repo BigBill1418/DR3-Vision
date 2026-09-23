@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 NEW — Woodland throughput has been landing on the EQ24 shear since 09-02**; BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 code fixed (ADR-0137) — Woodland throughput had been landing on the EQ24 shear since 09-02**; BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -83,8 +83,10 @@ Door Trailer` (both Woodland, `mergeEquipment`, one invoice each repointed). The
   `system:morena-equipment-answers`. Links 163 → 163, invoices 158 → 158, spend $239,486.52 →
   $239,486.52; nothing left on `48-68 trailer`; open equipment requests 3 → **0**. Registry: 578
   rows, 531 active, 13 merged, 4 fleet-wide, 1 distinct pair. 8 audit rows.
-- **BX-12 — NEW, DEFECT (Bill): Woodland's daily Terex throughput has been saved on `EQ24 — Shear
-Machine` since 2026-09-02.** `resolveSiteThroughputMachine` picks the OLDEST active
+- **BX-12 — CODE FIXED 2026-09-23 (ADR-0137, approved by Bill ~7:20 AM PDT): the site's throughput
+  machine is DESIGNATED (`site_throughput_machines`; Woodland → `Terex`, Eugene → none), never
+  inferred; an undesignated site fails loudly. Data move pending — see below.** Original finding:
+  Woodland's daily Terex throughput has been saved on `EQ24 — Shear Machine` since 2026-09-02. `resolveSiteThroughputMachine` picks the OLDEST active
   `terex`-CATEGORY row at the site that has ANY invoice link. The seed files shear machines under
   category `terex`; `EQ24 — Shear Machine` (seeded 07-28) is older than `Terex` (07-30), and at
   2026-09-02 6:21 AM PT it got its first link (Kelliher "Welding the sheer machine"). From that

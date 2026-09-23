@@ -68,6 +68,8 @@ interface Day {
 }
 const days: Day[] = [];
 const gapAlerts: { id: string; equipment_id: string }[] = [];
+/** BX-12 — `site_throughput_machines` rows (site_id PK, equipment_id unique). */
+const designations: { site_id: string; equipment_id: string | null }[] = [];
 
 /**
  * The `ap_requests` writers. These exist ONLY to be asserted un-called — they are
@@ -98,6 +100,7 @@ function reset(): void {
   audits.length = 0;
   days.length = 0;
   gapAlerts.length = 0;
+  designations.length = 0;
   apRequestUpdate.mockReset();
   apRequestUpdateMany.mockReset();
 
@@ -142,6 +145,30 @@ function client(inTx: boolean) {
           for (const e of equipment.values()) {
             if (e.merged_into_id !== where.merged_into_id) continue;
             e.merged_into_id = data.merged_into_id;
+            count += 1;
+          }
+          return { count };
+        },
+      ),
+    },
+    siteThroughputMachine: {
+      findMany: vi.fn(async ({ where }: { where: { equipment_id: { in: string[] } } }) =>
+        designations
+          .filter((d) => d.equipment_id !== null && where.equipment_id.in.includes(d.equipment_id))
+          .map((d) => ({ site_id: d.site_id })),
+      ),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { equipment_id: string };
+          data: { equipment_id: string };
+        }) => {
+          let count = 0;
+          for (const d of designations) {
+            if (d.equipment_id !== where.equipment_id) continue;
+            d.equipment_id = data.equipment_id;
             count += 1;
           }
           return { count };
@@ -576,12 +603,40 @@ describe('mergeEquipment — ADR-0135', () => {
       requests: 0,
       throughput: 2,
       gapAlerts: 1,
+      throughputMachine: 0,
       mergedChildren: 0,
     });
     expect(days.every((d) => d.equipment_id === 'eq-terex')).toBe(true);
     expect(gapAlerts[0]?.equipment_id).toBe('eq-terex');
     const row = audits.find((a) => a.row_id === 'eq-machine');
     expect(row?.after).toMatchObject({ repointed_daily_throughput: 2, repointed_gap_alerts: 1 });
+  });
+
+  // BX-12 (ADR-0137) — the designation is an FK into `equipment`; a merge moves it.
+  it('carries a designated throughput machine to the survivor at the same site', async () => {
+    designations.push({ site_id: WOODLAND, equipment_id: 'eq-machine' });
+    const res = await mergeEquipment('eq-terex', 'eq-machine', actor);
+    expect(res.ok && res.repointed.throughputMachine).toBe(1);
+    expect(designations[0]).toEqual({ site_id: WOODLAND, equipment_id: 'eq-terex' });
+    const row = audits.find((a) => a.row_id === 'eq-machine');
+    expect(row?.after).toMatchObject({ repointed_throughput_machine: 1 });
+  });
+
+  it('refuses a merge that would move a designated machine off its site', async () => {
+    designations.push({ site_id: WOODLAND, equipment_id: 'eq-terex' });
+    const res = await mergeEquipment('eq-terex', 'eq-eugene', actor, { survivorSiteId: null });
+    expect(res).toEqual({ ok: false, reason: 'throughput_machine_site' });
+    expect(equipment.get('eq-eugene')?.merged_into_id).toBeNull();
+    expect(equipment.get('eq-terex')?.site_id).toBe(WOODLAND);
+  });
+
+  it('refuses merging two designated machines', async () => {
+    designations.push(
+      { site_id: WOODLAND, equipment_id: 'eq-terex' },
+      { site_id: EUGENE, equipment_id: 'eq-eugene' },
+    );
+    const res = await mergeEquipment('eq-terex', 'eq-eugene', actor, { survivorSiteId: WOODLAND });
+    expect(res).toEqual({ ok: false, reason: 'throughput_machine_site' });
   });
 
   it('a voided reading on the same day is not a conflict', async () => {

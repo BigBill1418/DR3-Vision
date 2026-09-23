@@ -34,12 +34,17 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
     redirect('/admin/equipment');
   }
 
-  const [sites, equipment] = await Promise.all([
+  const [sites, equipment, designation] = await Promise.all([
     prisma.site.findMany({
       select: { id: true, code: true, name: true },
       orderBy: { name: 'asc' },
     }),
     getEquipment(id),
+    // BX-12 (ADR-0137) — is this row a site's DESIGNATED throughput machine?
+    prisma.siteThroughputMachine.findUnique({
+      where: { equipment_id: id },
+      select: { site_id: true },
+    }),
   ]);
   if (!equipment) notFound();
 
@@ -78,13 +83,13 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
           </p>
         </header>
         {/* ADR-0077 D6 — the asset master says WHAT this is; the machine ledger
-            says what it has COST. Linked only for the machine that actually HAS
-            a ledger: `category: 'terex'` alone is the ADR-0062 seed's category
-            for shear machines (four such rows carry no invoices at all, one of
-            them at Eugene), so `link_count` is what separates the machine from
-            the category. Mirrors `isSiteTerexMachine` in the ledger. */}
-        {equipment.category === 'terex' &&
-        equipment.link_count > 0 &&
+            says what it has COST. Linked only for a site's DESIGNATED throughput
+            machine (BX-12, ADR-0137). `category: 'terex'` is also the seed's
+            category for the shear machines, and "has an invoice link" stopped
+            separating them the day EQ24 was invoiced (2026-09-02). The ledger
+            re-checks the same designation. */}
+        {designation &&
+        designation.site_id === equipment.site_id &&
         equipment.site_code &&
         !equipment.merged_into_id ? (
           <Link

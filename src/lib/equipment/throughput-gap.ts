@@ -59,8 +59,10 @@
 //     even reach the form; nudging them to fill in a screen they cannot open is
 //     a bug wearing an email.
 //   · WEEKENDS — neither as a run day nor as a gap day.
-//   · Sites with NO machine. Eugene resolves to null today (ADR-0077's identity
-//     rule, site-derived and never hardcoded) and must stay silent.
+//   · Sites with NO machine. Eugene is DESIGNATED as having none (BX-12,
+//     ADR-0137 — `site_throughput_machines`) and must stay silent. A site with
+//     NO designation at all is a configuration fault, not "no machine": that
+//     pages `dr3-vision-system` instead of being silently skipped.
 
 import { prisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
@@ -70,6 +72,7 @@ import { publishNtfy } from '@/lib/ntfy';
 import { pacificDayISO, dayKeyUTCFromISO, dayISO } from '@/lib/time';
 import { log } from '@/lib/observability/logger';
 import { resolveSiteThroughputMachine } from './daily-throughput';
+import { ThroughputMachineNotConfiguredError } from './site-machine';
 import { TEREX_CAPTURE_CUTOVER_ISO } from './throughput';
 
 /**
@@ -157,8 +160,14 @@ export type GapScanStatus =
   | 'skipped_recorded'
   /** `equipment_entry` is not live at this site: nobody here can reach the form. */
   | 'skipped_site_pilot'
-  /** No machine resolves at this site (Eugene today). */
+  /** The site is DESIGNATED as having no throughput machine (Eugene). */
   | 'skipped_no_machine'
+  /**
+   * BX-12 — the site's throughput machine is not configured (no designation, or
+   * the designated row is merged / inactive / off-site). Pages `dr3-vision-system`:
+   * the scan cannot know which machine's silence to report, and must not guess.
+   */
+  | 'machine_unconfigured'
   /** The gap day predates ADR-0079's capture cutover — the sheet era, not a gap. */
   | 'skipped_pre_cutover'
   /** Already nudged about this exact (site, day). */
@@ -324,10 +333,10 @@ export async function runThroughputGapScan(
         continue;
       }
 
-      // The machine, resolved from the registry by evidence (ADR-0077 D1) — never
-      // a literal id. Eugene honestly resolves to null and stays silent; a Terex
-      // arriving there tomorrow is picked up with no code change.
-      const machine = await resolveSiteThroughputMachine(site.id);
+      // The site's DESIGNATED machine (BX-12, ADR-0137) — never inferred, never a
+      // literal id. Eugene is designated "none" and stays silent; an undesignated
+      // site throws and is paged in the catch below.
+      const machine = await resolveSiteThroughputMachine(site.id, db);
       if (!machine) {
         outcomes.push({ siteCode: site.code, status: 'skipped_no_machine', gapDateISO });
         continue;
@@ -471,6 +480,27 @@ export async function runThroughputGapScan(
         outcomes.push({ siteCode: site.code, status: 'alerted', gapDateISO, delivered, attempted });
       }
     } catch (err) {
+      if (err instanceof ThroughputMachineNotConfiguredError) {
+        // BX-12 — FAIL LOUDLY. Skipping would be the silent state this watchdog
+        // exists to end; guessing a machine is how the shear got three weeks of
+        // Terex readings. System-level (a configuration fault), so it is Bill's
+        // channel under hard rule #5, on the existing topic.
+        log.error(
+          { err, siteCode: site.code, gapDateISO },
+          '[throughput-gap] throughput machine not configured',
+        );
+        await publishNtfy({
+          topic: 'dr3-vision-system',
+          title: `Throughput machine not configured for ${site.code}`,
+          body: `${err.message} The ${gapDateISO ?? 'daily'} throughput-gap scan could not run for ${site.name}.`,
+          priority: 'high',
+          tags: ['error', 'throughput-gap', 'dr3-vision'],
+          fingerprint: `throughput-machine-unconfigured:${site.code}`,
+          cooldownMs: GAP_NOTIFY_FAIL_COOLDOWN_MS,
+        });
+        outcomes.push({ siteCode: site.code, status: 'machine_unconfigured', gapDateISO });
+        continue;
+      }
       // One site's failure must never silence the other's nudge.
       log.error(
         { err, siteCode: site.code, gapDateISO },

@@ -1018,6 +1018,9 @@ export const MERGE_REPOINTED_REFERENCES = [
   'ap_equipment_requests.resolved_equipment_id',
   'equipment_daily_throughput.equipment_id',
   'equipment_throughput_gap_alerts.equipment_id',
+  // BX-12 (ADR-0137) — a designated throughput machine merged away is the same
+  // physical machine as the survivor, so the designation follows it.
+  'site_throughput_machines.equipment_id',
   // Rows previously merged INTO the loser follow it to the survivor, so
   // `merged_into_id` never becomes a chain (the seed guard walks one hop).
   'equipment.merged_into_id',
@@ -1044,7 +1047,13 @@ export type MergeFailure =
   | 'loser_merged'
   | 'site_not_found'
   /** Both machines logged throughput on the same day — a person must pick which reading stands. */
-  | 'throughput_conflict';
+  | 'throughput_conflict'
+  /**
+   * BX-12 — one side is a site's designated throughput machine and the survivor
+   * would not live at that site (or both sides are designated). The designation
+   * must be changed by a person first; a merge never re-homes it.
+   */
+  | 'throughput_machine_site';
 
 export interface MergeOptions {
   /**
@@ -1061,6 +1070,7 @@ export interface MergeRepointCounts {
   requests: number;
   throughput: number;
   gapAlerts: number;
+  throughputMachine: number;
   mergedChildren: number;
 }
 
@@ -1175,6 +1185,16 @@ export async function mergeEquipmentInTx(
       return { ok: false, reason: 'throughput_conflict', conflictDates } as const;
     }
 
+    // BX-12 — a designation may follow the loser to the survivor only if the
+    // survivor stays at the designated site.
+    const designations = await tx.siteThroughputMachine.findMany({
+      where: { equipment_id: { in: [winnerId, loserId] } },
+      select: { site_id: true },
+    });
+    if (designations.length > 1 || designations.some((d) => d.site_id !== survivorSiteId)) {
+      return { ok: false, reason: 'throughput_machine_site' } as const;
+    }
+
     const links = await tx.apEquipmentLink.updateMany({
       where: { equipment_id: loserId },
       data: { equipment_id: winnerId },
@@ -1188,6 +1208,10 @@ export async function mergeEquipmentInTx(
       data: { equipment_id: winnerId },
     });
     const gapAlerts = await tx.equipmentThroughputGapAlert.updateMany({
+      where: { equipment_id: loserId },
+      data: { equipment_id: winnerId },
+    });
+    const throughputMachine = await tx.siteThroughputMachine.updateMany({
       where: { equipment_id: loserId },
       data: { equipment_id: winnerId },
     });
@@ -1234,6 +1258,7 @@ export async function mergeEquipmentInTx(
       requests: requests.count,
       throughput: throughput.count,
       gapAlerts: gapAlerts.count,
+      throughputMachine: throughputMachine.count,
       mergedChildren: mergedChildren.count,
     };
 
@@ -1256,6 +1281,7 @@ export async function mergeEquipmentInTx(
           repointed_equipment_requests: requests.count,
           repointed_daily_throughput: throughput.count,
           repointed_gap_alerts: gapAlerts.count,
+          repointed_throughput_machine: throughputMachine.count,
           repointed_merged_children: mergedChildren.count,
         } as Prisma.InputJsonValue,
       },
