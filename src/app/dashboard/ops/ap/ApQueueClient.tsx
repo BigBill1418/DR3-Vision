@@ -58,6 +58,19 @@ interface VarianceEvaluation {
   variancePct: number;
   direction: 'over' | 'under';
 }
+/** ADR-0136 — the decide route's 409 when this invoice is already approved. */
+interface DuplicateInvoice {
+  invoiceNumber: string | null;
+  matches: {
+    requestId: string;
+    subject: string | null;
+    vendor: string | null;
+    amountCents: number | null;
+    approvedAt: string | null;
+    approvedBy: string | null;
+  }[];
+}
+
 interface VarianceContext {
   established: boolean;
   vendorDisplayName?: string;
@@ -524,6 +537,13 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   const [variance, setVariance] = useState<VarianceContext | null>(null);
   const [varianceAck, setVarianceAck] = useState(false);
   const [varianceAckNote, setVarianceAckNote] = useState('');
+  // ADR-0136 — set only by the server's 409; cleared when another request opens.
+  const [duplicate, setDuplicate] = useState<DuplicateInvoice | null>(null);
+  const [duplicateReason, setDuplicateReason] = useState('');
+  useEffect(() => {
+    setDuplicate(null);
+    setDuplicateReason('');
+  }, [detail.id]);
 
   // Structured Approve applies only to a real DR3 site (Woodland/Eugene). NOT-DR3
   // (and an unselected site) uses the single-note path.
@@ -668,6 +688,12 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           setMsg('Acknowledge the variance ("I’ve verified the variance") before approving.');
           return;
         }
+        if (duplicate && !duplicateReason.trim()) {
+          setMsg(
+            'This invoice is already approved. Say why it should be approved again, or Reject it.',
+          );
+          return;
+        }
         payload = {
           decision,
           siteId: siteCode,
@@ -682,6 +708,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           ...(varianceTripped
             ? { varianceAcknowledged: true, varianceAckNote: varianceAckNote.trim() || undefined }
             : {}),
+          ...(duplicate ? { duplicateOverrideReason: duplicateReason.trim() } : {}),
         };
       } else {
         // ── Single-note path — Reject (any site), or Approve + NOT-DR3. Keeps the
@@ -711,6 +738,9 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
         const body = await res.json().catch(() => ({}));
         if (res.status === 409 && body.alreadyDecided) {
           setMsg(`This request was ${body.error}. Refreshing.`);
+        } else if (res.status === 409 && body.duplicateInvoice) {
+          setDuplicate(body.duplicateInvoice as DuplicateInvoice);
+          setMsg(body.error ?? 'This invoice is already approved.');
         } else if (!res.ok) {
           setMsg(body.error ?? `decide failed (${res.status})`);
         } else if (body.secondApprovalPending) {
@@ -768,6 +798,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       varianceTripped,
       varianceAck,
       varianceAckNote,
+      duplicate,
+      duplicateReason,
       detail.id,
       onDecided,
     ],
@@ -853,7 +885,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
     (notEquipmentRelated ||
       equipmentIds.length > 0 ||
       (equipmentNotListed && !!equipmentDescription.trim())) &&
-    (!varianceTripped || varianceAck);
+    (!varianceTripped || varianceAck) &&
+    (!duplicate || !!duplicateReason.trim());
   const approveDisabled = busy || !siteCode || (isRealSite ? !structuredComplete : !note.trim());
 
   return (
@@ -1183,6 +1216,46 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                   >
                     {varianceAck ? '✓ Variance verified' : 'I’ve verified the variance'}
                   </button>
+                </div>
+              )}
+
+              {/* ADR-0136 — already approved: say where, then require a reason to go again. */}
+              {duplicate && (
+                <div
+                  role="alert"
+                  className="mt-3 rounded border border-red-500 bg-red-600/20 p-3 text-sm text-red-100"
+                >
+                  <p className="font-bold">
+                    ⚠ ALREADY APPROVED —{' '}
+                    {duplicate.invoiceNumber
+                      ? `invoice ${duplicate.invoiceNumber}`
+                      : 'this invoice'}{' '}
+                    could be paid twice.
+                  </p>
+                  <ul className="mt-1 list-disc pl-5">
+                    {duplicate.matches.map((m) => (
+                      <li key={m.requestId}>
+                        {m.approvedAt ? fmt(m.approvedAt) : 'approved'}
+                        {m.approvedBy ? ` by ${m.approvedBy}` : ''}
+                        {m.vendor ? ` · ${m.vendor}` : ''}
+                        {m.amountCents !== null ? ` · ${dollars(m.amountCents)}` : ''}
+                        {m.subject ? ` · ${m.subject}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1">
+                    If it was re-sent by mistake, Reject it. If it is a deliberate re-send (for
+                    example, to correct the approval note), approve anyway and say why.
+                  </p>
+                  <label className="mt-2 block">
+                    Approve anyway — reason (required; recorded in the audit log)
+                    <textarea
+                      value={duplicateReason}
+                      onChange={(e) => setDuplicateReason(e.target.value)}
+                      rows={2}
+                      className="mt-1 w-full rounded border border-red-400/40 bg-black/30 px-2 py-1 text-red-50"
+                    />
+                  </label>
                 </div>
               )}
             </div>

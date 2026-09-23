@@ -39,6 +39,11 @@ import { resolveSecondApproval } from './second-approval-resolver';
 import { filterBySecondApprovalPref } from './notification-prefs';
 import { recordVisionApproval } from './baselines';
 import {
+  extractionVendor,
+  findApprovedDuplicates,
+  type DuplicateApproval,
+} from './duplicate-invoice';
+import {
   stampApproval,
   stampImage,
   stampOntoOriginalPdf,
@@ -138,6 +143,39 @@ export class ApAlreadyDecidedError extends Error {
   }
 }
 
+/**
+ * ADR-0136 — the invoice this request names is ALREADY approved on another
+ * request (same invoice number, compatible vendor). Approving again would mail
+ * accounting a second stamped copy to pay. Refused unless the approver says why
+ * (`duplicateOverrideReason`), which is audited on the winning decision row.
+ */
+export class ApDuplicateInvoiceError extends Error {
+  readonly status = 409 as const;
+  constructor(
+    readonly invoiceNumber: string | null,
+    readonly matches: readonly DuplicateApproval[],
+    readonly approverNames: ReadonlyMap<string, string>,
+  ) {
+    const first = matches[0];
+    const when = first?.approvedAt ? ` on ${formatPacificDateTime(first.approvedAt)} PT` : '';
+    const who = first?.approvedBy
+      ? ` by ${approverNames.get(first.approvedBy) ?? 'another approver'}`
+      : '';
+    const more =
+      matches.length > 1
+        ? ` (and ${matches.length - 1} more time${matches.length > 2 ? 's' : ''})`
+        : '';
+    const what = invoiceNumber
+      ? `Invoice ${invoiceNumber} was already approved`
+      : 'This is a forwarded copy of a DR3-Vision approval — the invoice was already approved';
+    super(
+      `${what}${when}${who}${more}. Approving it again could pay it twice. ` +
+        'If it is a deliberate re-send (for example, correcting the approval note), give the reason under “Approve anyway” and approve again; otherwise reject it.',
+    );
+    this.name = 'ApDuplicateInvoiceError';
+  }
+}
+
 export type ApMailOutcome =
   | 'sent'
   | 'refused_no_recipients'
@@ -232,6 +270,11 @@ export interface DecideArgs {
   varianceAcknowledgedBy?: string;
   /** D-M5-4 — optional additional acknowledgment note. */
   varianceAcknowledgmentNote?: string;
+  /** ADR-0136 — the approver's reason for approving an invoice that is already
+   * approved on another request. Without it such an Approve is refused
+   * ({@link ApDuplicateInvoiceError}); with it the decision proceeds and the reason
+   * + the matched request ids ride the winning audit row. */
+  duplicateOverrideReason?: string;
   /** Test seam — inject a deterministic PDF renderer so unit tests never launch Chromium. */
   renderer?: PdfRenderer;
 }
@@ -342,10 +385,47 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       decided_by: true,
       decided_at: true,
       received_at: true,
+      vendor: true,
+      extraction: true,
     },
   });
   if (!row) throw new ApRequestNotFoundError(args.requestId);
   if (row.status === 'quarantined') throw new ApNotActionableError('quarantined');
+
+  // ADR-0136 — an invoice is approved once. Checked on every Approve that files
+  // against a DR3 site (NOT-DR3 sends the invoice back; nothing is paid). Checked
+  // BEFORE the transaction, like the variance gate: a refusal writes nothing but
+  // its own audit row. Re-approving THIS row is already impossible — the
+  // conditional flip below only matches an actionable status.
+  const duplicate =
+    args.decision === 'approved' && !args.filedNotDr3
+      ? await findApprovedDuplicates(prisma, {
+          requestId: args.requestId,
+          subject: row.subject,
+          vendors: [args.vendorFreeform, args.vendor, row.vendor, extractionVendor(row.extraction)],
+        })
+      : null;
+  const duplicateMatches = duplicate?.matches ?? [];
+  const overrideReason = args.duplicateOverrideReason?.trim() || null;
+  if (duplicate && duplicateMatches.length > 0 && !overrideReason) {
+    await writeAudit({
+      actor_user_id: args.actorUserId,
+      action: 'update',
+      table_name: TABLE,
+      row_id: args.requestId,
+      after: {
+        attempted: args.decision,
+        outcome: 'refused_duplicate_invoice',
+        invoice_number: duplicate.invoiceNumber,
+        forwarded_approval: duplicate.forwardedApproval,
+        matched_request_ids: duplicateMatches.map((m) => m.requestId),
+      },
+    });
+    const names = new Map<string, string>();
+    for (const id of new Set(duplicateMatches.map((m) => m.approvedBy).filter(Boolean)))
+      names.set(id as string, await resolveName(prisma, id as string));
+    throw new ApDuplicateInvoiceError(duplicate.invoiceNumber, duplicateMatches, names);
+  }
 
   const priorStatus = row.status;
   const decidedAt = new Date();
@@ -498,6 +578,16 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
               : typeof args.amountCents === 'number',
             has_site: !!args.siteId,
             filed_not_dr3: !!args.filedNotDr3,
+            ...(duplicate && duplicateMatches.length > 0
+              ? {
+                  duplicate_override: {
+                    reason: overrideReason,
+                    invoice_number: duplicate.invoiceNumber,
+                    forwarded_approval: duplicate.forwardedApproval,
+                    matched_request_ids: duplicateMatches.map((m) => m.requestId),
+                  },
+                }
+              : {}),
             ...(structured
               ? {
                   variance_flag_state: args.varianceFlagState ?? 'not_applicable',
@@ -973,6 +1063,9 @@ export async function sendDecisionEmail(
       // ADR-0046 amendment (2026-07-20): NOT-DR3 disposition — when true the mail +
       // stamp render "NOT DR3 — see reason" in the location slot instead of a site.
       filed_not_dr3: true,
+      // ADR-0136 — the extracted vendor is one of the spellings the duplicate
+      // check compares.
+      extraction: true,
     },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
@@ -1126,6 +1219,26 @@ export async function sendDecisionEmail(
             : ''
         }</li>`
       : '';
+  // ADR-0136 — if this invoice number is ALSO approved on another request, say so
+  // to accounting in the one place they act on. The approve-time guard stops the
+  // accidental case; this line is what makes a deliberate re-send (or a pre-guard
+  // pair) impossible to pay twice by not noticing. Best-effort: a failed lookup
+  // must never block the decision mail.
+  const duplicate =
+    req.status === 'approved' && !filedNotDr3
+      ? await findApprovedDuplicates(prisma, {
+          requestId,
+          subject: req.subject,
+          vendors: [req.vendor_freeform, req.vendor, extractionVendor(req.extraction)],
+        }).catch(() => null)
+      : null;
+  const duplicateLine = duplicate?.matches.length
+    ? `<li>⚠ <b>${duplicate.invoiceNumber ? `Invoice ${escapeHtml(duplicate.invoiceNumber)}` : 'This invoice'} was ALSO approved in DR3-Vision</b> (${duplicate.matches
+        .map((m) =>
+          m.approvedAt ? `${escapeHtml(formatPacificDateTime(m.approvedAt))} PT` : 'date unknown',
+        )
+        .join('; ')}). Pay it once.</li>`
+    : '';
   // ADR-0046 Amendment 4 — the Great Plains matching keys (request id + original
   // subject) are STRIPPED from the mail body. They already ride the SUBJECT line
   // (below) and the stamped decision PDF, so repeating them inline was redundant
@@ -1152,6 +1265,7 @@ export async function sendDecisionEmail(
       ${firstApprovalEquipmentLine}
       ${overrideNoteLine}
       ${varianceLine}
+      ${duplicateLine}
     </ul>`;
 
   // ADR-0046 Amendment 4 — stamp the ORIGINAL invoice (both decisions), attach the

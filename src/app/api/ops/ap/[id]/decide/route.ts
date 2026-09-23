@@ -20,6 +20,7 @@ import {
 import { evaluateVarianceForDecision } from '@/lib/ap/variance';
 import {
   ApAlreadyDecidedError,
+  ApDuplicateInvoiceError,
   ApInvalidSiteError,
   ApLocationConflictError,
   ApNoteRequiredError,
@@ -75,6 +76,10 @@ interface DecideBody {
   varianceAcknowledged?: boolean;
   /** D-M5-4 — optional additional acknowledgment note. */
   varianceAckNote?: string;
+  /** ADR-0136 — the approver's reason for approving an invoice that is ALREADY
+   * approved on another request (e.g. AP re-sent it to correct the note). Absent,
+   * such an Approve is refused with 409 + `duplicateInvoice`. */
+  duplicateOverrideReason?: string;
 }
 
 function tooLong(v: unknown, max: number): boolean {
@@ -112,6 +117,11 @@ export async function POST(
     if (tooLong(body.varianceAckNote, NOTE_MAX_LEN))
       return NextResponse.json(
         { error: `variance note must be ${NOTE_MAX_LEN} characters or fewer` },
+        { status: 400 },
+      );
+    if (tooLong(body.duplicateOverrideReason, NOTE_MAX_LEN))
+      return NextResponse.json(
+        { error: `the approve-anyway reason must be ${NOTE_MAX_LEN} characters or fewer` },
         { status: 400 },
       );
     if (tooLong(body.vendor, VENDOR_MAX_LEN))
@@ -263,6 +273,10 @@ export async function POST(
         typeof body.varianceAckNote === 'string' && body.varianceAckNote.trim()
           ? body.varianceAckNote.trim()
           : undefined;
+      const duplicateOverrideReason =
+        typeof body.duplicateOverrideReason === 'string' && body.duplicateOverrideReason.trim()
+          ? body.duplicateOverrideReason.trim()
+          : undefined;
 
       const result = await decideRequest({
         requestId: id,
@@ -284,6 +298,7 @@ export async function POST(
               ...(ackNote ? { varianceAcknowledgmentNote: ackNote } : {}),
             }
           : {}),
+        ...(duplicateOverrideReason ? { duplicateOverrideReason } : {}),
       });
       return NextResponse.json(result);
     }
@@ -324,6 +339,26 @@ export async function POST(
     }
     if (e instanceof ApNotActionableError)
       return NextResponse.json({ error: e.message }, { status: 409 });
+    // ADR-0136 — the UI turns this into the "already approved" banner + the
+    // audited "Approve anyway" reason field.
+    if (e instanceof ApDuplicateInvoiceError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          duplicateInvoice: {
+            invoiceNumber: e.invoiceNumber,
+            matches: e.matches.map((m) => ({
+              requestId: m.requestId,
+              subject: m.subject,
+              vendor: m.vendor,
+              amountCents: m.amountCents,
+              approvedAt: m.approvedAt?.toISOString() ?? null,
+              approvedBy: m.approvedBy ? (e.approverNames.get(m.approvedBy) ?? null) : null,
+            })),
+          },
+        },
+        { status: 409 },
+      );
     throw e;
   }
 }

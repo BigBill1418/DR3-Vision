@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ApQueueClient, DetailPanel } from './ApQueueClient';
 
 beforeEach(() => {
@@ -221,5 +221,85 @@ describe('ApQueueClient — mail-not-sent badge (ADR-0126 D6)', () => {
     render(<ApQueueClient />);
     await screen.findByText('Invoice #4471');
     expect(screen.queryByRole('button', { name: 'mail not sent (0)' })).toBeNull();
+  });
+});
+
+// ── ADR-0136 — an invoice already approved elsewhere ────────────────────────
+//
+// The server refuses with 409 + `duplicateInvoice`; the panel must say WHERE it
+// was approved, block Approve until a reason is typed, and send that reason as
+// the audited override on the next click.
+
+describe('DetailPanel — already-approved invoice (ADR-0136)', () => {
+  it('shows the banner, gates Approve on a reason, then sends the reason as the override', async () => {
+    const decideBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: { body?: string }) => {
+        if (!String(url).endsWith('/decide'))
+          return { ok: false, status: 500, json: async () => ({}) };
+        decideBodies.push(JSON.parse(init?.body ?? '{}') as Record<string, unknown>);
+        if (decideBodies.length === 1) {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              error:
+                'Invoice 6646 was already approved on Aug 13, 2026, 5:32 AM PT by Morena Gomez.',
+              duplicateInvoice: {
+                invoiceNumber: '6646',
+                matches: [
+                  {
+                    requestId: 'first',
+                    subject: 'FW: Invoice: 6646',
+                    vendor: 'United',
+                    amountCents: 20184,
+                    approvedAt: '2026-08-13T12:32:37.000Z',
+                    approvedBy: 'Morena Gomez',
+                  },
+                ],
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ decision: 'approved', mail: 'sent' }),
+        };
+      }) as unknown as typeof fetch,
+    );
+
+    render(<DetailPanel detail={pendingDetail()} onDecided={() => undefined} />);
+    selectSite('woodland');
+    fireEvent.change(screen.getByRole('textbox', { name: /enter the vendor name carefully/i }), {
+      target: { value: 'United Fleet Maintenance' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /confirmed amount usd/i }), {
+      target: { value: '201.84' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /what was this transaction for/i }), {
+      target: { value: 'truck lights' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /not equipment-related/i }));
+    fireEvent.click(approveBtn());
+
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('ALREADY APPROVED — invoice 6646');
+    expect(banner.textContent).toContain('by Morena Gomez');
+    expect(banner.textContent).toContain('$201.84');
+    expect(decideBodies[0]).not.toHaveProperty('duplicateOverrideReason');
+    await waitFor(() => expect(approveBtn().disabled).toBe(true));
+
+    fireEvent.change(screen.getByRole('textbox', { name: /approve anyway — reason/i }), {
+      target: { value: 'AP re-sent it to correct the note' },
+    });
+    expect(approveBtn().disabled).toBe(false);
+    fireEvent.click(approveBtn());
+    await waitFor(() => expect(decideBodies).toHaveLength(2));
+    expect(decideBodies[1]).toMatchObject({
+      decision: 'approved',
+      duplicateOverrideReason: 'AP re-sent it to correct the note',
+    });
   });
 });

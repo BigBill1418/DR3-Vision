@@ -15,6 +15,7 @@ import {
 } from './__testutils__/fake-prisma';
 import {
   ApAlreadyDecidedError,
+  ApDuplicateInvoiceError,
   ApLocationConflictError,
   ApNoteRequiredError,
   ApNotActionableError,
@@ -1552,5 +1553,178 @@ describe('ADR-0126 — decision mail cannot fail silently', () => {
 
     const arg = notifyStaffSpy.mock.calls[0]?.[0] as { htmlBody: string };
     expect(arg.htmlBody).toContain('<li>Note: duplicate of invoice 4470</li>');
+  });
+});
+
+// ADR-0136 — invoice 6646 was approved twice (2026-08-13, 2026-09-02) because a
+// re-forward is a new message and nothing compared invoice numbers. These pin the
+// guard that now does, the audited way past it, and the line accounting reads.
+describe('ADR-0136 — an invoice is approved once', () => {
+  const SUBJECT =
+    'FW: Invoice: 6646 | Service Order: 7415 | Unit #161053 | United Fleet Maintenance';
+  function twoCopies(): FakeDb {
+    return newFakeDb({
+      requests: [
+        pendingReq({
+          id: 'first',
+          internet_message_id: '<first@svdp.us>',
+          status: 'approved',
+          subject: `${SUBJECT} Woodland, CA`,
+          vendor_freeform: 'United',
+          confirmed_amount_cents: 20184,
+          decided_by: 'u-morena',
+          decided_at: new Date('2026-08-13T12:32:37Z'),
+        } as Partial<FakeApRequest>),
+        pendingReq({
+          id: 'second',
+          internet_message_id: '<second@svdp.us>',
+          subject: `${SUBJECT} -Note Correction`,
+        }),
+      ],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+  }
+  const APPROVE_SECOND = {
+    requestId: 'second',
+    decision: 'approved' as const,
+    actorUserId: 'u-morena',
+    siteId: 'site-w',
+    vendorFreeform: 'united fleet maintenance',
+    explanation: 'Check on the lights of the tractor truck',
+    confirmedAmountCents: 20184,
+    equipmentLinks: { equipmentIds: [], notEquipmentRelated: true },
+  };
+
+  it('refuses to approve the second copy, names the first approval in PT, writes nothing but an audit row', async () => {
+    const db = twoCopies();
+    const err = await decideRequest({ prisma: fp(db), ...APPROVE_SECOND }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApDuplicateInvoiceError);
+    const e = err as ApDuplicateInvoiceError;
+    expect(e.status).toBe(409);
+    expect(e.invoiceNumber).toBe('6646');
+    expect(e.matches.map((m) => m.requestId)).toEqual(['first']);
+    expect(e.message).toContain('Invoice 6646 was already approved on');
+    expect(e.message).toContain('5:32 AM PT by Morena');
+    // Nothing moved: still pending, no links, no baseline row, no mail.
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('pending');
+    expect(db.baselineHistory).toHaveLength(0);
+    expect(sendSystemEmail).not.toHaveBeenCalled();
+    expect(writeAudit).toHaveBeenCalledTimes(1);
+    expect(writeAudit.mock.calls[0]![0]).toMatchObject({
+      row_id: 'second',
+      after: {
+        outcome: 'refused_duplicate_invoice',
+        invoice_number: '6646',
+        matched_request_ids: ['first'],
+      },
+    });
+  });
+
+  it('approves with an override reason, audits the reason + matched ids, and tells accounting to pay once', async () => {
+    const db = twoCopies();
+    const res = await decideRequest({
+      prisma: fp(db),
+      ...APPROVE_SECOND,
+      duplicateOverrideReason: '  AP re-sent to correct the approval note  ',
+    });
+    expect(res.mail).toBe('sent');
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('approved');
+    const won = writeAudit.mock.calls
+      .map((c) => c[0] as { after?: Record<string, unknown> })
+      .find((a) => a.after?.['outcome'] === 'won');
+    expect(won?.after?.['duplicate_override']).toEqual({
+      reason: 'AP re-sent to correct the approval note',
+      invoice_number: '6646',
+      forwarded_approval: false,
+      matched_request_ids: ['first'],
+    });
+    const mail = notifyStaffSpy.mock.calls[0]![0] as { htmlBody: string };
+    expect(mail.htmlBody).toContain('Invoice 6646 was ALSO approved in DR3-Vision');
+    expect(mail.htmlBody).toMatch(/Aug 13, 2026[^<]*5:32 AM PT\)\. Pay it once\./);
+  });
+
+  it('a whitespace-only reason is no reason', async () => {
+    const db = twoCopies();
+    await expect(
+      decideRequest({ prisma: fp(db), ...APPROVE_SECOND, duplicateOverrideReason: '   ' }),
+    ).rejects.toBeInstanceOf(ApDuplicateInvoiceError);
+  });
+
+  it('does not stand in the way of REJECTING the copy, or of a NOT-DR3 return', async () => {
+    const db = twoCopies();
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'second',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      note: 'duplicate of the invoice approved 8/13',
+    });
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('rejected');
+
+    const db2 = twoCopies();
+    await decideRequest({
+      prisma: fp(db2),
+      requestId: 'second',
+      decision: 'approved',
+      actorUserId: 'u-morena',
+      filedNotDr3: true,
+      note: 'not ours',
+    });
+    expect(db2.requests.find((r) => r.id === 'second')!.status).toBe('approved');
+  });
+
+  it('re-approving the SAME row is refused as already decided (the flip only matches an actionable row)', async () => {
+    const db = twoCopies();
+    await expect(
+      decideRequest({ prisma: fp(db), ...APPROVE_SECOND, requestId: 'first' }),
+    ).rejects.toBeInstanceOf(ApAlreadyDecidedError);
+  });
+
+  it('refuses Vision’s own approval mail forwarded back in — no invoice number needed (the $4,005 Kelliher case)', async () => {
+    const db = newFakeDb({
+      requests: [
+        pendingReq({
+          id: 'orig',
+          internet_message_id: '<orig@svdp.us>',
+          status: 'approved',
+          subject: 'FW: Kelliher Machine Invoice-Green Baler',
+          vendor_freeform: 'Kelliher J Cowden Sr.',
+          decided_by: 'u-morena',
+          decided_at: new Date('2026-08-24T17:17:00Z'),
+        } as Partial<FakeApRequest>),
+        pendingReq({
+          id: 'echo',
+          internet_message_id: '<echo@svdp.us>',
+          subject:
+            'FW: DR3-Vision AP decision (approved — DR3 Eugene) — FW: Kelliher Machine Invoice-Green Baler',
+        }),
+      ],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+    const err = await decideRequest({
+      prisma: fp(db),
+      ...APPROVE_SECOND,
+      requestId: 'echo',
+      vendorFreeform: 'Kelliher Machine',
+      confirmedAmountCents: 400500,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApDuplicateInvoiceError);
+    expect((err as ApDuplicateInvoiceError).invoiceNumber).toBeNull();
+    expect((err as ApDuplicateInvoiceError).message).toContain(
+      'This is a forwarded copy of a DR3-Vision approval — the invoice was already approved on',
+    );
+    expect(db.requests.find((r) => r.id === 'echo')!.status).toBe('pending');
+  });
+
+  it('a first approval of an invoice nobody approved yet is untouched by the guard', async () => {
+    const db = twoCopies();
+    db.requests.find((r) => r.id === 'first')!.status = 'rejected';
+    await decideRequest({ prisma: fp(db), ...APPROVE_SECOND });
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('approved');
+    const mail = notifyStaffSpy.mock.calls[0]![0] as { htmlBody: string };
+    expect(mail.htmlBody).not.toContain('ALSO approved');
   });
 });

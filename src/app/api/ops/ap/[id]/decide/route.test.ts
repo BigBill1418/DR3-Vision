@@ -16,10 +16,28 @@ const {
   assertEquipmentForSite,
   ApEquipmentInvalidError,
   evaluateVarianceForDecision,
+  ApDuplicateInvoiceError,
 } = vi.hoisted(() => {
   class ApNoteRequiredError extends Error {}
   class ApEquipmentInvalidError extends Error {}
+  class ApDuplicateInvoiceError extends Error {
+    constructor(
+      readonly invoiceNumber: string | null,
+      readonly matches: {
+        requestId: string;
+        subject: string | null;
+        vendor: string | null;
+        amountCents: number | null;
+        approvedAt: Date | null;
+        approvedBy: string | null;
+      }[],
+      readonly approverNames: Map<string, string>,
+    ) {
+      super(`Invoice ${invoiceNumber} was already approved`);
+    }
+  }
   return {
+    ApDuplicateInvoiceError,
     requireApApprover: vi.fn(async () => ({ userId: 'u-morena' })),
     decideRequest: vi.fn(async () => ({ requestId: 'req-1', decision: 'approved', mail: 'sent' })),
     resolveDecisionSiteId: vi.fn(async () => 'site-w'),
@@ -37,6 +55,7 @@ vi.mock('@/lib/ap/equipment', () => ({ assertEquipmentForSite, ApEquipmentInvali
 vi.mock('@/lib/ap/variance', () => ({ evaluateVarianceForDecision }));
 vi.mock('@/lib/ap/approvals', () => ({
   ApAlreadyDecidedError: class extends Error {},
+  ApDuplicateInvoiceError,
   ApInvalidSiteError: class extends Error {},
   ApLocationConflictError: class extends Error {},
   ApNoteRequiredError,
@@ -83,6 +102,7 @@ interface DecideArgShape {
   varianceFlagState?: string;
   varianceAcknowledgedBy?: string;
   varianceAcknowledgmentNote?: string;
+  duplicateOverrideReason?: string;
 }
 function lastDecideArg(): DecideArgShape {
   return (decideRequest.mock.calls.at(-1)! as unknown[])[0] as DecideArgShape;
@@ -388,5 +408,63 @@ describe('POST /api/ops/ap/[id]/decide — variance gate (D-M5-4)', () => {
     const res = await call(APPROVE);
     expect(res.status).toBe(200);
     expect(lastDecideArg().varianceFlagState).toBe('below_threshold');
+  });
+});
+
+describe('POST /api/ops/ap/[id]/decide — already-approved invoice (ADR-0136)', () => {
+  it('409s with the matches the UI needs to render the banner', async () => {
+    decideRequest.mockImplementationOnce(async () => {
+      throw new ApDuplicateInvoiceError(
+        '6646',
+        [
+          {
+            requestId: 'first',
+            subject: 'FW: Invoice: 6646',
+            vendor: 'United',
+            amountCents: 20184,
+            approvedAt: new Date('2026-08-13T12:32:37Z'),
+            approvedBy: 'u-morena',
+          },
+        ],
+        new Map([['u-morena', 'Morena Gomez']]),
+      );
+    });
+    const res = await call(APPROVE);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; duplicateInvoice: unknown };
+    expect(body.error).toContain('Invoice 6646 was already approved');
+    expect(body.duplicateInvoice).toEqual({
+      invoiceNumber: '6646',
+      matches: [
+        {
+          requestId: 'first',
+          subject: 'FW: Invoice: 6646',
+          vendor: 'United',
+          amountCents: 20184,
+          approvedAt: '2026-08-13T12:32:37.000Z',
+          approvedBy: 'Morena Gomez',
+        },
+      ],
+    });
+  });
+
+  it('passes a trimmed override reason through to the decision', async () => {
+    const res = await call({
+      ...APPROVE,
+      duplicateOverrideReason: '  AP re-sent to fix the note ',
+    });
+    expect(res.status).toBe(200);
+    expect(lastDecideArg().duplicateOverrideReason).toBe('AP re-sent to fix the note');
+  });
+
+  it('omits a blank reason (the lib then refuses a real duplicate)', async () => {
+    await call({ ...APPROVE, duplicateOverrideReason: '   ' });
+    expect(lastDecideArg().duplicateOverrideReason).toBeUndefined();
+  });
+
+  it('400s an over-length reason WITHOUT deciding', async () => {
+    const res = await call({ ...APPROVE, duplicateOverrideReason: 'x'.repeat(2001) });
+    expect(res.status).toBe(400);
+    expect(decideRequest).not.toHaveBeenCalled();
   });
 });

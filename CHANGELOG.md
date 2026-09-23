@@ -9,6 +9,45 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-23 — An invoice is approved once (ADR-0136); Bill's equipment calls executed (ADR-0135 BX-3/BX-6)
+
+Invoice 6646 (United Fleet Maintenance, $201.84) was approved twice — 2026-08-13 5:32 AM PT and
+2026-09-02 6:14 AM PT. It was **two requests**, not one approved twice: AP re-forwarded the same PDF
+"for approval note correction" (the first approval carried another invoice's explanation), and the
+only duplicate guard, `internet_message_id` UNIQUE, cannot see a re-forward. Both decision mails
+reached AP with Mary on CC. Vision has no payment path; whether it was paid twice is a Great Plains
+question (OPEN-ITEMS § 0.BX BX-7). A scan found seven more invoice numbers approved twice and two
+forwarded approval mails approved again (BX-8).
+
+### Added
+
+- **Duplicate-invoice guard** (`src/lib/ap/duplicate-invoice.ts`, `decideRequest`): an Approve is
+  refused (409, audited `refused_duplicate_invoice`) when another request is already approved or
+  first-approved for the same invoice number (read from the subject) and a loosely compatible vendor,
+  or when the request is Vision's own approval mail forwarded back in. Reject / Hold / NOT-DR3 are
+  unaffected; re-approving the same row stays impossible (first-action-wins flip).
+- **Approve anyway** on the AP panel: the red banner names when and by whom the invoice was approved;
+  a required reason unlocks Approve and rides the decision's audit row (`duplicate_override`).
+- **Decision mail line** — "⚠ Invoice N was ALSO approved in DR3-Vision (date PT). Pay it once." —
+  whenever the invoice is approved on another request.
+
+### Changed (data, production — `scripts/one-off/2026-09-23-equipment-followups.ts`)
+
+Backup first: `svdp-dev:~/backups-adhoc/dr3-equipment-followups-pre-20260923-010936-PT.dump`
+(equipment 577 / links 163 / equipment requests 32 rows, verified). Executed 2026-09-23 1:15 AM PT,
+audited under `system:equipment-followups`; links 163 → 163, invoices 158 → 158, spend
+$239,486.52 → $239,486.52.
+
+- `60` → `60 — Strick 28 Ft Roll Up Door Trailer` (Eugene, merged).
+- Work orders filed as assets: `fix trailer 95 and 5308` → `5308 — Great Dane…` and `Fix and repair
+trailer: 53489, 5340, 35, 282859…` → `35 — 28 Ft Roll Up Door Trailer` (Woodland, merged; the
+  other units are named on each request's resolution note — Woodland's `95` is the Wabash in VLM
+  register G3, **not** Eugene's `95 — Fruehauf`, so it was not linked). `relay order from Aleks`
+  names no trailer: deactivated, its Grainger invoice left on the row.
+- Open requests resolved: `Trailer # 19` → Eugene's `Trailer #19`; `Trailer # 5327` → new
+  `5327 — Trailer` at Woodland (no 5327 at either site). Active equipment 538 → 535; open equipment
+  requests 5 → 3.
+
 ## 2026-09-22 — Equipment duplicates condensed; a design to stop them (ADR-0135, Proposed)
 
 Bill, on the equipment-request worklist: staff keep typing the same equipment with different

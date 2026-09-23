@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 Proposed (design awaits Bill); 4 duplicates merged 2026-09-22 11:26 PM PT; BX-1 decision + BX-2..BX-6 calls stand** (Bill, 2026-09-22)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 Proposed (design awaits Bill); 4 duplicates merged 2026-09-22 11:26 PM PT; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-8 duplicate approvals await AP; BX-1/2/4/5/9 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -44,10 +44,15 @@ Forklift` (ADR-0087 G6). Links 26→26, spend 2,276,253→2,276,253 cents, 0 lin
   each is a two-click merge (site transfer, then merge). Plus `48-68 trailer`
   (Woodland) vs `4868 — Fruehauf 28 Ft` (Eugene): the dash may mean a different
   trailer (ADR-0087 §1.3) — check the invoice.
-- **BX-3 — DECISION: the three work orders posing as assets** in every approver's
-  picker (`Fix and repair trailer: 53489, 5340, 35, 282859…`, `fix trailer 95 and
-5308`, `relay order from Aleks`, all Woodland, one invoice each). Recommended:
-  repoint each invoice at the real trailer(s) or not-equipment, then deactivate.
+- **BX-3 — DONE 2026-09-23 (Bill's call): the three work orders posing as assets.**
+  `fix trailer 95 and 5308` → merged into `5308 — Great Dane 53 Ft Swing Door Trailer`;
+  `Fix and repair trailer: 53489, 5340, 35, 282859…` → merged into `35 — 28 Ft Roll Up
+Door Trailer` (both Woodland, `mergeEquipment`, one invoice each repointed). The
+  other units are named on each escape-hatch request's resolution note: Woodland's `95`
+  is the 2005 Wabash (VLM register G3), **not** Eugene's `95 — Fruehauf` — deliberately
+  not linked; 53489 / 5340 / 282859 exist at neither site. `relay order from Aleks` (a
+  Grainger past-due notice) names no trailer: deactivated, its invoice left on the
+  row. Open questions moved to BX-9.
 - **BX-4 — CALL (Morena/Janette): which EQ number is the green horizontal baler?**
   Requested twice at Woodland today (Morena 9:01 AM PT, Janette 11:51 AM PT); a
   `Green Horizontal baler Topper` row was created at EUGENE on 2026-08-24; Woodland
@@ -56,14 +61,49 @@ Forklift` (ADR-0087 G6). Links 26→26, spend 2,276,253→2,276,253 cents, 0 lin
 - **BX-5 — CALL (Bill): `EQ24 Terex Shredder`** (open since 2026-09-18) → `EQ24 —
 Shear Machine`? And is EQ24 the same machine as the canonical `Terex`? Both carry
   throughput history, so merging them waits on the Phase 1 merge fix.
-- **BX-6 — CALL: remaining open requests.** `Trailer # 19` (Woodland) vs the existing
-  `Trailer #19` (Eugene) — same trailer moved yards? `Trailer # 5327` — no match in
-  the registry, likely genuinely new. `60` vs `60 — Strick 28 Ft` (Eugene, both seed,
-  no invoices) — ghost unit or real?
-- **BX-7 — AP CHECK (side finding): invoice 6646** (United Fleet Maintenance, Unit
-  #161053, $201.84) is approved TWICE as two AP requests — received 2026-08-10 2:40 PM
-  PT / approved 2026-08-13 5:32 AM PT, and received 2026-09-01 3:27 PM PT / approved
-  2026-09-02 6:14 AM PT. Confirm it was not paid twice.
+- **BX-6 — DONE 2026-09-23 (Bill's call).** `Trailer # 19` (Woodland request) resolved
+  onto Eugene's `Trailer #19` (moved yards; the earlier invoice reads "DOT for trailer
+  #19 going to Eugene Stores"). `60` merged into `60 — Strick 28 Ft Roll Up Door
+Trailer`. `Trailer # 5327` — no 5327 at either site, so created as `5327 — Trailer`
+  (Woodland; invoice 6813 gives unit + type, not make/length — rename when known; note
+  Eugene has an unrelated `532753 — Strick`, invoiced the same day as 6814). Backup
+  `svdp-dev:~/backups-adhoc/dr3-equipment-followups-pre-20260923-010936-PT.dump`;
+  record `scripts/one-off/2026-09-23-equipment-followups.ts`; links/invoices/spend
+  conserved (163 / 158 / $239,486.52); active equipment 538 → 535; open requests 5 → 3
+  (EQ24 + the two green-baler requests, BX-4/BX-5).
+- **BX-7 — ANSWERED 2026-09-23 (ADR-0136): invoice 6646 is two requests, not one
+  approved twice.** Two different emails from Gloria (AP) with byte-identical PDFs:
+  received 2026-08-10 2:40 PM PT / approved 2026-08-13 5:32 AM PT (explanation
+  "Calibrate in house scale." — pasted from a Grainger approval two minutes earlier),
+  and re-forwarded 2026-09-01 3:27 PM PT _"for approval note correction"_ / approved
+  2026-09-02 6:14 AM PT. Both decision mails went to Gloria with Mary on CC. Vision has
+  no payment path (GP is keyed by hand), so a double payment is **unlikely** — AP itself
+  re-sent it as a correction — but only GP can prove it. **Ask Mary:** United Fleet
+  Maintenance invoice 6646 paid once? Guard shipped so it cannot recur silently.
+- **BX-8 — AP CHECK: other invoices approved more than once** (scan 2026-09-23, same key
+  as the guard, plus identical original-PDF bytes). All Woodland, all decision mails
+  sent. Each needs Mary to confirm it was paid once:
+  - **Kelliher green baler, $4,005.00 ×3** — Eugene 2026-08-24 10:17 AM PT (Bill);
+    Woodland 2026-09-22 11:52 AM PT (Bill, "Resending… provide the invoice date", same
+    PDF); Woodland 2026-09-22 9:56 AM PT (Janette — Vision's own approval mail forwarded
+    back with a coding question). Also filed to two different sites.
+  - **Ramos IN-0320844, $1,902.68 ×3** — 2026-08-11 9:15 AM PT, and twice at 2026-08-14
+    1:21 PM PT (Bill), same PDF.
+  - **Ramos "Invoice(s) Posted", $1,023.16 ×2** — 2026-07-27 12:01 PM PT (Bill), same PDF.
+  - **United Fleet 6739 ($152.10), 6756 ($152.10), 6760 ($1,878.09), 6761 ($96.76 then
+    $98.76)** — first forwarded by Mary 09-04..09-09, again by Gloria 09-16; approved again
+    2026-09-17 by Janette / Bill. Same PDFs. The strongest double-pay risk on the list.
+  - **North West Compacting NW9540, $570.00 ×2** — Mary forwarded twice 08-25 (second:
+    "add the EQ number"); approved 08-25 (Janette) and 08-26 (Morena).
+  - **Xtraction 13422, $548.10 ×2** — 2026-09-21 1:00 / 1:02 PM PT (Janette); the second
+    copy's PDF is byte-identical to invoice 13423's, so check both.
+  - **Interstate Oil, 2026-07-20** — same PDF approved 11:30 AM ($403.01) and 11:43 AM PT.
+  - **Allied U047M248** — approved 2026-09-18 ($18,020.44, Bill); Vision's approval mail
+    for it came back 09-21 with Gloria's note "a vendor statement, we do not pay from
+    statements" and was approved 2026-09-22 1:13 PM PT as $392.70 (Morena). Clarify.
+- **BX-9 — QUESTIONS (Morena):** which machine was the Grainger "relay order from Aleks"
+  for; add Woodland's `95` (2005 Wabash, register G3) to the registry?; are 53489 / 5340
+  / 282859 real Woodland trailers (282859 is close to `282876`)?
 - **Accepted residual:** identifier-only names (`1DW1A5321PS807745`, `12BB04252`,
   `SN 31587 Forklift` filed as `vehicle`, `ZHGC FP25`, `Trailer Number #7677`, `5312
 trailer`, `53641 trailer`, `trailer 540010`, `Trailer #19`) are left as they are —
