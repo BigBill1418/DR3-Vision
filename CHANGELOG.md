@@ -9,6 +9,33 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-23 — Equipment: Morena's answers applied (OPEN-ITEMS §0.BX BX-2 `48-68`, BX-4, BX-5)
+
+Data only — no application code changed. Morena Gomez (Woodland manager) answered the three open
+equipment questions at ~7 AM PDT; executed 7:15 AM PDT by
+`scripts/one-off/2026-09-23-morena-equipment-answers.ts` (actor `system:morena-equipment-answers`).
+
+### Changed (production data)
+
+- **`48-68 trailer` merged into `4868 — Fruehauf 28 Ft Roll Up Door Trailer`**, now fleet-wide
+  (invoice: United Fleet 6743, "Unit #4868"). The old spelling now finds 4868.
+- **The green horizontal baler has one record**: the Eugene row `Green Horizontal baler Topper` was
+  Woodland's machine (Kelliher 0174, "Repair Big Green Baler", addressed to DR-3 Woodland) —
+  renamed `Green Horizontal Baler` (type baler, no unit number), moved to Woodland, and both open
+  Woodland requests (Morena 09-22, Janette 09-22) resolved onto it.
+- **`EQ24 Terex Shredder` request resolved onto `Terex`** — the invoice (Kelliher 0183, "TAS815
+  Shredder … shaft assemblies") is the Terex shredder; EQ24 is the shear. `Terex` and `EQ24 — Shear
+Machine` recorded as different assets.
+- Open equipment requests 3 → 0. Links 163 / invoices 158 / spend $239,486.52 unchanged. Backup
+  `svdp-dev:~/backups-adhoc/dr3-equipment-morena-answers-pre-20260923-071127-PT.dump`
+  (restore-tested).
+
+### Found (not fixed — OPEN-ITEMS BX-12)
+
+- Woodland's daily Terex throughput has been recorded against `EQ24 — Shear Machine` since
+  2026-09-02 (17 days + 5 gap alerts): the site's throughput machine is inferred as the oldest
+  `terex`-category row with an invoice link, and the EQ24 shear got its first link that morning.
+
 ## 2026-09-23 — Pick the asset, don't type it: the equipment redesign ships (ADR-0135, all three phases)
 
 Bill approved all three phases and ruled that trailers belong to the fleet, not a yard. Staff can

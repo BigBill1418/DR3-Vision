@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-8 duplicate approvals await AP; BX-2 (48-68) / BX-4 / BX-5 / BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 NEW — Woodland throughput has been landing on the EQ24 shear since 09-02**; BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -37,9 +37,12 @@ Forklift` (ADR-0087 G6). Links 26→26, spend 2,276,253→2,276,253 cents, 0 lin
 - **BX-2 — 281577 / 282876 / 284460: DONE 2026-09-23** (Bill: trailers move yards → neither yard).
   Each merged into ONE FLEET-WIDE record (the seeded row survives) via `mergeEquipment` —
   record `scripts/one-off/2026-09-23-cross-site-trailer-merge.ts`, backup + evidence in CHANGELOG.
-  **Still open: `48-68 trailer`** (Woodland) vs `4868 — Fruehauf 28 Ft` (Eugene) — the dash may mean a
-  different trailer (ADR-0087 §1.3); the matcher deliberately does NOT pair them. Read the invoice;
-  if they are one trailer, merge from `/admin/equipment` choosing the survivor's site.
+  **`48-68 trailer` — DONE 2026-09-23 7:15 AM PT (Morena: "Yes, this is the same trailer").**
+  Its one invoice is United Fleet 6743, subject "Unit #4868", note "DOT on trailer 48-68". Merged
+  (`mergeEquipment`) into `4868 — Fruehauf 28 Ft Roll Up Door Trailer`, survivor now FLEET-WIDE
+  (was Eugene; serviced in Woodland) — 1 link + 1 resolved request moved, 0 throughput. The merged
+  row keeps the name `48-68 trailer`, so that spelling now finds 4868 in every search. The matcher
+  rule stays (a dash CAN mean a different trailer; this one didn't).
 - **BX-3 — DONE 2026-09-23 (Bill's call): the three work orders posing as assets.**
   `fix trailer 95 and 5308` → merged into `5308 — Great Dane 53 Ft Swing Door Trailer`;
   `Fix and repair trailer: 53489, 5340, 35, 282859…` → merged into `35 — 28 Ft Roll Up
@@ -49,15 +52,49 @@ Door Trailer` (both Woodland, `mergeEquipment`, one invoice each repointed). The
   not linked; 53489 / 5340 / 282859 exist at neither site. `relay order from Aleks` (a
   Grainger past-due notice) names no trailer: deactivated, its invoice left on the
   row. Open questions moved to BX-9.
-- **BX-4 — CALL (Morena/Janette): which EQ number is the green horizontal baler?**
-  Requested twice at Woodland today (Morena 9:01 AM PT, Janette 11:51 AM PT); a
-  `Green Horizontal baler Topper` row was created at EUGENE on 2026-08-24; Woodland
-  already carries EQ23/EQ44/EQ48/EQ75 Horizontal Balers. Resolve both open requests
-  against the same row, and say whether the Eugene row is really Woodland's.
-- **BX-5 — CALL (Bill): `EQ24 Terex Shredder`** (open since 2026-09-18) → `EQ24 —
-Shear Machine`? And is EQ24 the same machine as the canonical `Terex`? Both carry
-  throughput history — the merge fix shipped 2026-09-23 (ADR-0135 §8), so a merge now moves
-  that history, and refuses if both logged the same day.
+- **BX-4 — DONE 2026-09-23 7:15 AM PT (Morena: "Green Horizontal baler does not have equipment
+  number").** The Eugene row `Green Horizontal baler Topper` IS Woodland's machine: its one invoice is
+  Kelliher Machine Works 0174 ($4,005.00) — "To DR-3, 1233 Commerce Ave Suite B+C, Woodland CA",
+  job "P.O. Green Baler", "Repair Big Green Baler … hydraulic problem on the top stuffing system …
+  make ram lock for main pressing cylinder" (so "Topper" = the top stuffer, not a make). It was
+  requested by Morena and filed at Eugene. Janette's request carries the byte-identical PDF
+  (sha256 `8bf06d14…`); Morena's is Vision's own 08-24 approval mail forwarded back by AP. Renamed
+  via the structured generator to **`Green Horizontal Baler`** (type baler, no unit — not
+  "… — Kelliher": Kelliher is the repair shop, and `<x> — <rest>` is read as unit `<x>`), moved
+  Eugene → Woodland, both requests resolved onto it. It now carries 3 links = $12,015 — the same
+  $4,005 invoice approved three times, which is BX-8's paid-once question, not a new one.
+  **Still Gloria's question:** the 08-24 approval is coded to the Eugene site; the machine is
+  Woodland's — the GL answer for Kris is Woodland (not changed here: `ap_requests.site_id` is AP's).
+- **BX-5 — DONE 2026-09-23 7:15 AM PT (Morena: "EQ 24 is the shear machine. Terex is the terex
+  machine no number").** Not merged — two machines. The open request `EQ24 Terex Shredder` was a
+  REQUEST, never an asset row. Its approval is Kelliher 0182 + 0183 ($9,902): 0183 ($8,947) reads
+  "TAS815 Shredder — repair broken section, build up worn places, hard faced (set 6); RJR shaft
+  assemblies", and Kelly's cover mail is about "the shredder shafts" and Powerscreen parts — the
+  Terex shredder, so it resolved onto **`Terex`**. 0182 ($955, "replace left side hydraulic
+  cylinder on baler + bent ram; change hydraulic hoses") the approver called EQ 21; it is named in
+  the resolution note, not given a second link (a link counts the whole $9,902, so a second would
+  double it). `Terex` ≠ `EQ24 — Shear Machine` recorded in `equipment_distinct_pairs` (Morena's
+  words as the reason) so the duplicates queue never proposes them.
+- **Record (BX-2 48-68 / BX-4 / BX-5):** backup
+  `svdp-dev:~/backups-adhoc/dr3-equipment-morena-answers-pre-20260923-071127-PT.dump` (`-Fc`, 6
+  equipment tables, 81,221 bytes, sha256 `433ba0ba…4cc4842`, mode 600; restore-tested into a scratch
+  DB — 578 / 163 / 32 / 354 / 9 / 0 rows = live; scratch dropped). Script
+  `scripts/one-off/2026-09-23-morena-equipment-answers.ts --apply`, 7:15:45–7:15:49 AM PDT, actor
+  `system:morena-equipment-answers`. Links 163 → 163, invoices 158 → 158, spend $239,486.52 →
+  $239,486.52; nothing left on `48-68 trailer`; open equipment requests 3 → **0**. Registry: 578
+  rows, 531 active, 13 merged, 4 fleet-wide, 1 distinct pair. 8 audit rows.
+- **BX-12 — NEW, DEFECT (Bill): Woodland's daily Terex throughput has been saved on `EQ24 — Shear
+Machine` since 2026-09-02.** `resolveSiteThroughputMachine` picks the OLDEST active
+  `terex`-CATEGORY row at the site that has ANY invoice link. The seed files shear machines under
+  category `terex`; `EQ24 — Shear Machine` (seeded 07-28) is older than `Terex` (07-30), and at
+  2026-09-02 6:21 AM PT it got its first link (Kelliher "Welding the sheer machine"). From that
+  moment the throughput form switched machines: `Terex` holds 337 days ending 2026-09-01; EQ24 holds
+  17 manager days 09-01 → 09-22 (09-01 entered on BOTH — a same-day conflict) plus 5 gap alerts.
+  Everything that calls `resolveSiteThroughputMachine` for Woodland reads the shear. Needs: (1) a code fix — the
+  site's throughput machine must be designated, not inferred from "oldest `terex` row with a link"
+  (EQ43 / EQ74 shears will trip it the same way the day they get an invoice); (2) Bill's call on
+  09-01 (which reading stands), then the 17 rows + 5 alerts moved EQ24 → `Terex`. Every day Woodland
+  enters before the fix lands on the shear.
 - **BX-6 — DONE 2026-09-23 (Bill's call).** `Trailer # 19` (Woodland request) resolved
   onto Eugene's `Trailer #19` (moved yards; the earlier invoice reads "DOT for trailer
   #19 going to Eugene Stores"). `60` merged into `60 — Strick 28 Ft Roll Up Door
@@ -102,8 +139,8 @@ Trailer`. `Trailer # 5327` — no 5327 at either site, so created as `5327 — T
   for; add Woodland's `95` (2005 Wabash, register G3) to the registry?; are 53489 / 5340
   / 282859 real Woodland trailers (282859 is close to `282876`)?
 - **BX-11 — CHECK (Bill, in a browser — could not be done without a sign-in):**
-  1. `/admin/ap/equipment-requests` → an open request (EQ24 or a green-baler one) → **Find it in
-     the fleet**: results come up ranked, with **Use this one** as the main button.
+  1. `/admin/ap/equipment-requests` → the next open request (none open as of 2026-09-23 7:15 AM PT)
+     → **Find it in the fleet**: results come up ranked, with **Use this one** as the main button.
   2. On the same card, **Add a new asset instead** → pick **Trailer**, unit `161053.` → the name
      preview reads `161053 — Trailer` → Add → it is REFUSED showing `161053 — Freightliner…` with
      **Use this one** and **It's a different asset** (reason required). Press Never mind — do not
