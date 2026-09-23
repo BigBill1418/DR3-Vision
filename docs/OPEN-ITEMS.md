@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 code fixed (ADR-0137) — Woodland throughput had been landing on the EQ24 shear since 09-02**; BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 DONE (ADR-0137) — Woodland throughput designated to the Terex, 16 days + 5 alerts moved back off the EQ24 shear**; BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -83,20 +83,34 @@ Door Trailer` (both Woodland, `mergeEquipment`, one invoice each repointed). The
   `system:morena-equipment-answers`. Links 163 → 163, invoices 158 → 158, spend $239,486.52 →
   $239,486.52; nothing left on `48-68 trailer`; open equipment requests 3 → **0**. Registry: 578
   rows, 531 active, 13 merged, 4 fleet-wide, 1 distinct pair. 8 audit rows.
-- **BX-12 — CODE FIXED 2026-09-23 (ADR-0137, approved by Bill ~7:20 AM PDT): the site's throughput
-  machine is DESIGNATED (`site_throughput_machines`; Woodland → `Terex`, Eugene → none), never
-  inferred; an undesignated site fails loudly. Data move pending — see below.** Original finding:
-  Woodland's daily Terex throughput has been saved on `EQ24 — Shear Machine` since 2026-09-02. `resolveSiteThroughputMachine` picks the OLDEST active
-  `terex`-CATEGORY row at the site that has ANY invoice link. The seed files shear machines under
-  category `terex`; `EQ24 — Shear Machine` (seeded 07-28) is older than `Terex` (07-30), and at
-  2026-09-02 6:21 AM PT it got its first link (Kelliher "Welding the sheer machine"). From that
-  moment the throughput form switched machines: `Terex` holds 337 days ending 2026-09-01; EQ24 holds
-  17 manager days 09-01 → 09-22 (09-01 entered on BOTH — a same-day conflict) plus 5 gap alerts.
-  Everything that calls `resolveSiteThroughputMachine` for Woodland reads the shear. Needs: (1) a code fix — the
-  site's throughput machine must be designated, not inferred from "oldest `terex` row with a link"
-  (EQ43 / EQ74 shears will trip it the same way the day they get an invoice); (2) Bill's call on
-  09-01 (which reading stands), then the 17 rows + 5 alerts moved EQ24 → `Terex`. Every day Woodland
-  enters before the fix lands on the shear.
+- **BX-12 — DONE 2026-09-23 (ADR-0137; Bill approved ~7:20 AM PDT).** Woodland's daily Terex
+  readings had been saved on `EQ24 — Shear Machine` since 2026-09-02 6:21 AM PDT: the resolver
+  picked the OLDEST `terex`-category row with ANY invoice link, the seed files shears under
+  `terex`, EQ24 (07-28) is older than `Terex` (07-30), and that morning EQ24 got its first link
+  (Kelliher "Welding the sheer machine").
+  - **Code** (`d099b30`, live 8:16 AM PDT, image `sha256:3f59e31d…`): the site's machine is
+    DESIGNATED in `site_throughput_machines` (Woodland → `Terex` `7e35a4aa…`, Eugene → none); an
+    undesignated site throws (form 503, gap watchdog pages `dr3-vision-system`); every consumer
+    reads it — the four inline copies of the proxy are gone. Resolver run against production
+    read-only after deploy: Woodland → `Terex` (label "Terex", latest rows 09-22/21/19 on
+    `7e35a4aa`, 09-23 meter prefill 3,030.85); Eugene → none (label "Equipment").
+  - **Data** (8:17 AM PDT, one transaction, `scripts/one-off/2026-09-23-bx12-throughput-to-terex.ts`,
+    actor `system:bx12-throughput-to-terex`; rehearsed rolled-back first): 16 shear days
+    (09-02 → 09-22) moved to the Terex; the shear's duplicate 09-01 (182 units, meter
+    2,886.25 → 2,895.25 — identical to the Terex's) deleted, its full row kept on the audit
+    `delete` entry, the Terex's 09-01 (`f17dd50c`) stands; 5 gap alerts moved. Nothing had been
+    entered for 09-23 yet. After: Terex 353 rows 2025-01-02 → 2026-09-22 with an unbroken
+    hour-meter chain 08-28 → 09-22 (end 3,030.85); EQ24 0 throughput / 0 gap alerts; table
+    354 → 353. Audit: 16 `update` + 1 `delete` (throughput), 5 `update` (gap alerts). Backup
+    `svdp-dev:~/backups-adhoc/dr3-bx12-throughput-pre-20260923-081218-PT.dump` (equipment,
+    throughput, gap alerts; restore-tested into a scratch PG16: 354 / 9 / 578, EQ24 17 / 5).
+  - **Gap-alert verdicts** (recorded on each alert's audit row; the alert table is a
+    sent-nudge ledger with no open/resolved state, so there is nothing to "close" and nothing
+    was re-sent): **09-01 ARTEFACT** — the Terex had it (entered 09-01 5:17 PM PDT) when the
+    09-02 8:30 AM PDT scan asked the shear; that false nudge is what produced the duplicate
+    09-01 entry at 5:11 PM PDT. **09-03, 09-04, 09-08 REAL** — nothing on either machine at scan
+    time; entered late 09-09 ~3 PM PDT. **09-18 REAL** — still unrecorded (the meter runs
+    3,007.75 → 3,007.75 across it, so the Terex probably did not run that day).
 - **BX-6 — DONE 2026-09-23 (Bill's call).** `Trailer # 19` (Woodland request) resolved
   onto Eugene's `Trailer #19` (moved yards; the earlier invoice reads "DOT for trailer
   #19 going to Eugene Stores"). `60` merged into `60 — Strick 28 Ft Roll Up Door

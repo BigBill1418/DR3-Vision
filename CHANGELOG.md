@@ -33,6 +33,23 @@ link" resolver switched to it.
   and refuse (`throughput_machine_site`, 409) when it would end up off its site.
 - `prisma/seed.mjs` designates "none" for seeded sites (create-only).
 
+### Changed (production data, 2026-09-23 8:17 AM PDT)
+
+- 16 Woodland days (09-02 → 09-22) moved from `EQ24 — Shear Machine` to `Terex`; the shear's
+  duplicate 09-01 deleted (identical to the Terex's; full row on the audit entry); 5 gap alerts
+  moved. Terex: 353 days 2025-01-02 → 2026-09-22, meter chain unbroken to 3,030.85. Shear: 0 / 0.
+  Table 354 → 353. Gap alerts: 09-01 was an artefact of the split (it prompted the duplicate);
+  09-03 / 09-04 / 09-08 / 09-18 were real. Backup
+  `svdp-dev:~/backups-adhoc/dr3-bx12-throughput-pre-20260923-081218-PT.dump` (restore-tested).
+
+### Verified (production)
+
+- `d099b30` live 8:16 AM PDT (app image `sha256:3f59e31d…`, was `52bdce80…`; every log line
+  reports version `d099b30…`); migration `20260863` applied by the `migrate` init container;
+  healthz 200. The resolver run read-only against production: Woodland → `Terex`, Eugene → none.
+- The first gap scan on the new code (8:30 AM PDT) asked the Terex about 09-22: Woodland
+  `skipped_recorded`, Eugene `skipped_no_machine` — no false nudge.
+
 ### Tests
 
 - `site-machine.test.ts` (three states + every stale-designation case),
