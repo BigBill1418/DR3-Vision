@@ -1,8 +1,11 @@
 # ADR-0135 — Pick the asset, don't type it: stopping equipment-name drift
 
-- **Status:** **Proposed — design NOT implemented; awaiting Bill's approval.** The
-  one-off data cleanup in §5 WAS executed 2026-09-22 (Pacific) at Bill's instruction.
-- **Date:** 2026-09-22 (Pacific)
+- **Status:** **Accepted and Implemented 2026-09-23 (Pacific) — all three phases.**
+  Bill approved Phases 1–3 on 2026-09-23 (_"build this out - test and confirm
+  function - do not stop until complete"_) and decided cross-site assets: trailers
+  move between yards, so an asset may be FLEET-WIDE (no home site). What shipped is
+  §8; it deviates from §3/§4 where §8 says so. The §5 cleanup ran 2026-09-22.
+- **Date:** 2026-09-22 (Pacific); implemented 2026-09-23
 - **Context:** Bill, 2026-09-22, on `/admin/ap/equipment-requests`: _"this system is
   driving me insane.... we can't have staff typing in different equipment with
   different spellings and having more and more equipment and vehicles in the
@@ -211,3 +214,101 @@ PDT and approved 2026-09-02 6:14 AM PDT. Worth an AP check for a double payment.
   audit row records why.
 - `display_name` stops being typed by people from Phase 2 on. Existing names are
   not rewritten automatically; the §6 list is the rename worklist.
+
+## 8. What shipped (2026-09-23, Pacific)
+
+All three phases, on `feat/adr0135-equipment-redesign`, merged to `main`. Where
+this differs from §3/§4 it says why.
+
+### Phase 1 — the matcher, the wall with a door, the merge that moves everything
+
+- **One matcher** — `src/lib/equipment/match.ts`, PURE (no Prisma), so the server
+  gate, the resolve panel, the approver's picker, the admin list search and the
+  duplicates queue all run the same code. Signals, strongest first: same VIN/serial
+  → same name ignoring case/spacing/punctuation → same **unit number** → shared
+  words (search only). Unit tokens: `#` and the space after it are dropped
+  (`Trailer # 19` = `Trailer #19` = unit `19`); an ASCII hyphen between
+  alphanumerics is KEPT (`48-68` ≠ `4868`, `32-48` ≠ `3248`); Unicode dashes are
+  separators (the seed's `—`); a length is not an identity (`28 Ft`, `53'`); O/I
+  look-alikes are fixed only inside an otherwise-numeric token. A seed-format row
+  (`<unit> — <rest>`) is identified by the part before the dash only, so `4868 —
+Fruehauf 28 Ft …` cannot match a query for trailer `28`. Merged losers are never
+  returned as themselves — an old spelling finds its survivor (§3 option I, free).
+- **Probable duplicate** = same VIN, same name, or the query's first unit number on
+  a live row where the unit is ≥3 characters OR both rows are the same kind of
+  asset (trailer / truck / forklift / baler / shredder, from the structured type or
+  the name). `21` on a trailer vs a truck is shown, not blocked. Fleet-wide: both
+  yards, always.
+- **The hard gate** — `createEquipmentInTx` runs the matcher over the whole registry
+  before every insert (admin create AND equipment-request resolve). A probable
+  duplicate is refused (`409 probable_duplicate` + the rows) unless the caller sends
+  `confirmDistinct { reason (≥10 chars), distinctFromIds }` naming EVERY row the gate
+  found (`override_incomplete` otherwise). The override is written into the create's
+  audit row (`after.duplicate_override`: reason, the rows and what each matched on;
+  actor + timestamp are the audit row's own) and into `equipment_distinct_pairs`.
+  A same-name or same-VIN hit is **not** overridable (`name_taken` / `vin_taken`).
+- **Database backstop (G)** — migration `20260862_adr0135_equipment_identity`:
+  `equipment_live_name_ci_key`, unique on
+  `lower(regexp_replace(btrim(display_name),'\s+',' ','g')) WHERE merged_into_id IS NULL`
+  — FLEET-WIDE, stricter than §3 G's per-site proposal, because prod held zero
+  fleet-wide violators (checked 2026-09-23) and a trailer lives at no single yard.
+  The migration pre-checks and fails with a readable message if violators appear.
+  Plus `equipment_live_vin_serial_key` on the normalised VIN.
+- **Merge fixed and widened (F)** — `mergeEquipment` now repoints EVERY FK into
+  `equipment`: `ap_equipment_links`, `ap_equipment_requests.resolved_equipment_id`,
+  `equipment_daily_throughput`, `equipment_throughput_gap_alerts`, and rows already
+  merged INTO the loser (so no chain forms). `MERGE_REPOINTED_REFERENCES` /
+  `MERGE_EXEMPT_REFERENCES` name them, and `admin-equipment.db.test.ts` asserts the
+  live `pg_constraint` set equals that list — a new FK fails CI (falsified: removing
+  the gap-alert entry turns it red). Same-day non-voided throughput on both machines
+  refuses the merge (`throughput_conflict` + dates): which reading is true is a
+  person's call. `equipment_events` has no FK (unchanged); `audit_log` is history.
+- **Cross-site** — `equipment.site_id` is now NULLABLE; NULL = **fleet-wide**. A
+  cross-site merge is allowed but the caller must NAME the survivor's site (a yard
+  or fleet-wide); the survivor's move is its own audit row. Site-scoped consumers
+  (Terex ledger, throughput, equipment dashboard) keep `site_id = $1` semantics — a
+  fleet-wide trailer is not a site's machine. `seed-equipment-master.mjs` falls
+  back to a fleet-wide row of the same name instead of re-creating it.
+- **Reach narrowed deliberately** — resolving a request against an asset filed at
+  the OTHER yard is now allowed for a single-site manager (it writes only her
+  request and link — the act every approver already performs in the fleet-wide
+  picker); only REACTIVATING an out-of-reach asset still 403s. Without this, the
+  gate would refuse Morena's create AND refuse her use of the Eugene row: a dead end.
+
+### Phase 2 — search first, structured create (A + D)
+
+- `/admin/ap/equipment-requests`: the primary action is **Find it in the fleet** —
+  a fleet-wide ranked search pre-filled from the request, with **Use this one** on
+  every result. **Add a new asset instead** is secondary, under the results.
+- New assets (resolve panel AND `/admin/equipment/new`) come from a structured form:
+  **type** (`ASSET_TYPES` → category), **unit #** (required for trailers, trucks,
+  vans, forklifts; ONE unit), make, optional details, optional VIN/serial, site or
+  **Fleet-wide**. The name is generated server-side as `<unit> — <make> <details>
+<type>`; both routes refuse a free-typed `display_name`. Identity is stored in
+  `unit_number`, `make`, `asset_type`, `vin_serial` (seed-format rows had their unit
+  backfilled from the name by the migration; free-text rows left NULL).
+- `/admin/equipment` list search uses the matcher; the site filter shows fleet-wide
+  rows at every yard plus a Fleet-wide option; the edit form edits the identifiers
+  and can make an asset fleet-wide; the merge picker offers all live rows and asks
+  where the survivor lives when the two differ.
+
+### Phase 3 — the source and the queue (E + F)
+
+- The approver's **Equipment not in list** hatch is a structured form: type + ONE
+  unit number (+ make, notes). It still posts the same `equipmentRequestDescription`
+  string (the AP decide route is untouched), written in a fixed `Unit #: … / Type: …
+/ Make: … / Notes: …` shape; `createEquipmentRequestInTx` refuses anything else
+  (a stale tab gets "reload and fill in the type and unit number") and a unit LIST.
+  The worklist parses the fields back to pre-fill search and create. A request with
+  no unit number is allowed only for types that do not carry one (baler, shear,
+  other) and then needs a make or a note — a deliberate relaxation: the green
+  baler's approver does not know an EQ number.
+- The approver's picker filter is `pickerMatches` (unit-aware) instead of a raw
+  `includes()`; fleet-wide rows show as "fleet".
+- **`/admin/equipment/duplicates`** — every live pair the matcher calls a probable
+  duplicate, cross-site pairs first, minus pairs a person already judged distinct.
+  Per pair: **Merge** (pick the survivor and, cross-site, where it lives) or
+  **Different assets** (reason required; recorded in `equipment_distinct_pairs` +
+  audit). Admin-only, like the merge.
+
+### Deferred, unchanged: H (`pg_trgm`), J (approval of every asset), K (VLM feed).

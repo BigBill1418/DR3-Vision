@@ -9,6 +9,46 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-23 — Pick the asset, don't type it: the equipment redesign ships (ADR-0135, all three phases)
+
+Bill approved all three phases and ruled that trailers belong to the fleet, not a yard. Staff can
+no longer create an asset the fleet already has without saying why, and the first thing a resolver
+sees is the fleet, not a blank name box.
+
+### Added
+
+- **One unit-number-aware matcher** (`src/lib/equipment/match.ts`) shared by the server and both UIs:
+  `161053.` finds `161053 — Freightliner Semi Truck`, `Trailer # 19` finds `Trailer #19`, `terex`
+  finds `Terex`, and `48-68` does **not** find `4868` (the dash is a different trailer). Fleet-wide.
+- **Hard duplicate gate** on every create (admin + equipment-request resolve): a probable duplicate is
+  refused with the matching rows; "It's a different asset" needs a reason and every match
+  acknowledged, and is recorded in the audit row and `equipment_distinct_pairs`. Same name (ignoring
+  case/spacing) or same VIN is never overridable.
+- **Fleet-wide assets** — `equipment.site_id` NULL = no home yard. Cross-site merge, with the
+  survivor's site chosen explicitly.
+- **Structured new-asset form** (type, unit #, make, details, VIN/serial, site or fleet-wide); the
+  name is generated as `<unit> — <make> <type>`. New columns `unit_number`, `make`, `asset_type`,
+  `vin_serial` (seed-format unit numbers backfilled).
+- **Search-first resolve panel** on `/admin/ap/equipment-requests` — "Use this one" is the primary
+  action; "Add a new asset instead" is secondary.
+- **Structured approver hatch** — type + ONE unit number (+ make, notes); the server refuses a free
+  paragraph or a unit list. Picker search is unit-aware.
+- **`/admin/equipment/duplicates`** — possible-duplicate queue with Merge / Different assets.
+- DB backstops: fleet-wide case/whitespace-insensitive unique on live names, unique live VIN.
+
+### Fixed
+
+- `mergeEquipment` now repoints **every** FK into `equipment` — including daily throughput and
+  throughput-gap alerts (previously stranded on the loser) and rows merged into the loser — in one
+  transaction; a real-DB test pins the FK list to `pg_constraint`. Same-day throughput on both
+  machines refuses the merge instead of failing the unique index.
+
+### Changed
+
+- A single-site resolver may point her invoice at an asset filed at the other yard (reactivating one
+  still needs reach). The similar-name lookup is fleet-wide.
+- Migration `20260862_adr0135_equipment_identity` (additive + `site_id DROP NOT NULL` + two unique
+  indexes; `down.sql` provided).
 ## 2026-09-23 — An invoice is approved once (ADR-0136); Bill's equipment calls executed (ADR-0135 BX-3/BX-6)
 
 Invoice 6646 (United Fleet Maintenance, $201.84) was approved twice — 2026-08-13 5:32 AM PT and

@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 Proposed (design awaits Bill); 4 duplicates merged 2026-09-22 11:26 PM PT; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-8 duplicate approvals await AP; BX-1/2/4/5/9 stand** (Bill, 2026-09-22/23)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-8 duplicate approvals await AP; BX-2 (48-68) / BX-4 / BX-5 / BX-9 / BX-10 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -32,18 +32,14 @@ and design options: `docs/adr/0135-pick-the-asset-dont-type-it.md`.
 Freightliner…`, `trailer 32-48`→`32-48 — Trailer 48 Ft…`, `F9`→`F9 — Hyster
 Forklift` (ADR-0087 G6). Links 26→26, spend 2,276,253→2,276,253 cents, 0 links on
   merged rows. Active equipment 542→538.
-- **BX-1 — DECISION (Bill): approve the ADR-0135 build?** Recommended order: Phase 1
-  (matcher + hard create gate + merge repoints throughput/gap rows + case-insensitive
-  partial unique index, ~2 days) → Phase 2 (search-first resolve panel + structured
-  new-asset form with generated names, ~3–4 days) → Phase 3 (structured approver
-  hatch + duplicates queue + cross-site merge, ~2–3 days). Until Phase 1 ships the
-  registry keeps growing a duplicate roughly every time a request is resolved.
-- **BX-2 — DECISION (Bill/site managers): home yard for three trailers seeded at one
-  site and re-created at the other** — 281577, 282876 (seeded Woodland, re-created
-  Eugene), 284460 (seeded Eugene, re-created Woodland). Once the home yard is named,
-  each is a two-click merge (site transfer, then merge). Plus `48-68 trailer`
-  (Woodland) vs `4868 — Fruehauf 28 Ft` (Eugene): the dash may mean a different
-  trailer (ADR-0087 §1.3) — check the invoice.
+- **BX-1 — DONE 2026-09-23.** Bill approved all three phases (and fleet-wide assets). Shipped per
+  ADR-0135 §8; deploy + production verification recorded in CHANGELOG 2026-09-23.
+- **BX-2 — 281577 / 282876 / 284460: DONE 2026-09-23** (Bill: trailers move yards → neither yard).
+  Each merged into ONE FLEET-WIDE record (the seeded row survives) via `mergeEquipment` —
+  record `scripts/one-off/2026-09-23-cross-site-trailer-merge.ts`, backup + evidence in CHANGELOG.
+  **Still open: `48-68 trailer`** (Woodland) vs `4868 — Fruehauf 28 Ft` (Eugene) — the dash may mean a
+  different trailer (ADR-0087 §1.3); the matcher deliberately does NOT pair them. Read the invoice;
+  if they are one trailer, merge from `/admin/equipment` choosing the survivor's site.
 - **BX-3 — DONE 2026-09-23 (Bill's call): the three work orders posing as assets.**
   `fix trailer 95 and 5308` → merged into `5308 — Great Dane 53 Ft Swing Door Trailer`;
   `Fix and repair trailer: 53489, 5340, 35, 282859…` → merged into `35 — 28 Ft Roll Up
@@ -60,7 +56,8 @@ Door Trailer` (both Woodland, `mergeEquipment`, one invoice each repointed). The
   against the same row, and say whether the Eugene row is really Woodland's.
 - **BX-5 — CALL (Bill): `EQ24 Terex Shredder`** (open since 2026-09-18) → `EQ24 —
 Shear Machine`? And is EQ24 the same machine as the canonical `Terex`? Both carry
-  throughput history, so merging them waits on the Phase 1 merge fix.
+  throughput history — the merge fix shipped 2026-09-23 (ADR-0135 §8), so a merge now moves
+  that history, and refuses if both logged the same day.
 - **BX-6 — DONE 2026-09-23 (Bill's call).** `Trailer # 19` (Woodland request) resolved
   onto Eugene's `Trailer #19` (moved yards; the earlier invoice reads "DOT for trailer
   #19 going to Eugene Stores"). `60` merged into `60 — Strick 28 Ft Roll Up Door
@@ -104,10 +101,14 @@ Trailer`. `Trailer # 5327` — no 5327 at either site, so created as `5327 — T
 - **BX-9 — QUESTIONS (Morena):** which machine was the Grainger "relay order from Aleks"
   for; add Woodland's `95` (2005 Wabash, register G3) to the registry?; are 53489 / 5340
   / 282859 real Woodland trailers (282859 is close to `282876`)?
+- **BX-10 — NEW (ADR-0135): work the duplicates queue.** `/admin/equipment/duplicates` lists
+  every live pair the matcher flags (short unit numbers on the same kind of asset included). Each
+  pair is Merge (survivor + its site) or "Different assets" (reason recorded). Owner: Bill / admin.
 - **Accepted residual:** identifier-only names (`1DW1A5321PS807745`, `12BB04252`,
   `SN 31587 Forklift` filed as `vehicle`, `ZHGC FP25`, `Trailer Number #7677`, `5312
-trailer`, `53641 trailer`, `trailer 540010`, `Trailer #19`) are left as they are —
-  renaming is Phase 2's worklist once the structured form exists.
+trailer`, `53641 trailer`, `trailer 540010`, `Trailer #19`) are left as they are. The
+  structured form now stops NEW ones; renaming these (and filling `unit_number`) is an admin edit on
+  `/admin/equipment/[id]` whenever someone knows the identity.
 
 ## 0.BW — 2026-09-18 four managers could not act as second signer — **FIX SHIPPED; BW-1 (operator confirmation) and BW-2 + BW-3 (decisions) stand** (Bill, 2026-09-18)
 
