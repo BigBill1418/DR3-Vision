@@ -39,10 +39,29 @@ import {
   normalizeDisplayName,
   DISPLAY_NAME_MAX,
   type ActorContext,
+  type CreateFailure,
   type SimilarEquipment,
 } from '@/lib/admin-equipment';
+import {
+  checkEquipmentRequest,
+  parseEquipmentRequestDescription,
+  type RequestFieldProblem,
+  type StructuredEquipmentRequest,
+} from '@/lib/equipment/request-description';
 
 const TABLE = 'ap_equipment_requests';
+
+/** ADR-0135 E — what the approver is told when the structured request is not acceptable. */
+export const REQUEST_PROBLEM_MESSAGE: Record<RequestFieldProblem | 'legacy', string> = {
+  legacy:
+    'The “equipment not in list” form now asks for the type and unit number. Reload the page and fill those in.',
+  type: 'Choose what kind of equipment it is.',
+  unit_required:
+    'Enter the unit number painted on it — trailers, trucks, vans and forklifts need one.',
+  unit_invalid:
+    'One unit number per request — e.g. 5327, 32-48 or EQ24. For several units, pick each one from the list or file them one at a time.',
+  notes_required: 'No unit number? Then add the make or a short note so it can be found.',
+};
 
 /**
  * Storage-DoS boundary on the description, matching the AP route's `NOTE_MAX_LEN`.
@@ -74,6 +93,12 @@ export class ApEquipmentNameTakenError extends ApEquipmentRequestError {
   constructor(
     message: string,
     readonly existing: SimilarEquipment[],
+    /**
+     * ADR-0135 C — WHICH wall: `name_taken` / `vin_taken` (not overridable) or
+     * `probable_duplicate` / `override_incomplete` / `override_reason_required`
+     * (the panel offers "Use this one" and the audited "It's a different asset").
+     */
+    readonly code: CreateFailure = 'name_taken',
   ) {
     super(message, 409);
     this.name = 'ApEquipmentNameTakenError';
@@ -127,6 +152,15 @@ export async function createEquipmentRequestInTx(
   const description = args.description.trim();
   if (!description) {
     throw new ApEquipmentRequestError('An equipment description is required.');
+  }
+  // ADR-0135 E — ONE asset per request, identified by TYPE and UNIT NUMBER. The
+  // approver's panel writes the structured shape; anything else (a stale tab
+  // still showing the old paragraph box, a hand-built payload) is refused with a
+  // sentence that says what to do, before the decision commits.
+  const structured = parseEquipmentRequestDescription(description);
+  const problem = structured ? checkEquipmentRequest(structured) : ('legacy' as const);
+  if (problem) {
+    throw new ApEquipmentRequestError(REQUEST_PROBLEM_MESSAGE[problem]);
   }
   const row = await tx.apEquipmentRequest.create({
     data: {
@@ -186,6 +220,8 @@ export interface EquipmentRequestView {
   resolutionNote: string | null;
   /** True when the originating link row can still be repointed (§2.5 backfill). */
   linkPending: boolean;
+  /** ADR-0135 E — the approver's structured fields; null for a legacy free-text request. */
+  structured: StructuredEquipmentRequest | null;
 }
 
 export interface ListEquipmentRequestFilters {
@@ -270,6 +306,7 @@ export async function listEquipmentRequests(
       resolutionNote: r.resolution_note,
       // A link still pointing at THIS request is one that has not been backfilled.
       linkPending: r.links.some((l) => l.equipment_request_id === r.id),
+      structured: parseEquipmentRequestDescription(r.description),
     };
   });
 }
@@ -298,14 +335,24 @@ interface ResolveCommon {
   note?: string | undefined;
 }
 
-/** Mode 1 (the original, unchanged): register a NEW asset and resolve against it. */
+/** Mode 1: register a NEW asset and resolve against it. */
 export interface ResolveByCreateInput extends ResolveCommon {
   /** Absent is treated as `'create'` — every pre-ADR-0075 caller keeps working. */
   mode?: 'create' | undefined;
-  displayName: string;
-  category: EquipmentCategory;
-  /** Site the asset is registered to. Defaults to the request's site. */
-  siteId?: string | undefined;
+  /** Legacy free-text name. Ignored when `assetType` is given (the name is generated). */
+  displayName?: string | undefined;
+  /** Legacy; derived from `assetType` on a structured create. */
+  category?: EquipmentCategory | undefined;
+  /** Site the asset is registered to; null = FLEET-WIDE. Defaults to the request's site. */
+  siteId?: string | null | undefined;
+  /** ADR-0135 D — the structured form. */
+  assetType?: string | undefined;
+  unitNumber?: string | undefined;
+  make?: string | undefined;
+  details?: string | undefined;
+  vinSerial?: string | undefined;
+  /** ADR-0135 C — "this really is a different asset", with a reason. */
+  confirmDistinct?: { reason: string; distinctFromIds: string[] } | undefined;
 }
 
 /**
@@ -363,12 +410,12 @@ export async function resolveEquipmentRequest(
   // Mode-1 name validation stays exactly where it was — BEFORE the row lookup —
   // so an empty name is still a 400 and not a 404 for callers who pass a bad id.
   let displayName = '';
-  if (!useExisting) {
-    displayName = normalizeDisplayName(input.displayName);
+  if (!useExisting && input.assetType === undefined) {
+    displayName = normalizeDisplayName(input.displayName ?? '');
     if (!displayName) throw new ApEquipmentRequestError('Enter a name for the asset.');
     if (displayName.length > DISPLAY_NAME_MAX)
       throw new ApEquipmentRequestError(`Name must be ${DISPLAY_NAME_MAX} characters or fewer.`);
-  } else if (!input.equipmentId) {
+  } else if (useExisting && !input.equipmentId) {
     throw new ApEquipmentRequestError('Choose the asset to resolve this against.');
   }
 
@@ -387,7 +434,7 @@ export async function resolveEquipmentRequest(
     // ── Pick (or create) the asset this request resolves to ──────────────────
     let equipmentId: string;
     let equipmentDisplayName: string;
-    let siteId: string;
+    let siteId: string | null;
 
     if (useExisting) {
       const target = await tx.equipment.findUnique({ where: { id: input.equipmentId } });
@@ -401,12 +448,23 @@ export async function resolveEquipmentRequest(
           409,
         );
 
-      // SITE REACH re-derived from the TARGET ROW, never from the payload — the
-      // same rule the route applies to the request row (hard rule #2). The route
-      // already proved reach over the REQUEST's site; this is the second half,
-      // because a resolver may legitimately point a request at an asset filed to
-      // another site and must not be able to do so outside their own reach.
-      if (!reaches(reach, target.site_id)) throw new ApEquipmentRequestError('forbidden', 403);
+      // SITE REACH. ADR-0135 narrowed this from "the target must be in reach" to
+      // "a REACTIVATION must be in reach". Pointing an invoice from your own
+      // site at an asset registered to the other yard is exactly what every
+      // approver already does in the fleet-wide picker (ADR-0046 Amendment 7) —
+      // it writes only this request and its link, both at the resolver's site.
+      // Refusing it left a Woodland manager with a Eugene trailer on her invoice
+      // unable to use it AND blocked from creating it (ADR-0135 C): a dead end.
+      // Reactivating flips the other yard's registry row, so that still needs
+      // reach. A fleet-wide asset (site_id NULL) is in everyone's reach.
+      if (
+        !target.is_active &&
+        input.reactivate &&
+        target.site_id !== null &&
+        !reaches(reach, target.site_id)
+      ) {
+        throw new ApEquipmentRequestError('forbidden', 403);
+      }
 
       // Reactivation is its own money-path fact, so it gets its own audit row
       // (`restore`, matching `reactivateEquipment` in admin-equipment.ts) rather
@@ -441,25 +499,46 @@ export async function resolveEquipmentRequest(
       equipmentId = target.id;
       siteId = target.site_id;
     } else {
-      siteId = input.siteId ?? existing.site_id;
+      const createSiteId: string | null =
+        input.siteId === undefined ? existing.site_id : input.siteId;
       const created = await createEquipmentInTx(
         tx,
-        { site_id: siteId, display_name: displayName, category: input.category },
+        {
+          site_id: createSiteId,
+          ...(input.assetType === undefined
+            ? { display_name: displayName, category: input.category }
+            : {
+                asset_type: input.assetType,
+                unit_number: input.unitNumber,
+                make: input.make,
+                details: input.details,
+                vin_serial: input.vinSerial,
+              }),
+          ...(input.confirmDistinct
+            ? {
+                confirm_distinct: {
+                  reason: input.confirmDistinct.reason,
+                  distinct_from_ids: input.confirmDistinct.distinctFromIds,
+                },
+              }
+            : {}),
+        },
         actor,
       );
       if (!created.ok) {
-        // ADR-0075 D2 — a collision is a FORK, not a wall. The error carries the
-        // rows it collided with so the panel can offer "use this one" rather than
-        // leaving the operator to retype around the refusal (which is precisely
-        // how three Terex rows reached production on 2026-08-04).
-        if (created.reason === 'name_taken') {
+        // ADR-0075 D2 / ADR-0135 C — a collision is a FORK, not a wall. The error
+        // carries the rows it collided with so the panel can offer "use this one"
+        // (and, for a probable duplicate, the audited "it's a different asset").
+        if (created.existing && created.existing.length > 0) {
           throw new ApEquipmentNameTakenError(
-            createFailureMessage('name_taken'),
-            created.existing ?? [],
+            createFailureMessage(created.reason),
+            created.existing,
+            created.reason,
           );
         }
         throw new ApEquipmentRequestError(createFailureMessage(created.reason), 409);
       }
+      siteId = created.row.site_id;
       equipmentId = created.row.id;
       equipmentDisplayName = created.row.display_name;
     }
@@ -661,6 +740,24 @@ function createFailureMessage(reason: string): string {
     // with `existing[]` and the panel offers those rows directly.
     case 'name_taken':
       return M.equipment.nameTaken;
+    case 'vin_taken':
+      return M.equipment.vinTaken;
+    case 'probable_duplicate':
+      return M.equipment.probableDuplicate;
+    case 'override_reason_required':
+      return M.equipment.overrideReasonRequired;
+    case 'override_incomplete':
+      return M.equipment.overrideIncomplete;
+    case 'asset_type_invalid':
+      return M.equipment.assetTypeRequired;
+    case 'unit_number_required':
+      return M.equipment.unitNumberRequired;
+    case 'unit_number_invalid':
+      return M.equipment.unitNumberInvalid;
+    case 'field_too_long':
+      return M.equipment.fieldTooLong;
+    case 'category_required':
+      return 'Choose a category for the asset.';
     case 'site_not_found':
       return 'That site no longer exists.';
     case 'name_required':

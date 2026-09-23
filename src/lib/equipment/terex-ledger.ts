@@ -304,7 +304,8 @@ export async function computeTerexLedger(
       id: equipment.id,
       displayName: equipment.display_name,
       category: equipment.category,
-      siteId: equipment.site_id,
+      // Found by `site_id: siteId` above, so never the fleet-wide NULL.
+      siteId: equipment.site_id ?? siteId,
     },
     maintenance: {
       events: maintenanceEvents,

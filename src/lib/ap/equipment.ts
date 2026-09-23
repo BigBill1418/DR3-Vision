@@ -26,8 +26,9 @@ export interface EquipmentOption {
    * against an approved invoice. Carrying the site makes the option honest about
    * which registry it came from.
    */
-  siteId: string;
-  /** Human-readable form of {@link siteId} — what the picker actually renders. */
+  /** ADR-0135 — null for a FLEET-WIDE asset (no home yard; trailers move). */
+  siteId: string | null;
+  /** Human-readable form of {@link siteId} — what the picker actually renders. Null = fleet-wide. */
   siteCode: string | null;
 }
 
@@ -73,7 +74,7 @@ export async function listSiteEquipment(prisma: PrismaClient): Promise<Equipment
     displayName: r.display_name,
     category: r.category as EquipmentCategory,
     siteId: r.site_id,
-    siteCode: codeById.get(r.site_id) ?? null,
+    siteCode: r.site_id ? (codeById.get(r.site_id) ?? null) : null,
   }));
 }
 

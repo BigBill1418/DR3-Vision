@@ -1,11 +1,14 @@
 // ADR-0075 D2 — "is this already here under another spelling?"
 //
-// GET /api/admin/equipment/similar?siteId=…&name=…
+// GET /api/admin/equipment/similar?q=…[&unit=…&vin=…&type=…&search=1]
 //   -> { existing: SimilarEquipment[] }
 //
-// Read-only. Answers with every row at the site whose name canonicalises to the
-// same form (case-folded, punctuation-stripped), INCLUDING inactive and already-
-// merged rows — see `findSimilarEquipment` for why both belong in the answer.
+// Read-only. ADR-0135 A/B: the shared unit-aware matcher over the WHOLE FLEET
+// (both yards — trailers move), ranked VIN > same name > same unit number >
+// shared words. `search=1` includes word matches (the resolve panel's "Find it
+// in the fleet"); without it only probable duplicates come back (the create
+// form's "already in the fleet?" hint). `name` is accepted as a legacy alias of
+// `q`; `siteId` is accepted and ignored (the lookup is fleet-wide now).
 //
 // THE GATE IS DELIBERATELY NOT `requireAdmin()`. This endpoint exists to serve
 // the AP equipment-request resolve panel, whose audience is a site manager
@@ -18,45 +21,52 @@
 // these requests, and it grants no admin POWER (hard rule #2) — this route
 // reads, and nothing else.
 //
-// SITE REACH still applies in full and is checked against the REQUESTED site
-// before any row is read: a single-site manager cannot enumerate the other
-// yard's registry by passing its id.
+// SITE REACH (hard rule #2) — ADR-0135 made this lookup fleet-wide on purpose.
+// The registry's names are not site-private: every AP approver at either site
+// already sees every active asset in the fleet-wide picker (ADR-0046 Amendment
+// 7). Scoping the lookup to one yard is precisely what hid 281577 at Woodland
+// from a Eugene resolver and let it be created twice. Nothing site-scoped
+// (loads, money, people) is exposed here — only the asset list.
 //
 // Next resolves the static `similar` segment ahead of `[id]`, exactly as it does
 // for the neighbouring `import` route.
 
 import { NextResponse } from 'next/server';
 import { requireEquipmentRequestAccess } from '@/lib/auth-helpers';
-import { findSimilarEquipment, DISPLAY_NAME_MAX } from '@/lib/admin-equipment';
+import { searchEquipment, DISPLAY_NAME_MAX } from '@/lib/admin-equipment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request): Promise<Response> {
-  let ctx;
   try {
-    ctx = await requireEquipmentRequestAccess();
+    await requireEquipmentRequestAccess();
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;
   }
 
   const url = new URL(req.url);
-  const siteId = url.searchParams.get('siteId')?.trim() ?? '';
-  const name = url.searchParams.get('name')?.trim() ?? '';
-
-  if (!siteId) return NextResponse.json({ error: 'siteId is required.' }, { status: 400 });
-  // Bounded before it reaches the data layer — this is a typeahead, so the field
-  // is attacker-controlled on every keystroke.
-  if (name.length > DISPLAY_NAME_MAX) {
-    return NextResponse.json({ error: 'name is too long.' }, { status: 400 });
-  }
-  if (!ctx.allSites && ctx.primarySiteId !== siteId) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  const p = (k: string) => url.searchParams.get(k)?.trim() ?? '';
+  const q = p('q') || p('name');
+  const unit = p('unit');
+  const vin = p('vin');
+  const type = p('type');
+  // Bounded before it reaches the data layer — this is a typeahead, so every
+  // field is attacker-controlled on every keystroke.
+  if ([q, unit, vin, type].some((v) => v.length > DISPLAY_NAME_MAX)) {
+    return NextResponse.json({ error: 'query is too long.' }, { status: 400 });
   }
 
-  // An empty/punctuation-only name canonicalises to '' and yields [] rather than
-  // the site's entire registry.
-  const existing = await findSimilarEquipment(siteId, name);
+  // An empty/punctuation-only query yields [] rather than the entire registry.
+  const existing = await searchEquipment(
+    {
+      text: [unit, q].filter(Boolean).join(' '),
+      ...(unit ? { unitNumber: unit } : {}),
+      ...(vin ? { vinSerial: vin } : {}),
+      ...(type ? { assetType: type } : {}),
+    },
+    { includeWordMatches: p('search') === '1', limit: p('search') === '1' ? 15 : 10 },
+  );
   return NextResponse.json({ existing });
 }

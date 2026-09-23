@@ -34,6 +34,7 @@ import {
   type UpdateEquipmentInput,
 } from '@/lib/admin-equipment';
 import { adminMessages as M } from '@/app/admin/messages';
+import { MAKE_MAX, UNIT_NUMBER_MAX, VIN_SERIAL_MAX } from '@/app/admin/constants';
 import { actorFrom, reasonToResponse } from '../route';
 
 export const runtime = 'nodejs';
@@ -43,7 +44,12 @@ const updateAction = z.object({
   action: z.literal('update'),
   display_name: z.string().min(1).max(DISPLAY_NAME_MAX).optional(),
   category: z.enum(EQUIPMENT_CATEGORIES).optional(),
-  site_id: z.string().min(1).optional(),
+  /** A `sites.id`, or null to make the asset FLEET-WIDE (ADR-0135). */
+  site_id: z.string().min(1).nullable().optional(),
+  // ADR-0135 D — correct the structured identity. Empty string clears.
+  unit_number: z.string().max(UNIT_NUMBER_MAX).optional(),
+  make: z.string().max(MAKE_MAX).optional(),
+  vin_serial: z.string().max(VIN_SERIAL_MAX).optional(),
 });
 
 const deactivateAction = z.object({ action: z.literal('deactivate') });
@@ -92,6 +98,9 @@ export async function PATCH(req: Request, { params }: Params) {
       if (parsed.data.display_name !== undefined) input.display_name = parsed.data.display_name;
       if (parsed.data.category !== undefined) input.category = parsed.data.category;
       if (parsed.data.site_id !== undefined) input.site_id = parsed.data.site_id;
+      if (parsed.data.unit_number !== undefined) input.unit_number = parsed.data.unit_number;
+      if (parsed.data.make !== undefined) input.make = parsed.data.make;
+      if (parsed.data.vin_serial !== undefined) input.vin_serial = parsed.data.vin_serial;
 
       const r = await updateEquipment(id, input, actor);
       if (!r.ok) return reasonToResponse(r.reason);

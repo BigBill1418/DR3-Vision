@@ -17,26 +17,24 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireAdmin } from '@/lib/auth-helpers';
 import {
-  DISPLAY_NAME_MAX,
   EQUIPMENT_CATEGORIES,
   createEquipment,
   listEquipment,
-  type CreateEquipmentInput,
   type EquipmentListFilters,
 } from '@/lib/admin-equipment';
+import { structuredCreateSchema, toCreateInput } from '@/lib/equipment/structured-create';
 import { adminMessages as M } from '@/app/admin/messages';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const createSchema = z.object({
-  site_id: z.string().min(1),
-  display_name: z.string().min(1).max(DISPLAY_NAME_MAX),
-  category: z.enum(EQUIPMENT_CATEGORIES),
-  is_active: z.boolean().optional(),
-});
+// ADR-0135 D — the create body is STRUCTURED (type, unit #, make, VIN/serial);
+// the name is generated. A free-typed `display_name` is no longer accepted here.
+// `siteId: null` registers a fleet-wide asset.
+const createSchema = structuredCreateSchema.extend({ siteId: z.string().min(1).nullable() });
 
 const listQuerySchema = z.object({
+  /** A `sites.id`, or `fleet` for fleet-wide assets only. */
   site: z.string().optional(),
   category: z.enum(EQUIPMENT_CATEGORIES).optional(),
   status: z.enum(['active', 'inactive', 'all']).optional(),
@@ -67,15 +65,21 @@ export async function POST(req: Request) {
     );
   }
 
-  const input: CreateEquipmentInput = {
-    site_id: parsed.data.site_id,
-    display_name: parsed.data.display_name,
-    category: parsed.data.category,
-    is_active: parsed.data.is_active,
-  };
-
-  const result = await createEquipment(input, actorFrom(req, ctx.userId));
-  if (!result.ok) return reasonToResponse(result.reason);
+  const result = await createEquipment(
+    toCreateInput(parsed.data, parsed.data.siteId),
+    actorFrom(req, ctx.userId),
+  );
+  if (!result.ok) {
+    // ADR-0075 D2 / ADR-0135 C — a refusal with candidates carries them, so the
+    // form can offer "Use this one" / "It's a different asset".
+    if (result.existing && result.existing.length > 0) {
+      return NextResponse.json(
+        { error: reasonMessage(result.reason), code: result.reason, existing: result.existing },
+        { status: 409 },
+      );
+    }
+    return reasonToResponse(result.reason);
+  }
   return NextResponse.json({ equipment: result.equipment }, { status: 201 });
 }
 
@@ -120,8 +124,53 @@ export function actorFrom(req: Request, actorUserId: string) {
 
 // Reason -> HTTP status. The model layer's reason taxonomy is the source of
 // truth; this file owns the vocabulary shared by both equipment routes.
+/** The human sentence for a data-layer reason — ONE vocabulary for both equipment routes. */
+export function reasonMessage(reason: string): string {
+  switch (reason) {
+    case 'name_required':
+      return M.equipment.nameRequired;
+    case 'name_too_long':
+      return M.equipment.nameTooLong;
+    case 'name_taken':
+      return M.equipment.nameTaken;
+    case 'vin_taken':
+      return M.equipment.vinTaken;
+    case 'probable_duplicate':
+      return M.equipment.probableDuplicate;
+    case 'override_reason_required':
+      return M.equipment.overrideReasonRequired;
+    case 'override_incomplete':
+      return M.equipment.overrideIncomplete;
+    case 'asset_type_invalid':
+      return M.equipment.assetTypeRequired;
+    case 'unit_number_required':
+      return M.equipment.unitNumberRequired;
+    case 'unit_number_invalid':
+      return M.equipment.unitNumberInvalid;
+    case 'field_too_long':
+      return M.equipment.fieldTooLong;
+    case 'site_not_found':
+      return M.errors.siteNotFound;
+    case 'not_found':
+      return M.equipment.notFound;
+    default:
+      return M.errors.serverError;
+  }
+}
+
 export function reasonToResponse(reason: string): NextResponse {
   switch (reason) {
+    case 'vin_taken':
+    case 'probable_duplicate':
+    case 'override_incomplete':
+      return NextResponse.json({ error: reasonMessage(reason), code: reason }, { status: 409 });
+    case 'override_reason_required':
+    case 'asset_type_invalid':
+    case 'unit_number_required':
+    case 'unit_number_invalid':
+    case 'field_too_long':
+    case 'category_required':
+      return NextResponse.json({ error: reasonMessage(reason), code: reason }, { status: 422 });
     case 'name_required':
       return NextResponse.json({ error: M.equipment.nameRequired }, { status: 422 });
     case 'name_too_long':

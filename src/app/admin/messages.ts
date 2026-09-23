@@ -261,13 +261,13 @@ export const adminMessages = {
     // site managers to go to `/admin/equipment`, which 403s for them. One string,
     // no route instructions, remediation offered as buttons instead of prose.
     nameTaken:
-      'Another equipment record at this site already uses that name. Names must be unique per site — check the inactive rows too.',
+      'Another equipment record already uses that name (ignoring capitals and spacing). Use that one — check the inactive rows too.',
     // ── ADR-0075 — collision suggestions + merge (English only; /admin is not
     // localised, ADR-0017. The three-locale rule is hard rule #4 for the
     // OPERATOR-facing app, and this whole surface sits behind the admin gate.)
     nameTakenSuggest:
       'That name is already taken here. Use the asset that already exists, or give yours a different name — please do not retype it slightly differently, which is how one machine ends up with three records.',
-    similarHeading: 'Already in the fleet at this site',
+    similarHeading: 'Already in the fleet',
     useExisting: 'Use this one',
     reactivateAndUse: 'Reactivate and use',
     renameMine: 'Rename mine',
@@ -285,7 +285,29 @@ export const adminMessages = {
     mergeSuccess: (n: number) =>
       `Merged. ${n.toLocaleString()} reference${n === 1 ? '' : 's'} now point at the surviving asset.`,
     mergeSameRow: 'Pick two different records.',
-    mergeCrossSite: 'Those two are filed at different sites. Move one first, then merge.',
+    mergeCrossSite:
+      'Those two are filed at different yards. Choose where the surviving asset lives — Eugene, Woodland, or fleet-wide — then merge.',
+    // ── ADR-0135 — pick the asset, don't type it ───────────────────────────
+    vinTaken: 'Another asset already carries that VIN / serial number. Use that asset instead.',
+    probableDuplicate:
+      'This looks like an asset that is already in the fleet. Use it — or, if it really is a different asset, say why.',
+    overrideReasonRequired:
+      'Say what makes this a different asset (at least 10 characters) — e.g. “different VIN, the Wabash not the Fruehauf”.',
+    overrideIncomplete:
+      'The fleet changed while you were looking. Review the matches again, then confirm.',
+    assetTypeRequired: 'Choose what kind of asset this is.',
+    unitNumberRequired:
+      'Enter the unit number painted on it. Trailers, trucks, vans and forklifts need one — it is how everyone finds them.',
+    unitNumberInvalid:
+      'One unit number only — e.g. 5327, 32-48 or EQ24. If the invoice covers several units, pick each one (or record it as not equipment).',
+    fieldTooLong: 'One of the fields is too long.',
+    fleetWide: 'Fleet-wide (moves between yards)',
+    fleetWideShort: 'fleet',
+    throughputConflict: (dates: string[]) =>
+      `Both machines logged throughput on ${dates.slice(0, 5).join(', ')}${dates.length > 5 ? ` and ${dates.length - 5} more day(s)` : ''}. Void the wrong reading on one of them first, then merge.`,
+    mergeSurvivorSite: 'Where does the surviving asset live?',
+    distinctReasonRequired:
+      'Say why these are different assets (at least 10 characters) — the note stays on the record.',
     mergeAlreadyMerged: 'One of those was already merged. Refresh and pick the surviving rows.',
     categoryLabel: 'Category',
     categoryHelp: 'Drives nothing today beyond grouping; shear machines belong under Terex.',

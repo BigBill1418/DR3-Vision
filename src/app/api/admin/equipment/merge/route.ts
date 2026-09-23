@@ -29,6 +29,11 @@ export const dynamic = 'force-dynamic';
 const mergeSchema = z.object({
   winnerId: z.string().min(1),
   loserId: z.string().min(1),
+  /**
+   * ADR-0135 — where the survivor lives: a `sites.id`, or null = fleet-wide.
+   * Required when the two sit at different yards; absent keeps the winner's site.
+   */
+  survivorSiteId: z.string().min(1).nullable().optional(),
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -59,25 +64,37 @@ export async function POST(req: Request): Promise<Response> {
     parsed.data.winnerId,
     parsed.data.loserId,
     actorFrom(req, ctx.userId),
+    parsed.data.survivorSiteId === undefined ? {} : { survivorSiteId: parsed.data.survivorSiteId },
   );
-  if (!result.ok) return mergeFailureResponse(result.reason);
+  if (!result.ok) return mergeFailureResponse(result.reason, result.conflictDates ?? []);
 
   return NextResponse.json({
     ok: true,
     winner: result.winner,
     repointedLinks: result.repointedLinks,
     repointedRequests: result.repointedRequests,
+    repointed: result.repointed,
   });
 }
 
-function mergeFailureResponse(reason: MergeFailure): NextResponse {
+function mergeFailureResponse(reason: MergeFailure, conflictDates: string[]): NextResponse {
   switch (reason) {
+    case 'throughput_conflict':
+      return NextResponse.json(
+        { error: M.equipment.throughputConflict(conflictDates), code: reason, conflictDates },
+        { status: 409 },
+      );
+    case 'site_not_found':
+      return NextResponse.json({ error: M.errors.siteNotFound }, { status: 422 });
     case 'not_found':
       return NextResponse.json({ error: M.equipment.notFound }, { status: 404 });
     case 'same_row':
       return NextResponse.json({ error: M.equipment.mergeSameRow }, { status: 422 });
     case 'cross_site':
-      return NextResponse.json({ error: M.equipment.mergeCrossSite }, { status: 422 });
+      return NextResponse.json(
+        { error: M.equipment.mergeCrossSite, code: reason },
+        { status: 422 },
+      );
     case 'winner_merged':
     case 'loser_merged':
       return NextResponse.json({ error: M.equipment.mergeAlreadyMerged }, { status: 409 });

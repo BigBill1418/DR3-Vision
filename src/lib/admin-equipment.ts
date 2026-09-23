@@ -40,10 +40,28 @@
 import { Prisma, type AuditAction, type Equipment, type EquipmentCategory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import {
+  DETAILS_MAX,
   DISPLAY_NAME_MAX,
   EQUIPMENT_CATEGORIES,
+  MAKE_MAX,
+  OVERRIDE_REASON_MAX,
+  OVERRIDE_REASON_MIN,
+  UNIT_NUMBER_MAX,
+  VIN_SERIAL_MAX,
+  assetTypeDef,
   type EquipmentCategoryValue,
 } from '@/app/admin/constants';
+import {
+  generateDisplayName,
+  matchEquipment,
+  nameKey,
+  pickerMatches,
+  probableDuplicates,
+  unitKey,
+  type MatchQuery,
+  type MatchReason,
+  type MatchableEquipment,
+} from '@/lib/equipment/match';
 
 // Re-exported for server-side callers already pulling from this module. CLIENT
 // components and anything they import (e.g. `admin/equipment/list-url.ts`) MUST
@@ -63,12 +81,18 @@ void _categoryParity;
 
 export interface AdminEquipmentDto {
   id: string;
-  site_id: string;
-  /** Resolved from `sites`; null only if the FK points at a row that vanished. */
+  /** ADR-0135 — null means FLEET-WIDE: the asset has no home yard. */
+  site_id: string | null;
+  /** Resolved from `sites`; null for a fleet-wide asset (or a vanished FK). */
   site_code: string | null;
   display_name: string;
   category: EquipmentCategory;
   is_active: boolean;
+  /** ADR-0135 D — structured identity, null on legacy free-text rows. */
+  unit_number: string | null;
+  make: string | null;
+  asset_type: string | null;
+  vin_serial: string | null;
   /**
    * Count of `ap_equipment_links` rows referencing this asset. Non-zero means
    * an AP decision cites it as approval evidence, which locks `site_id`
@@ -160,10 +184,14 @@ function toDto(
   return {
     id: row.id,
     site_id: row.site_id,
-    site_code: codes.get(row.site_id) ?? null,
+    site_code: row.site_id ? (codes.get(row.site_id) ?? null) : null,
     display_name: row.display_name,
     category: row.category,
     is_active: row.is_active,
+    unit_number: row.unit_number,
+    make: row.make,
+    asset_type: row.asset_type,
+    vin_serial: row.vin_serial,
     link_count: linkCount,
     resolved_request_count: requestCount,
     merged_into_id: row.merged_into_id,
@@ -193,27 +221,18 @@ export function normalizeDisplayName(raw: string): string {
 /**
  * The COMPARISON form of a display name — case-folded and stripped of everything
  * that is not `[a-z0-9]`. `"Terex Machine"`, `"terex machine"` and
- * `"TEREX  MACHINE"` all canonicalise to `terexmachine`; `"EQ43 — Shear"` and
- * `"eq43 shear"` both to `eq43shear`.
+ * `"TEREX  MACHINE"` all canonicalise to `terexmachine`.
  *
- * ADR-0075 D3 — this is a DETECTOR, never a constraint. It is deliberately NOT
- * backed by a case-insensitive unique index: production holds a violating pair
- * today ("Terex Machine" / "Terex machine"), migrations run in the deploy's init
- * container, and a unique index that cannot build would crash-loop the deploy
- * rather than fail a review. So the database keeps refusing only EXACT
- * `(site_id, display_name)` collisions, and this function is what lets the
- * application notice the near-misses and OFFER them, instead of silently letting
- * an operator retype around the wall.
- *
- * Its blindness is the price of that safety and is accepted: `"Terex"` and
- * `"Terex 2"` canonicalise differently and will never be suggested for each
- * other. Detection catches the typo-shaped duplicate; the merge tool catches the
- * rest.
+ * ADR-0135 — this is now ONE of the matcher's signals (`nameKey` in
+ * `@/lib/equipment/match`), not the whole detector. Comparing whole names is
+ * what let `161053.` sit next to `161053 — Freightliner Semi Truck`; the matcher
+ * adds the unit number, the VIN and fleet-wide scope. The database now also
+ * refuses a live name that differs only by case/whitespace
+ * (`equipment_live_name_ci_key`, ADR-0135 G) — ADR-0075 D3's blocker (a live
+ * violating pair) was cleared by the ADR-0135 §5 cleanup.
  */
 export function canonicalizeName(raw: string): string {
-  return normalizeDisplayName(raw)
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
+  return nameKey(normalizeDisplayName(raw));
 }
 
 /** A candidate the operator can pick INSTEAD of creating a near-duplicate. */
@@ -221,75 +240,133 @@ export interface SimilarEquipment {
   id: string;
   displayName: string;
   category: EquipmentCategory;
-  /** Resolved from `sites`; null only if the FK points at a row that vanished. */
+  /** ADR-0135 — null for a fleet-wide asset. */
+  siteId: string | null;
+  /** Resolved from `sites`; null for a fleet-wide asset. */
   siteCode: string | null;
   isActive: boolean;
   /** Non-null means this row was already merged AWAY — never a valid target. */
   mergedIntoId: string | null;
+  unitNumber: string | null;
+  /** Why the matcher surfaced it. */
+  reason: MatchReason;
+  /** True when creating a new asset next to this one would probably duplicate it. */
+  probableDuplicate: boolean;
 }
 
-/** Cap on suggestions offered. Ten is far more than a real collision produces. */
+/** Cap on suggestions offered by the typeahead. */
 const SIMILAR_LIMIT = 10;
 
-/**
- * Every row at `siteId` whose name canonicalises to the same form as `name` —
- * INCLUDING inactive rows and rows already merged away.
- *
- * Including both is the whole point. An operator who is about to create
- * "Terex machine" needs to see the INACTIVE "Terex Machine" (so they reactivate
- * it rather than forking it) and needs to see a MERGED one too (so the suggestion
- * list explains where the name went instead of appearing to lose it). The caller
- * decides what to do with each — `resolveEquipmentRequest` refuses a merged
- * target outright; the UI badges it.
- *
- * Canonicalisation happens in JS over the site's rows rather than in SQL, because
- * `regexp_replace` cannot use an index anyway and the registry is ~554 rows fleet-
- * wide (ADR-0063 D2 already returns whole filtered sets on this surface). That
- * keeps one canonicalisation rule in one place — a raw-SQL twin would be a second
- * definition free to drift from the one the create path checks against.
- */
-export async function findSimilarEquipment(
-  siteId: string,
-  name: string,
-  client: Prisma.TransactionClient | typeof prisma = prisma,
-): Promise<SimilarEquipment[]> {
-  const canon = canonicalizeName(name);
-  if (!canon || !siteId) return [];
+type Client = Prisma.TransactionClient | typeof prisma;
 
+type RegistryRow = MatchableEquipment & { category: EquipmentCategory; siteCode: string | null };
+
+/**
+ * The WHOLE registry in matcher shape — every site, every status, merged rows
+ * included (the matcher follows a merged loser to its survivor, so an old
+ * spelling still finds the live asset).
+ *
+ * In JS rather than SQL, as ADR-0075 argued and ADR-0135 H re-affirms: the
+ * registry is ~580 rows, `pg_trgm` is not installed, and one matcher in one
+ * language is one definition that the server gate and both UIs share.
+ */
+async function loadRegistry(client: Client): Promise<RegistryRow[]> {
   const [rows, sites] = await Promise.all([
     client.equipment.findMany({
-      where: { site_id: siteId },
       select: {
         id: true,
         display_name: true,
         category: true,
+        site_id: true,
         is_active: true,
         merged_into_id: true,
+        unit_number: true,
+        vin_serial: true,
+        asset_type: true,
       },
       orderBy: [{ display_name: 'asc' }],
     }),
     client.site.findMany({ select: { id: true, code: true } }),
   ]);
-  const code = new Map(sites.map((s) => [s.id, s.code])).get(siteId) ?? null;
+  const code = new Map(sites.map((s) => [s.id, s.code]));
+  return rows.map((r) => ({
+    id: r.id,
+    displayName: r.display_name,
+    category: r.category,
+    siteId: r.site_id,
+    siteCode: r.site_id ? (code.get(r.site_id) ?? null) : null,
+    isActive: r.is_active,
+    mergedIntoId: r.merged_into_id,
+    unitNumber: r.unit_number,
+    vinSerial: r.vin_serial,
+    assetType: r.asset_type,
+  }));
+}
 
-  return rows
-    .filter((r) => canonicalizeName(r.display_name) === canon)
-    .slice(0, SIMILAR_LIMIT)
-    .map((r) => ({
-      id: r.id,
-      displayName: r.display_name,
-      category: r.category,
-      siteCode: code,
-      isActive: r.is_active,
-      mergedIntoId: r.merged_into_id,
-    }));
+function toSimilar(m: {
+  row: RegistryRow;
+  reason: MatchReason;
+  probableDuplicate: boolean;
+}): SimilarEquipment {
+  return {
+    id: m.row.id,
+    displayName: m.row.displayName,
+    category: m.row.category,
+    siteId: m.row.siteId,
+    siteCode: m.row.siteCode,
+    isActive: m.row.isActive,
+    mergedIntoId: m.row.mergedIntoId,
+    unitNumber: m.row.unitNumber ?? null,
+    reason: m.reason,
+    probableDuplicate: m.probableDuplicate,
+  };
+}
+
+/**
+ * ADR-0135 A/B — search the WHOLE fleet for what the person typed, ranked:
+ * VIN, same name, same unit number, then shared words. Both sites, because
+ * trailers move between yards and the old per-site lookup (`site_id` filter)
+ * could not see 281577 at Woodland from Eugene.
+ *
+ * This is the resolve panel's "Find it in the fleet" and the typeahead's
+ * "already in the fleet?" — one function. Inactive rows are returned (so a
+ * returning asset is reactivated, not re-created); merged rows are replaced by
+ * their survivor.
+ */
+export async function searchEquipment(
+  query: MatchQuery,
+  opts: { limit?: number | undefined; includeWordMatches?: boolean | undefined } = {},
+  client: Client = prisma,
+): Promise<SimilarEquipment[]> {
+  const rows = await loadRegistry(client);
+  return matchEquipment(query, rows, {
+    limit: opts.limit ?? SIMILAR_LIMIT,
+    includeWordMatches: opts.includeWordMatches,
+  }).map(toSimilar);
+}
+
+/**
+ * Back-compat name for the ADR-0075 lookup: the probable duplicates of a name,
+ * fleet-wide. Word-only matches are excluded — a shared word is a search hit,
+ * never a collision.
+ */
+export async function findSimilarEquipment(
+  query: MatchQuery | string,
+  client: Client = prisma,
+): Promise<SimilarEquipment[]> {
+  const q = typeof query === 'string' ? { text: query } : query;
+  return searchEquipment(q, { includeWordMatches: false }, client);
 }
 
 // ────────────────────────────────────────────────────────────────────
 // List
 // ────────────────────────────────────────────────────────────────────
 
+/** `EquipmentListFilters.siteId` value that lists only fleet-wide (no-yard) assets. */
+export const FLEET_SITE_FILTER = 'fleet';
+
 export interface EquipmentListFilters {
+  /** A `sites.id` (that yard + fleet-wide rows), or {@link FLEET_SITE_FILTER}. */
   siteId?: string | undefined;
   category?: EquipmentCategory | undefined;
   status?: 'active' | 'inactive' | 'all' | undefined;
@@ -318,7 +395,10 @@ export async function listEquipment(
   filters: EquipmentListFilters = {},
 ): Promise<AdminEquipmentDto[]> {
   const where: Prisma.EquipmentWhereInput = {};
-  if (filters.siteId) where.site_id = filters.siteId;
+  // ADR-0135 — a fleet-wide asset (site_id NULL) belongs to EVERY yard, so a
+  // site-filtered list shows it too; `'fleet'` lists only the fleet-wide rows.
+  if (filters.siteId === FLEET_SITE_FILTER) where.site_id = null;
+  else if (filters.siteId) where.OR = [{ site_id: filters.siteId }, { site_id: null }];
   if (filters.category) where.category = filters.category;
   if (!filters.status || filters.status === 'active') where.is_active = true;
   else if (filters.status === 'inactive') where.is_active = false;
@@ -328,12 +408,15 @@ export async function listEquipment(
   if (!filters.includeMerged) where.merged_into_id = null;
 
   const q = filters.q?.trim();
-  if (q) where.display_name = { contains: q, mode: 'insensitive' };
 
-  const [rows, codes] = await Promise.all([
+  const [allRows, codes] = await Promise.all([
     prisma.equipment.findMany({ where, orderBy: [{ display_name: 'asc' }] }),
     siteCodeById(),
   ]);
+  // ADR-0135 B — the SAME unit-aware filter as the approver's picker, instead of
+  // a SQL `ILIKE`: `trailer # 19` finds `Trailer #19`, `161053.` finds
+  // `161053 — Freightliner …`, and `48-68` does NOT find `4868`.
+  const rows = q ? allRows.filter((r) => pickerMatches(q, r.display_name)) : allRows;
 
   const ids = rows.map((r) => r.id);
   const [counts, requestCounts] = await Promise.all([linkCounts(ids), resolvedRequestCounts(ids)]);
@@ -394,11 +477,41 @@ export async function getEquipment(id: string): Promise<AdminEquipmentDto | null
 // ────────────────────────────────────────────────────────────────────
 
 export interface CreateEquipmentInput {
-  site_id: string;
-  display_name: string;
-  category: EquipmentCategory;
+  /** A `sites.id`, or null for a FLEET-WIDE asset (ADR-0135). */
+  site_id: string | null;
+  /**
+   * Free-text name — LEGACY / system callers only. When `asset_type` is given the
+   * name is GENERATED from the structured fields and this is ignored (ADR-0135 D:
+   * people stop typing names).
+   */
+  display_name?: string | undefined;
+  /** Required unless `asset_type` implies it. */
+  category?: EquipmentCategory | undefined;
   /** Defaults to true — a newly registered asset is selectable immediately. */
   is_active?: boolean | undefined;
+
+  // ── ADR-0135 D — the structured form ──────────────────────────────────────
+  /** One of `ASSET_TYPES[].value`. Present = structured create. */
+  asset_type?: string | undefined;
+  unit_number?: string | undefined;
+  make?: string | undefined;
+  /** Descriptive words for the generated name (`48 Ft Swing Door`). Not stored. */
+  details?: string | undefined;
+  vin_serial?: string | undefined;
+
+  /**
+   * ADR-0135 C — the door in the wall. The caller asserts the new asset is
+   * DIFFERENT from every probable duplicate the gate found, and says why. The
+   * reason, the actor and the rows it was judged against are written to the
+   * create's audit row and to `equipment_distinct_pairs`.
+   */
+  confirm_distinct?:
+    | {
+        reason: string;
+        /** Must include EVERY probable-duplicate id the gate returned — proof they were shown. */
+        distinct_from_ids: string[];
+      }
+    | undefined;
 }
 
 export type CreateEquipmentResult =
@@ -406,14 +519,11 @@ export type CreateEquipmentResult =
   | CreateEquipmentFailure;
 
 /**
- * ADR-0075 D2 — `name_taken` carries the row it collided WITH.
+ * ADR-0075 D2 / ADR-0135 C — a refusal carries the rows it refused ON.
  *
  * A refusal that names no alternative is what produced the three-row Terex split:
  * the operator was told the name was in use, was given nothing to click, and
- * retyped around it. `existing` is what turns the wall into a fork — the caller
- * can offer "use this one" instead of only "pick another name". Optional so the
- * other three reasons keep their shape and every existing consumer that reads
- * `.reason` is unchanged.
+ * retyped around it. `existing` turns the wall into a fork.
  */
 export interface CreateEquipmentFailure {
   ok: false;
@@ -421,7 +531,25 @@ export interface CreateEquipmentFailure {
   existing?: SimilarEquipment[];
 }
 
-export type CreateFailure = 'name_required' | 'name_too_long' | 'name_taken' | 'site_not_found';
+export type CreateFailure =
+  | 'name_required'
+  | 'name_too_long'
+  | 'name_taken'
+  /** ADR-0135 — another live asset already carries this VIN / serial. */
+  | 'vin_taken'
+  | 'site_not_found'
+  /** ADR-0135 C — a live row probably IS this asset; override with a reason, or use it. */
+  | 'probable_duplicate'
+  /** ADR-0135 C — override sent without a real reason. */
+  | 'override_reason_required'
+  /** ADR-0135 C — override did not name every probable duplicate (they were not all shown). */
+  | 'override_incomplete'
+  /** ADR-0135 D — structured-create field problems. */
+  | 'asset_type_invalid'
+  | 'unit_number_required'
+  | 'unit_number_invalid'
+  | 'field_too_long'
+  | 'category_required';
 
 export async function createEquipment(
   input: CreateEquipmentInput,
@@ -438,20 +566,100 @@ export async function createEquipment(
   }
 }
 
+/** The structured fields, validated and normalised — or the reason they are not. */
+type ResolvedFields =
+  | {
+      ok: true;
+      display_name: string;
+      category: EquipmentCategory;
+      unit_number: string | null;
+      make: string | null;
+      asset_type: string | null;
+      vin_serial: string | null;
+    }
+  | { ok: false; reason: CreateFailure };
+
+function tidy(v: string | undefined): string {
+  return (v ?? '').trim().replace(/\s+/g, ' ');
+}
+
+/** ADR-0135 D — derive the row's identity from either the structured form or a legacy name. */
+export function resolveCreateFields(input: CreateEquipmentInput): ResolvedFields {
+  const unit = tidy(input.unit_number);
+  const make = tidy(input.make);
+  const details = tidy(input.details);
+  const vin = tidy(input.vin_serial).toUpperCase();
+  if (
+    unit.length > UNIT_NUMBER_MAX ||
+    make.length > MAKE_MAX ||
+    details.length > DETAILS_MAX ||
+    vin.length > VIN_SERIAL_MAX
+  ) {
+    return { ok: false, reason: 'field_too_long' };
+  }
+  // A unit number is ONE unit: `5327`, `32-48`, `EQ24`. `53489, 5340, 35` is a
+  // work order covering four trailers (ADR-0135 §6.6), and `trailer 5327` is a
+  // name, not a number.
+  if (
+    unit &&
+    (unitKey(unit) === '' || /[,;/&]|\band\b/i.test(unit) || /\s/.test(unit.replace(/^#\s*/, '')))
+  ) {
+    return { ok: false, reason: 'unit_number_invalid' };
+  }
+
+  if (input.asset_type !== undefined) {
+    const def = assetTypeDef(input.asset_type);
+    if (!def) return { ok: false, reason: 'asset_type_invalid' };
+    if (def.unitRequired && !unit) return { ok: false, reason: 'unit_number_required' };
+    const display_name = generateDisplayName({
+      unitNumber: unit.replace(/^#\s*/, ''),
+      make,
+      details,
+      assetType: def.label,
+    });
+    if (display_name.length > DISPLAY_NAME_MAX) return { ok: false, reason: 'name_too_long' };
+    return {
+      ok: true,
+      display_name,
+      category: def.category,
+      unit_number: unit ? unit.replace(/^#\s*/, '') : null,
+      make: make || null,
+      asset_type: def.value,
+      vin_serial: vin || null,
+    };
+  }
+
+  const display_name = normalizeDisplayName(input.display_name ?? '');
+  if (!display_name) return { ok: false, reason: 'name_required' };
+  if (display_name.length > DISPLAY_NAME_MAX) return { ok: false, reason: 'name_too_long' };
+  if (!input.category) return { ok: false, reason: 'category_required' };
+  return {
+    ok: true,
+    display_name,
+    category: input.category,
+    unit_number: unit ? unit.replace(/^#\s*/, '') : null,
+    make: make || null,
+    asset_type: null,
+    vin_serial: vin || null,
+  };
+}
+
 /**
- * The create path as a TRANSACTION PARTICIPANT — validation, insert, and audit
- * row against a caller-supplied `tx`.
+ * The create path as a TRANSACTION PARTICIPANT — validation, the ADR-0135 gate,
+ * insert, and audit row against a caller-supplied `tx`.
  *
  * Extracted for ADR-0046 Amendment 9 (§2.5): resolving an equipment ESCAPE-HATCH
  * request must create the asset, stamp the request resolved, and (optionally)
- * repoint the historical `ap_equipment_links` row — all or nothing. Calling
- * `createEquipment()` from inside that flow would open a SECOND, independent
- * transaction, so a failure after it committed would leave an orphan asset with
- * the request still sitting open. A nested `$transaction` cannot join an
- * enclosing one; a tx-taking function can.
+ * repoint the historical `ap_equipment_links` row — all or nothing.
  *
- * Returns the raw row rather than a DTO because `toDto` needs the site-code map
- * and link counts, which are reads the caller should do AFTER its own commit.
+ * ADR-0135 C — THE HARD GATE. Before inserting, the whole fleet is run through
+ * the shared matcher. Any PROBABLE DUPLICATE (same VIN, same name ignoring
+ * case/punctuation, or same unit number — see `probableDuplicates`) refuses the
+ * create with the rows it matched, unless the caller sends `confirm_distinct`
+ * naming every one of them with a reason. An identical name (case/whitespace
+ * only) is NOT overridable: two live assets cannot share a name the approver's
+ * picker would render identically, and the database refuses it anyway
+ * (`equipment_live_name_ci_key`).
  *
  * The P2002 race backstop lives in the CALLERS, not here — a caught-and-swallowed
  * unique violation inside an interactive transaction would leave the tx aborted
@@ -462,37 +670,75 @@ export async function createEquipmentInTx(
   input: CreateEquipmentInput,
   actor: ActorContext,
 ): Promise<{ ok: true; row: Equipment } | CreateEquipmentFailure> {
-  const display_name = normalizeDisplayName(input.display_name);
-  if (!display_name) return { ok: false, reason: 'name_required' };
-  if (display_name.length > DISPLAY_NAME_MAX) return { ok: false, reason: 'name_too_long' };
+  const fields = resolveCreateFields(input);
+  if (!fields.ok) return { ok: false, reason: fields.reason };
 
-  const site = await tx.site.findUnique({ where: { id: input.site_id }, select: { id: true } });
-  if (!site) return { ok: false, reason: 'site_not_found' };
+  if (input.site_id !== null) {
+    const site = await tx.site.findUnique({ where: { id: input.site_id }, select: { id: true } });
+    if (!site) return { ok: false, reason: 'site_not_found' };
+  }
 
-  // Friendly pre-check. The DB unique index (ADR-0063 D3) is the real guard —
-  // this only exists so the common case yields a readable 409 instead of a
-  // raw P2002. The callers' catch closes the check-then-act race.
-  const dup = await tx.equipment.findFirst({
-    where: { site_id: input.site_id, display_name },
-    select: { id: true },
-  });
-  if (dup) {
-    // ADR-0075 D2 — hand back WHAT it collided with, not just THAT it collided.
-    // The canonical lookup is deliberately wider than the exact match that
-    // tripped us: typing "Terex Machine" at a site that holds both "Terex
-    // Machine" and "Terex machine" should surface both, because picking the
-    // wrong one of those is how the split got worse. Reads only; the enclosing
-    // transaction is still clean and the caller is free to roll it back.
-    const existing = await findSimilarEquipment(input.site_id, display_name, tx);
+  const registry = await loadRegistry(tx);
+  const dups = probableDuplicates(
+    {
+      text: fields.display_name,
+      unitNumber: fields.unit_number,
+      vinSerial: fields.vin_serial,
+      assetType: fields.asset_type,
+      category: fields.category,
+    },
+    registry,
+  );
+  const existing = dups.map(toSimilar);
+
+  // Same name (case/whitespace/punctuation only) or same VIN — never
+  // overridable: the picker would render the two identically, and the database
+  // refuses both anyway (`equipment_live_name_ci_key`, `equipment_live_vin_serial_key`).
+  const myName = nameKey(fields.display_name);
+  if (dups.some((d) => d.reason === 'same_name' || nameKey(d.row.displayName) === myName)) {
     return { ok: false, reason: 'name_taken', existing };
+  }
+  if (dups.some((d) => d.reason === 'same_vin')) {
+    return { ok: false, reason: 'vin_taken', existing };
+  }
+
+  let override: {
+    reason: string;
+    distinct_from: { id: string; display_name: string; matched_on: MatchReason }[];
+  } | null = null;
+  if (dups.length > 0) {
+    const confirm = input.confirm_distinct;
+    if (!confirm) return { ok: false, reason: 'probable_duplicate', existing };
+    const reason = confirm.reason.trim();
+    if (reason.length < OVERRIDE_REASON_MIN || reason.length > OVERRIDE_REASON_MAX) {
+      return { ok: false, reason: 'override_reason_required', existing };
+    }
+    const acknowledged = new Set(confirm.distinct_from_ids);
+    if (!dups.every((d) => acknowledged.has(d.row.id))) {
+      // A match the person was never shown (the registry changed under them, or
+      // a client skipped the list) cannot have been judged distinct.
+      return { ok: false, reason: 'override_incomplete', existing };
+    }
+    override = {
+      reason,
+      distinct_from: dups.map((d) => ({
+        id: d.row.id,
+        display_name: d.row.displayName,
+        matched_on: d.reason,
+      })),
+    };
   }
 
   const row = await tx.equipment.create({
     data: {
       site_id: input.site_id,
-      display_name,
-      category: input.category,
+      display_name: fields.display_name,
+      category: fields.category,
       is_active: input.is_active ?? true,
+      unit_number: fields.unit_number,
+      make: fields.make,
+      asset_type: fields.asset_type,
+      vin_serial: fields.vin_serial,
     },
   });
   await tx.auditLog.create({
@@ -502,12 +748,39 @@ export async function createEquipmentInTx(
       table_name: 'equipment',
       row_id: row.id,
       before: Prisma.JsonNull,
-      after: serializeForAudit(row),
+      after: {
+        ...(serializeForAudit(row) as Record<string, unknown>),
+        // ADR-0135 C — the override IS the audit fact: who said "this really is a
+        // different asset", why, and which rows they said it about. Null when the
+        // gate found nothing to override.
+        duplicate_override: override,
+      } as Prisma.InputJsonValue,
       ip: actor.ip,
       user_agent: actor.userAgent,
     },
   });
+  if (override) {
+    // The queue must not propose again what a person just judged distinct.
+    await tx.equipmentDistinctPair.createMany({
+      data: override.distinct_from.map((d) => ({
+        ...orderedPair(row.id, d.id),
+        reason: `create override: ${override.reason}`,
+        decided_by: actor.actorUserId,
+      })),
+      skipDuplicates: true,
+    });
+  }
   return { ok: true, row };
+}
+
+/** `equipment_distinct_pairs` stores each pair once, smaller id first (CHECK in DDL). */
+export function orderedPair(
+  x: string,
+  y: string,
+): { equipment_a_id: string; equipment_b_id: string } {
+  return x < y
+    ? { equipment_a_id: x, equipment_b_id: y }
+    : { equipment_a_id: y, equipment_b_id: x };
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -517,7 +790,12 @@ export async function createEquipmentInTx(
 export interface UpdateEquipmentInput {
   display_name?: string | undefined;
   category?: EquipmentCategory | undefined;
-  site_id?: string | undefined;
+  /** A `sites.id`, or null to make the asset FLEET-WIDE (ADR-0135). */
+  site_id?: string | null | undefined;
+  /** ADR-0135 D — correct the structured identity. Empty string clears. */
+  unit_number?: string | undefined;
+  make?: string | undefined;
+  vin_serial?: string | undefined;
 }
 
 export type UpdateEquipmentResult =
@@ -529,7 +807,9 @@ type UpdateFailure =
   | 'name_required'
   | 'name_too_long'
   | 'name_taken'
-  | 'site_not_found';
+  | 'site_not_found'
+  | 'unit_number_invalid'
+  | 'field_too_long';
 
 /**
  * Edit an equipment row. Every field is mutable, including `site_id` — and
@@ -573,23 +853,60 @@ export async function updateEquipment(
 
   let nextSiteId = existing.site_id;
   if (input.site_id !== undefined && input.site_id !== existing.site_id) {
-    const site = await prisma.site.findUnique({
-      where: { id: input.site_id },
-      select: { id: true },
-    });
-    if (!site) return { ok: false, reason: 'site_not_found' };
+    if (input.site_id !== null) {
+      const site = await prisma.site.findUnique({
+        where: { id: input.site_id },
+        select: { id: true },
+      });
+      if (!site) return { ok: false, reason: 'site_not_found' };
+    }
     nextSiteId = input.site_id;
     data.site_id = nextSiteId;
+  }
+
+  for (const [key, max] of [
+    ['unit_number', UNIT_NUMBER_MAX],
+    ['make', MAKE_MAX],
+    ['vin_serial', VIN_SERIAL_MAX],
+  ] as const) {
+    const raw = input[key];
+    if (raw === undefined) continue;
+    let next: string | null = tidy(raw) || null;
+    if (next && key === 'vin_serial') next = next.toUpperCase();
+    if (next && key === 'unit_number') {
+      next = next.replace(/^#\s*/, '');
+      if (unitKey(next) === '' || /[,;/&\s]/.test(next))
+        return { ok: false, reason: 'unit_number_invalid' };
+    }
+    if (next && next.length > max) return { ok: false, reason: 'field_too_long' };
+    if (next !== existing[key]) data[key] = next;
   }
 
   if (input.category !== undefined && input.category !== existing.category) {
     data.category = input.category;
   }
 
-  // Uniqueness is per-site, so re-check whenever EITHER half of the key moves.
+  // Friendly pre-check for the two name uniques: exact `(site_id, display_name)`
+  // (ADR-0063) and the ADR-0135 fleet-wide case/whitespace-insensitive live
+  // name. The indexes are the guarantee; the P2002 catch below closes the race.
   if (nextName !== existing.display_name || nextSiteId !== existing.site_id) {
     const dup = await prisma.equipment.findFirst({
-      where: { site_id: nextSiteId, display_name: nextName, id: { not: id } },
+      where: {
+        id: { not: id },
+        OR: [
+          { site_id: nextSiteId, display_name: nextName },
+          // A merged loser is outside the live-name index, so only a live row
+          // is held to it.
+          ...(existing.merged_into_id
+            ? []
+            : [
+                {
+                  merged_into_id: null,
+                  display_name: { equals: nextName, mode: 'insensitive' as const },
+                },
+              ]),
+        ],
+      },
       select: { id: true },
     });
     if (dup) return { ok: false, reason: 'name_taken' };
@@ -673,37 +990,80 @@ export function reactivateEquipment(id: string, actor: ActorContext): Promise<Se
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Merge (ADR-0075 D4) — collapse near-duplicates onto one survivor.
+// Merge (ADR-0075 D4, ADR-0135 F) — collapse duplicates onto one survivor.
 //
-// WHAT A MERGE MOVES: attribution, and ONLY attribution. Two tables point at an
-// equipment row — `ap_equipment_links.equipment_id` (which invoice cited which
-// asset) and `ap_equipment_requests.resolved_equipment_id` (which escape-hatch
-// request became which asset). Both are repointed at the winner.
+// WHAT A MERGE MOVES: attribution, and ONLY attribution. EVERY foreign key into
+// `equipment` is enumerated in {@link MERGE_REPOINTED_REFERENCES} /
+// {@link MERGE_EXEMPT_REFERENCES}, and `admin-equipment.db.test.ts` asserts that
+// list equals the live `pg_constraint` set — so a table added tomorrow with an
+// FK to `equipment` fails CI until someone decides what a merge does with it.
+// That is the class of the latent defect ADR-0135 §2 found: ADR-0079's
+// `equipment_daily_throughput` and ADR-0088's `equipment_throughput_gap_alerts`
+// arrived after ADR-0075 and were silently left on the loser.
 //
 // WHAT A MERGE MUST NEVER TOUCH: `ap_requests`. Not `status`, not the amounts,
-// not `decided_by` / `decided_at`. The money already moved and the approval
-// already happened; a bookkeeping correction to WHICH machine an invoice names
-// cannot be allowed to reach back into the decision itself. That is the same
-// invariant `resolveEquipmentRequest` holds (ADR-0046 Amendment 9 #3), and the
-// merge test asserts it by proving `apRequest.update` / `updateMany` are never
-// called at all — a comment cannot enforce it, so a test does.
+// not `decided_by` / `decided_at`. The money already moved; a bookkeeping
+// correction to WHICH machine an invoice names cannot reach back into the
+// decision. The merge test asserts the `apRequest` writers are never called.
 //
-// `equipment_events` is out of the blast radius by construction: it is a
-// Terex-first LOG keyed on a free-text `equipment_code` string with no FK into
-// this registry (ADR-0048 D3), so nothing there references an equipment id and
-// nothing there needs repointing.
+// `equipment_events` is out of the blast radius by construction: a Terex LOG
+// keyed on a free-text `equipment_code` with no FK (ADR-0048 D3). `audit_log`
+// rows naming the loser are history and are never rewritten (hard rule #6).
 //
-// The loser is KEPT — deactivated and stamped, never deleted. Same rule as the
-// rest of this module: `ap_equipment_links.equipment_id` is `onDelete: Restrict`
-// and those rows are financial-approval evidence.
+// The loser is KEPT — deactivated and stamped, never deleted.
 // ────────────────────────────────────────────────────────────────────
+
+/** Every `table.column` FK into `equipment` that a merge REPOINTS at the survivor. */
+export const MERGE_REPOINTED_REFERENCES = [
+  'ap_equipment_links.equipment_id',
+  'ap_equipment_requests.resolved_equipment_id',
+  'equipment_daily_throughput.equipment_id',
+  'equipment_throughput_gap_alerts.equipment_id',
+  // Rows previously merged INTO the loser follow it to the survivor, so
+  // `merged_into_id` never becomes a chain (the seed guard walks one hop).
+  'equipment.merged_into_id',
+] as const;
+
+/**
+ * FKs into `equipment` a merge deliberately does NOT repoint, each with why.
+ * `equipment_distinct_pairs`: a "these two are different" verdict is about the
+ * two rows a person compared; once one is merged away it is not live, the queue
+ * ignores it, and whether the SURVIVOR differs from the other row is a new
+ * question for a person (ADR-0135 F).
+ */
+export const MERGE_EXEMPT_REFERENCES = [
+  'equipment_distinct_pairs.equipment_a_id',
+  'equipment_distinct_pairs.equipment_b_id',
+] as const;
 
 export type MergeFailure =
   | 'not_found'
   | 'same_row'
+  /** Different yards and the caller did not say where the survivor lives. */
   | 'cross_site'
   | 'winner_merged'
-  | 'loser_merged';
+  | 'loser_merged'
+  | 'site_not_found'
+  /** Both machines logged throughput on the same day — a person must pick which reading stands. */
+  | 'throughput_conflict';
+
+export interface MergeOptions {
+  /**
+   * ADR-0135 — where the survivor lives afterwards: a `sites.id`, or null for
+   * FLEET-WIDE. REQUIRED when the two rows sit at different yards (a trailer seen
+   * at both is the ordinary case, Bill 2026-09-23); optional otherwise, and
+   * defaults to the winner's current site. A change is audited on the winner.
+   */
+  survivorSiteId?: string | null | undefined;
+}
+
+export interface MergeRepointCounts {
+  links: number;
+  requests: number;
+  throughput: number;
+  gapAlerts: number;
+  mergedChildren: number;
+}
 
 export type MergeEquipmentResult =
   | {
@@ -713,29 +1073,31 @@ export type MergeEquipmentResult =
       repointedLinks: number;
       /** `ap_equipment_requests.resolved_equipment_id` values repointed. */
       repointedRequests: number;
+      /** Every table's count, including throughput + gap alerts (ADR-0135 F). */
+      repointed: MergeRepointCounts;
     }
-  | { ok: false; reason: MergeFailure };
+  | { ok: false; reason: MergeFailure; conflictDates?: string[] };
 
 /**
- * Merge `loserId` into `winnerId`: repoint both attribution tables, deactivate
- * and stamp the loser, audit the whole thing in ONE transaction.
+ * Merge `loserId` into `winnerId`: repoint EVERY referencing table, deactivate
+ * and stamp the loser, and audit — ONE transaction.
  *
- * Refused outright when the two ids are the same row, when they sit at different
- * sites (a merge is a de-duplication within a site's registry, never a cross-
- * jurisdiction move — CLAUDE.md hard rule #2; the admin can transfer the site
- * first with {@link updateEquipment} if that is really the intent), or when
- * EITHER side has already been merged away (chaining merges would make
- * `merged_into_id` a linked list nothing follows correctly, and the seed guard
- * only walks one hop).
+ * ADR-0135 lifted ADR-0075's cross-site refusal: the same trailer is seeded at
+ * one yard and re-created at the other (281577 / 282876 / 284460). A cross-site
+ * merge now requires the caller to NAME the survivor's site (a yard, or null =
+ * fleet-wide); it is never guessed. Still refused: same row, either side already
+ * merged (no chains), and a throughput day recorded on BOTH machines — the
+ * `(equipment_id, throughput_date)` live unique would refuse the repoint, and
+ * which of two readings is true is a person's call, not a merge's.
  *
- * Every guard re-reads its row INSIDE the transaction. Checking first and acting
- * later would let two admins merge A→B and B→A concurrently and leave a cycle
- * that no consumer's `merged_into_id IS NULL` filter can escape.
+ * Every guard re-reads its row INSIDE the transaction, so two admins merging A→B
+ * and B→A concurrently cannot leave a cycle.
  */
 export async function mergeEquipment(
   winnerId: string,
   loserId: string,
   actor: AnyActorContext,
+  opts: MergeOptions = {},
 ): Promise<MergeEquipmentResult> {
   if (winnerId === loserId) return { ok: false, reason: 'same_row' };
 
@@ -745,9 +1107,42 @@ export async function mergeEquipment(
       tx.equipment.findUnique({ where: { id: loserId } }),
     ]);
     if (!winner || !loser) return { ok: false, reason: 'not_found' } as const;
-    if (winner.site_id !== loser.site_id) return { ok: false, reason: 'cross_site' } as const;
     if (winner.merged_into_id) return { ok: false, reason: 'winner_merged' } as const;
     if (loser.merged_into_id) return { ok: false, reason: 'loser_merged' } as const;
+
+    const crossSite = winner.site_id !== loser.site_id;
+    if (crossSite && opts.survivorSiteId === undefined) {
+      return { ok: false, reason: 'cross_site' } as const;
+    }
+    const survivorSiteId = opts.survivorSiteId === undefined ? winner.site_id : opts.survivorSiteId;
+    if (survivorSiteId !== null && survivorSiteId !== winner.site_id) {
+      const site = await tx.site.findUnique({
+        where: { id: survivorSiteId },
+        select: { id: true },
+      });
+      if (!site) return { ok: false, reason: 'site_not_found' } as const;
+    }
+
+    // Throughput days recorded on BOTH machines cannot both survive on one.
+    const [winnerDays, loserDays] = await Promise.all([
+      tx.equipmentDailyThroughput.findMany({
+        where: { equipment_id: winnerId, voided_at: null },
+        select: { throughput_date: true },
+      }),
+      tx.equipmentDailyThroughput.findMany({
+        where: { equipment_id: loserId, voided_at: null },
+        select: { throughput_date: true },
+      }),
+    ]);
+    const winnerDaySet = new Set(
+      winnerDays.map((d) => d.throughput_date.toISOString().slice(0, 10)),
+    );
+    const conflictDates = loserDays
+      .map((d) => d.throughput_date.toISOString().slice(0, 10))
+      .filter((d) => winnerDaySet.has(d));
+    if (conflictDates.length > 0) {
+      return { ok: false, reason: 'throughput_conflict', conflictDates } as const;
+    }
 
     const links = await tx.apEquipmentLink.updateMany({
       where: { equipment_id: loserId },
@@ -756,6 +1151,18 @@ export async function mergeEquipment(
     const requests = await tx.apEquipmentRequest.updateMany({
       where: { resolved_equipment_id: loserId },
       data: { resolved_equipment_id: winnerId },
+    });
+    const throughput = await tx.equipmentDailyThroughput.updateMany({
+      where: { equipment_id: loserId },
+      data: { equipment_id: winnerId },
+    });
+    const gapAlerts = await tx.equipmentThroughputGapAlert.updateMany({
+      where: { equipment_id: loserId },
+      data: { equipment_id: winnerId },
+    });
+    const mergedChildren = await tx.equipment.updateMany({
+      where: { merged_into_id: loserId },
+      data: { merged_into_id: winnerId },
     });
 
     const stamped = await tx.equipment.update({
@@ -768,11 +1175,40 @@ export async function mergeEquipment(
       },
     });
 
-    // Audit INSIDE the transaction (CLAUDE.md hard rule #6). Filed against the
-    // LOSER's row id, because the loser is the row whose state changed; the
-    // winner gained references but not a single column. The repoint counts ride
-    // in `after` so the audit alone answers "what moved" without re-deriving it
-    // from tables that have since moved on.
+    // The survivor moves yard (or becomes fleet-wide) — its own audited fact.
+    let winnerRow = winner;
+    if (survivorSiteId !== winner.site_id) {
+      winnerRow = await tx.equipment.update({
+        where: { id: winnerId },
+        data: { site_id: survivorSiteId },
+      });
+      await tx.auditLog.create({
+        data: {
+          ...actorAuditFields(actor),
+          action: 'update' satisfies AuditAction,
+          table_name: 'equipment',
+          row_id: winnerId,
+          before: serializeForAudit(winner),
+          after: {
+            ...(serializeForAudit(winnerRow) as Record<string, unknown>),
+            via: 'merge_survivor_site',
+            merged_from_id: loserId,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    }
+
+    const repointed: MergeRepointCounts = {
+      links: links.count,
+      requests: requests.count,
+      throughput: throughput.count,
+      gapAlerts: gapAlerts.count,
+      mergedChildren: mergedChildren.count,
+    };
+
+    // Audit INSIDE the transaction (hard rule #6), filed against the LOSER — the
+    // row whose state changed. Every repoint count rides in `after`, so the audit
+    // alone answers "what moved".
     await tx.auditLog.create({
       data: {
         ...actorAuditFields(actor),
@@ -783,18 +1219,18 @@ export async function mergeEquipment(
         after: {
           ...(serializeForAudit(stamped) as Record<string, unknown>),
           merged_into_display_name: winner.display_name,
+          cross_site: crossSite,
+          survivor_site_id: survivorSiteId,
           repointed_links: links.count,
           repointed_equipment_requests: requests.count,
+          repointed_daily_throughput: throughput.count,
+          repointed_gap_alerts: gapAlerts.count,
+          repointed_merged_children: mergedChildren.count,
         } as Prisma.InputJsonValue,
       },
     });
 
-    return {
-      ok: true,
-      winnerRow: winner,
-      repointedLinks: links.count,
-      repointedRequests: requests.count,
-    } as const;
+    return { ok: true, winnerRow, repointed } as const;
   });
 
   if (!outcome.ok) return outcome;
@@ -803,27 +1239,150 @@ export async function mergeEquipment(
   return {
     ok: true,
     winner: toDto(outcome.winnerRow, codes, counts.get(winnerId) ?? 0),
-    repointedLinks: outcome.repointedLinks,
-    repointedRequests: outcome.repointedRequests,
+    repointedLinks: outcome.repointed.links,
+    repointedRequests: outcome.repointed.requests,
+    repointed: outcome.repointed,
   };
 }
 
 /**
  * How many rows would move if this asset were merged away — the numbers the
- * admin sees BEFORE confirming, for each side.
- *
- * Two reads, no writes. Shown per-side so the direction of the merge is an
- * informed choice: the row with the invoices behind it is usually the one that
- * should survive.
+ * admin sees BEFORE confirming, for each side. Reads only.
  */
 export async function equipmentReferenceCounts(
   id: string,
-): Promise<{ links: number; requests: number }> {
-  const [links, requests] = await Promise.all([
+): Promise<{ links: number; requests: number; throughput: number; gapAlerts: number }> {
+  const [links, requests, throughput, gapAlerts] = await Promise.all([
     prisma.apEquipmentLink.count({ where: { equipment_id: id } }),
     prisma.apEquipmentRequest.count({ where: { resolved_equipment_id: id } }),
+    prisma.equipmentDailyThroughput.count({ where: { equipment_id: id } }),
+    prisma.equipmentThroughputGapAlert.count({ where: { equipment_id: id } }),
   ]);
-  return { links, requests };
+  return { links, requests, throughput, gapAlerts };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Possible duplicates queue (ADR-0135 F / Phase 3)
+// ────────────────────────────────────────────────────────────────────
+
+export interface DuplicatePair {
+  a: SimilarEquipment & { links: number };
+  b: SimilarEquipment & { links: number };
+  reason: MatchReason;
+  crossSite: boolean;
+}
+
+/**
+ * Every pair of LIVE rows the matcher calls a probable duplicate, minus the
+ * pairs a person already judged distinct. Cross-site pairs are included — they
+ * are the reason this queue exists (ADR-0135 §6).
+ *
+ * The matcher proposes; the admin disposes, per pair: Merge (choosing the
+ * survivor and its site) or "Different assets" (recorded, with a reason).
+ */
+export async function listPossibleDuplicates(client: Client = prisma): Promise<DuplicatePair[]> {
+  const [registry, verdicts] = await Promise.all([
+    loadRegistry(client),
+    client.equipmentDistinctPair.findMany({
+      select: { equipment_a_id: true, equipment_b_id: true },
+    }),
+  ]);
+  const judged = new Set(verdicts.map((v) => `${v.equipment_a_id}|${v.equipment_b_id}`));
+  const live = registry.filter((r) => !r.mergedIntoId);
+
+  const seen = new Set<string>();
+  const pairs: { x: RegistryRow; y: RegistryRow; reason: MatchReason }[] = [];
+  for (const x of live) {
+    const others = live.filter((r) => r.id !== x.id);
+    const hits = probableDuplicates(
+      {
+        text: x.displayName,
+        unitNumber: x.unitNumber,
+        vinSerial: x.vinSerial,
+        assetType: x.assetType,
+        category: x.category,
+      },
+      others,
+    );
+    for (const h of hits) {
+      const { equipment_a_id, equipment_b_id } = orderedPair(x.id, h.row.id);
+      const k = `${equipment_a_id}|${equipment_b_id}`;
+      if (seen.has(k) || judged.has(k)) continue;
+      seen.add(k);
+      pairs.push({ x, y: h.row, reason: h.reason });
+    }
+  }
+
+  const counts = await (async () => {
+    const ids = [...new Set(pairs.flatMap((p) => [p.x.id, p.y.id]))];
+    if (ids.length === 0) return new Map<string, number>();
+    const grouped = await client.apEquipmentLink.groupBy({
+      by: ['equipment_id'],
+      where: { equipment_id: { in: ids } },
+      _count: { _all: true },
+    });
+    return new Map(grouped.map((g) => [g.equipment_id ?? '', g._count._all]));
+  })();
+
+  const side = (r: RegistryRow, reason: MatchReason) => ({
+    ...toSimilar({ row: r, reason, probableDuplicate: true }),
+    links: counts.get(r.id) ?? 0,
+  });
+  return pairs
+    .map((p) => ({
+      a: side(p.x, p.reason),
+      b: side(p.y, p.reason),
+      reason: p.reason,
+      crossSite: p.x.siteId !== p.y.siteId,
+    }))
+    .sort(
+      (p, q) =>
+        Number(q.crossSite) - Number(p.crossSite) || p.a.displayName.localeCompare(q.a.displayName),
+    );
+}
+
+export type MarkDistinctResult =
+  | { ok: true }
+  | { ok: false; reason: 'not_found' | 'same_row' | 'reason_required' };
+
+/** Record "these two look alike but are different assets" — audited, never deleted. */
+export async function markEquipmentDistinct(
+  xId: string,
+  yId: string,
+  reason: string,
+  actor: AnyActorContext,
+): Promise<MarkDistinctResult> {
+  if (xId === yId) return { ok: false, reason: 'same_row' };
+  const why = reason.trim();
+  if (why.length < OVERRIDE_REASON_MIN || why.length > OVERRIDE_REASON_MAX) {
+    return { ok: false, reason: 'reason_required' };
+  }
+  return prisma.$transaction(async (tx) => {
+    const found = await tx.equipment.count({ where: { id: { in: [xId, yId] } } });
+    if (found !== 2) return { ok: false, reason: 'not_found' } as const;
+    const pair = orderedPair(xId, yId);
+    const row = await tx.equipmentDistinctPair.upsert({
+      where: { equipment_a_id_equipment_b_id: pair },
+      create: {
+        ...pair,
+        reason: why,
+        decided_by: actorUserIdOrNull(actor),
+        decided_label: isSystemActor(actor) ? actor.actorLabel : null,
+      },
+      update: {},
+    });
+    await tx.auditLog.create({
+      data: {
+        ...actorAuditFields(actor),
+        action: 'insert' satisfies AuditAction,
+        table_name: 'equipment_distinct_pairs',
+        row_id: row.id,
+        before: Prisma.JsonNull,
+        after: { ...pair, reason: why } as Prisma.InputJsonValue,
+      },
+    });
+    return { ok: true } as const;
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────

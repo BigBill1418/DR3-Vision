@@ -5065,12 +5065,28 @@ model ApVendorBaseline {
 /// picker without deleting its links.
 model Equipment {
   id           String            @id @default(uuid())
-  site_id      String // bare FK → sites.id (constraint in migration)
+  /// Bare FK → sites.id (constraint in migration). ADR-0135: NULL = FLEET-WIDE —
+  /// the asset has no home yard (trailers move between Eugene and Woodland).
+  /// Every `where: { site_id }` consumer keeps its meaning: a fleet-wide trailer is
+  /// not one of a site's machines.
+  site_id      String?
   display_name String
   category     EquipmentCategory
   is_active    Boolean           @default(true)
   created_at   DateTime          @default(now())
   updated_at   DateTime          @updatedAt
+
+  /// ADR-0135 D — identity in real columns rather than the free-text name. All
+  /// nullable: legacy rows carry identity in `display_name` (seed-format unit
+  /// numbers were backfilled into `unit_number` by the migration). New rows from
+  /// the structured form fill them and their name is GENERATED
+  /// (`<unit> — <make> <type>`). `vin_serial` is unique among live rows, and live
+  /// names are unique fleet-wide ignoring case/whitespace
+  /// (`equipment_live_name_ci_key`, expression index — DDL only, not modelled).
+  unit_number String?
+  make        String?
+  asset_type  String?
+  vin_serial  String?
 
   /// ADR-0075 D5 — the SURVIVOR this row was merged into, or null for a live row.
   ///
@@ -5128,7 +5144,29 @@ model Equipment {
   @@unique([site_id, display_name])
   @@index([site_id, is_active])
   @@index([merged_into_id])
+  @@index([unit_number])
   @@map("equipment")
+}
+
+/// ADR-0135 F — a person's verdict that two registry rows that LOOK alike (the
+/// matcher flagged them) are DIFFERENT assets, so the duplicates queue stops
+/// proposing them. Also written by the create gate's audited override. Ordered
+/// pair (`equipment_a_id < equipment_b_id`, CHECK in DDL); bare FKs → equipment.id
+/// with the constraints in the migration. Not repointed by a merge (see the
+/// migration's note).
+model EquipmentDistinctPair {
+  id             String   @id @default(uuid())
+  equipment_a_id String
+  equipment_b_id String
+  reason         String
+  /// Bare FK → users.id; NULL for a named system actor (`decided_label`).
+  decided_by     String?
+  decided_label  String?
+  decided_at     DateTime @default(now())
+
+  @@unique([equipment_a_id, equipment_b_id])
+  @@index([equipment_b_id])
+  @@map("equipment_distinct_pairs")
 }
 
 /// ADR-0046 Amendment 5 (D-M5-6) — join of an Approve decision to the equipment it

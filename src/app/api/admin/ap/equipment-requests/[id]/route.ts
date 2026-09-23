@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireEquipmentRequestAccess } from '@/lib/auth-helpers';
-import { EQUIPMENT_CATEGORIES } from '@/app/admin/constants';
+import { structuredCreateSchema } from '@/lib/equipment/structured-create';
 import {
   ApEquipmentNameTakenError,
   ApEquipmentRequestError,
@@ -28,9 +28,6 @@ export const dynamic = 'force-dynamic';
 
 interface Body {
   action?: string;
-  displayName?: string;
-  category?: string;
-  siteId?: string;
   backfillLink?: boolean;
   note?: string;
   /** ADR-0075 D1 — present means "resolve against THIS existing asset". */
@@ -109,21 +106,38 @@ export async function POST(
         return NextResponse.json({ ok: true, status: 'resolved', ...result });
       }
 
-      const category = EQUIPMENT_CATEGORIES.find((c) => c === body.category);
-      if (!category) {
-        return NextResponse.json({ error: 'Choose a category for the asset.' }, { status: 400 });
+      // ADR-0135 D — a NEW asset is registered from the structured form (type,
+      // unit #, make, VIN/serial); the name is generated. A free-typed
+      // `displayName` is no longer accepted from a person.
+      const parsed = structuredCreateSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json(
+          { error: M.equipment.assetTypeRequired, details: parsed.error.flatten() },
+          { status: 400 },
+        );
       }
-      // A resolving manager may register the asset to a different site than the
-      // invoice was filed against (a machine that lives at the other yard), but
-      // only within their own reach.
-      const siteId = typeof body.siteId === 'string' && body.siteId ? body.siteId : row.site_id;
-      if (!ctx.allSites && ctx.primarySiteId !== siteId) {
+      // Site: the request's own yard by default; another yard only within reach;
+      // `null` = FLEET-WIDE, which any resolver may choose (a fleet asset is not
+      // the other yard's registry — ADR-0135).
+      const siteId: string | null =
+        parsed.data.siteId === undefined ? row.site_id : parsed.data.siteId;
+      if (siteId !== null && !ctx.allSites && ctx.primarySiteId !== siteId) {
         return NextResponse.json({ error: 'forbidden' }, { status: 403 });
       }
+      const d = parsed.data;
       const result = await resolveEquipmentRequest(
         prisma,
         id,
-        { displayName: body.displayName ?? '', category, siteId, ...common },
+        {
+          siteId,
+          assetType: d.assetType,
+          ...(d.unitNumber !== undefined ? { unitNumber: d.unitNumber } : {}),
+          ...(d.make !== undefined ? { make: d.make } : {}),
+          ...(d.details !== undefined ? { details: d.details } : {}),
+          ...(d.vinSerial !== undefined ? { vinSerial: d.vinSerial } : {}),
+          ...(d.confirmDistinct ? { confirmDistinct: d.confirmDistinct } : {}),
+          ...common,
+        },
         actor,
         reach,
       );
@@ -136,7 +150,7 @@ export async function POST(
     // on `existing.length`, never on the prose.
     if (e instanceof ApEquipmentNameTakenError) {
       return NextResponse.json(
-        { error: e.message, code: 'name_taken', existing: e.existing },
+        { error: e.message, code: e.code, existing: e.existing },
         { status: 409 },
       );
     }
