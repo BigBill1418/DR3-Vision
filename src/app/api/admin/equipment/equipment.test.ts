@@ -26,10 +26,15 @@ type Category = 'vehicle' | 'forklift' | 'baler' | 'terex' | 'other';
 
 interface MockEquipment {
   id: string;
-  site_id: string;
+  site_id: string | null;
   display_name: string;
   category: Category;
   is_active: boolean;
+  merged_into_id?: string | null;
+  unit_number?: string | null;
+  make?: string | null;
+  asset_type?: string | null;
+  vin_serial?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -65,10 +70,15 @@ function insertEquipment(p: Partial<MockEquipment> & { id: string; display_name:
   const now = new Date('2026-07-28T12:00:00Z');
   const e: MockEquipment = {
     id: p.id,
-    site_id: p.site_id ?? EUGENE,
+    site_id: p.site_id === undefined ? EUGENE : p.site_id,
     display_name: p.display_name,
     category: p.category ?? 'vehicle',
     is_active: p.is_active ?? true,
+    merged_into_id: p.merged_into_id ?? null,
+    unit_number: p.unit_number ?? null,
+    make: p.make ?? null,
+    asset_type: p.asset_type ?? null,
+    vin_serial: p.vin_serial ?? null,
     created_at: p.created_at ?? now,
     updated_at: p.updated_at ?? now,
   };
@@ -108,12 +118,25 @@ function resetStores() {
 
 function matchesWhere(e: MockEquipment, where: Record<string, unknown>): boolean {
   for (const [k, v] of Object.entries(where)) {
+    if (k === 'OR') {
+      if (!(v as Record<string, unknown>[]).some((c) => matchesWhere(e, c))) return false;
+      continue;
+    }
+    if (k === 'merged_into_id' && (e.merged_into_id ?? null) !== v) return false;
     if (k === 'site_id' && e.site_id !== v) return false;
     if (k === 'category' && e.category !== v) return false;
     if (k === 'is_active' && e.is_active !== v) return false;
     if (k === 'display_name') {
       if (typeof v === 'string') {
         if (e.display_name !== v) return false;
+      } else if (typeof v === 'object' && v !== null && 'equals' in v) {
+        const { equals, mode } = v as { equals: string; mode?: string };
+        if (
+          mode === 'insensitive'
+            ? e.display_name.toLowerCase() !== equals.toLowerCase()
+            : e.display_name !== equals
+        )
+          return false;
       } else if (typeof v === 'object' && v !== null && 'contains' in v) {
         const { contains, mode } = v as { contains: string; mode?: string };
         const hay = mode === 'insensitive' ? e.display_name.toLowerCase() : e.display_name;
@@ -159,18 +182,25 @@ vi.mock('@/lib/prisma', () => {
         throw t;
       }
       return insertEquipment({
+        ...data,
         id: `eq-new-${equipmentStore.size + 1}`,
-        site_id: data.site_id ?? EUGENE,
+        site_id: data.site_id === undefined ? EUGENE : data.site_id,
         display_name: data.display_name ?? '',
-        category: data.category ?? 'vehicle',
-        is_active: data.is_active ?? true,
       });
     }),
     update: vi.fn(
       async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
         const e = equipmentStore.get(where.id);
         if (!e) throw new Error('not found');
-        for (const k of ['site_id', 'display_name', 'category', 'is_active'] as const) {
+        for (const k of [
+          'site_id',
+          'display_name',
+          'category',
+          'is_active',
+          'unit_number',
+          'make',
+          'vin_serial',
+        ] as const) {
           if (k in data) (e as unknown as Record<string, unknown>)[k] = data[k];
         }
         e.updated_at = new Date();
@@ -223,8 +253,13 @@ vi.mock('@/lib/prisma', () => {
     }),
   };
 
+  const distinctPairClient = {
+    createMany: vi.fn(async ({ data }: { data: unknown[] }) => ({ count: data.length })),
+  };
+
   return {
     prisma: {
+      equipmentDistinctPair: distinctPairClient,
       equipment: equipmentClient,
       apEquipmentLink: linkClient,
       apEquipmentRequest: equipmentRequestClient,
@@ -232,6 +267,7 @@ vi.mock('@/lib/prisma', () => {
       auditLog: auditLogClient,
       $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
         fn({
+          equipmentDistinctPair: distinctPairClient,
           equipment: equipmentClient,
           apEquipmentLink: linkClient,
           apEquipmentRequest: equipmentRequestClient,
@@ -277,7 +313,7 @@ const asAdmin = () => {
 interface EquipmentBody {
   equipment: {
     id: string;
-    site_id: string;
+    site_id: string | null;
     site_code: string | null;
     display_name: string;
     category: Category;
@@ -358,121 +394,171 @@ describe('never hard-delete (ap_equipment_links is onDelete: Restrict)', () => {
 // ── Create ──────────────────────────────────────────────────────
 
 describe('POST /api/admin/equipment', () => {
-  it('creates and returns the DTO with the resolved site code', async () => {
+  // ADR-0135 D — the create body is STRUCTURED; the name is generated.
+  it('creates from type + unit + make and returns the DTO with the generated name', async () => {
     const { POST } = await import('./route');
     asAdmin();
     const res = await POST(
-      post({ site_id: WOODLAND, display_name: 'EQ90 — Volvo Tractor', category: 'vehicle' }),
+      post({ siteId: WOODLAND, assetType: 'semi_truck', unitNumber: 'EQ90', make: 'Volvo' }),
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as EquipmentBody;
-    expect(body.equipment.display_name).toBe('EQ90 — Volvo Tractor');
+    expect(body.equipment.display_name).toBe('EQ90 — Volvo Semi Truck');
     expect(body.equipment.site_code).toBe('woodland');
     expect(body.equipment.is_active).toBe(true);
     expect(body.equipment.link_count).toBe(0);
+    expect(body.equipment).toMatchObject({
+      unit_number: 'EQ90',
+      make: 'Volvo',
+      asset_type: 'semi_truck',
+    });
   });
 
-  it('writes an insert audit row against table_name=equipment', async () => {
+  it('writes an insert audit row against table_name=equipment, with no override', async () => {
     const { POST } = await import('./route');
     asAdmin();
-    await POST(post({ site_id: EUGENE, display_name: 'EQ91 — Ford F-350', category: 'vehicle' }));
+    await POST(post({ siteId: EUGENE, assetType: 'pickup', unitNumber: 'EQ91', make: 'Ford' }));
     expect(auditRows).toHaveLength(1);
     const row = auditRows[0];
     expect(row?.action).toBe('insert');
     expect(row?.table_name).toBe('equipment');
-    expect(row?.before).toBeDefined();
-    expect(row?.after).toMatchObject({ display_name: 'EQ91 — Ford F-350' });
+    expect(row?.after).toMatchObject({
+      display_name: 'EQ91 — Ford Pickup',
+      duplicate_override: null,
+    });
   });
 
-  it('normalises the stored name (trim + collapse internal whitespace)', async () => {
-    // Without this, "EQ43  — Shear" and "EQ43 — Shear" are distinct to Postgres
-    // but identical to a human, and the seed script's (site_id, display_name)
-    // idempotency key stops meaning anything.
+  it('registers a FLEET-WIDE asset when siteId is null', async () => {
+    const { POST } = await import('./route');
+    asAdmin();
+    const res = await POST(post({ siteId: null, assetType: 'trailer', unitNumber: '5327' }));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as EquipmentBody;
+    expect(body.equipment.site_id).toBeNull();
+    expect(body.equipment.site_code).toBeNull();
+  });
+
+  it('REFUSES a free-typed display_name — people no longer type names', async () => {
+    const { POST } = await import('./route');
+    asAdmin();
+    const res = await POST(
+      post({ site_id: EUGENE, display_name: 'trailer 540010', category: 'vehicle' }),
+    );
+    expect(res.status).toBe(422);
+    expect(auditRows).toHaveLength(0);
+  });
+
+  it('409s a probable duplicate by UNIT NUMBER, with the rows, across sites', async () => {
+    const { POST } = await import('./route');
+    asAdmin();
+    // eq-3 is `EQ88 — Great Dane Trailer` at WOODLAND; this is filed at Eugene.
+    const res = await POST(post({ siteId: EUGENE, assetType: 'trailer', unitNumber: 'EQ88' }));
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string; existing: { id: string }[] };
+    expect(body.code).toBe('probable_duplicate');
+    expect(body.existing.map((e) => e.id)).toEqual(['eq-3']);
+    expect(auditRows).toHaveLength(0);
+  });
+
+  it('the override creates it and AUDITS who said it was different, and why', async () => {
     const { POST } = await import('./route');
     asAdmin();
     const res = await POST(
       post({
-        site_id: EUGENE,
-        display_name: '  EQ92   —   Wabash   Trailer ',
-        category: 'vehicle',
+        siteId: EUGENE,
+        assetType: 'trailer',
+        unitNumber: 'EQ88',
+        make: 'Wabash',
+        confirmDistinct: { reason: 'Different VIN — the Wabash', distinctFromIds: ['eq-3'] },
       }),
     );
-    const body = (await res.json()) as EquipmentBody;
-    expect(body.equipment.display_name).toBe('EQ92 — Wabash Trailer');
+    expect(res.status).toBe(201);
+    expect(auditRows[0]?.after).toMatchObject({
+      duplicate_override: {
+        reason: 'Different VIN — the Wabash',
+        distinct_from: [{ id: 'eq-3', matched_on: 'same_unit' }],
+      },
+    });
   });
 
-  it('rejects a duplicate name within the same site with 409', async () => {
+  it('an override with a throwaway reason is refused (409 override_reason_required, rows still attached)', async () => {
     const { POST } = await import('./route');
     asAdmin();
     const res = await POST(
-      post({ site_id: EUGENE, display_name: 'EQ43 — Terex Shear', category: 'terex' }),
+      post({
+        siteId: EUGENE,
+        assetType: 'trailer',
+        unitNumber: 'EQ88',
+        confirmDistinct: { reason: 'new', distinctFromIds: ['eq-3'] },
+      }),
     );
     expect(res.status).toBe(409);
+    const body = (await res.json()) as { code: string; existing: unknown[] };
+    expect(body.code).toBe('override_reason_required');
+    expect(body.existing).toHaveLength(1);
     expect(auditRows).toHaveLength(0);
   });
 
-  it('rejects a duplicate that differs only by whitespace', async () => {
+  it('a name identical ignoring case/spacing is NEVER overridable (409 name_taken)', async () => {
     const { POST } = await import('./route');
     asAdmin();
+    insertEquipment({ id: 'eq-baler', display_name: 'Harris Baler', category: 'baler' });
     const res = await POST(
-      post({ site_id: EUGENE, display_name: 'EQ43  —  Terex Shear ', category: 'terex' }),
+      post({
+        siteId: WOODLAND,
+        assetType: 'baler',
+        make: 'harris',
+        confirmDistinct: { reason: 'it is a different baler', distinctFromIds: ['eq-baler'] },
+      }),
     );
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { code: string }).code).toBe('name_taken');
+  });
+
+  it('a DEACTIVATED row still blocks — reactivate instead of re-create', async () => {
+    const { POST } = await import('./route');
+    asAdmin();
+    const res = await POST(post({ siteId: EUGENE, assetType: 'semi_truck', unitNumber: 'EQ12' }));
     expect(res.status).toBe(409);
   });
 
-  it('rejects a duplicate of a DEACTIVATED row — reactivate instead of re-create', async () => {
+  it('a trailer without a unit number is refused (422)', async () => {
     const { POST } = await import('./route');
     asAdmin();
-    const res = await POST(
-      post({ site_id: EUGENE, display_name: 'EQ12 — Scrapped Tractor', category: 'vehicle' }),
-    );
-    expect(res.status).toBe(409);
+    const res = await POST(post({ siteId: EUGENE, assetType: 'trailer', make: 'Great Dane' }));
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('unit_number_required');
   });
 
-  it('ALLOWS the same name at the OTHER site — uniqueness is per-site', async () => {
+  it('a unit LIST is refused — one asset per record', async () => {
     const { POST } = await import('./route');
     asAdmin();
     const res = await POST(
-      post({ site_id: WOODLAND, display_name: 'EQ43 — Terex Shear', category: 'terex' }),
+      post({ siteId: EUGENE, assetType: 'trailer', unitNumber: '53489, 5340' }),
     );
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(422);
   });
 
   it('maps a P2002 unique violation to 409 — the check-then-act race backstop', async () => {
-    // The app-level pre-check cannot see a row a concurrent request is mid-way
-    // through inserting; the DB index is the real guarantee and must surface as
-    // the same readable conflict, never a 500.
     const { POST } = await import('./route');
     asAdmin();
     createThrows = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
-    const res = await POST(
-      post({ site_id: EUGENE, display_name: 'EQ93 — Racy Trailer', category: 'vehicle' }),
-    );
+    const res = await POST(post({ siteId: EUGENE, assetType: 'trailer', unitNumber: 'EQ93' }));
     expect(res.status).toBe(409);
   });
 
   it('rejects an unknown site with 422', async () => {
     const { POST } = await import('./route');
     asAdmin();
-    const res = await POST(
-      post({ site_id: 'site-nowhere', display_name: 'EQ94', category: 'other' }),
-    );
+    const res = await POST(post({ siteId: 'site-nowhere', assetType: 'other', make: 'Mystery' }));
     expect(res.status).toBe(422);
   });
 
-  it('rejects an unknown category with 422', async () => {
+  it('rejects an unknown asset type with 422', async () => {
     const { POST } = await import('./route');
     asAdmin();
-    const res = await POST(post({ site_id: EUGENE, display_name: 'EQ95', category: 'spaceship' }));
+    const res = await POST(post({ siteId: EUGENE, assetType: 'spaceship', unitNumber: '1' }));
     expect(res.status).toBe(422);
-  });
-
-  it('rejects a whitespace-only name', async () => {
-    const { POST } = await import('./route');
-    asAdmin();
-    const res = await POST(post({ site_id: EUGENE, display_name: '   ', category: 'other' }));
-    expect(res.status).toBe(422);
-    expect(auditRows).toHaveLength(0);
   });
 });
 
@@ -502,9 +588,15 @@ describe('GET /api/admin/equipment', () => {
     expect(await list('?status=all')).toHaveLength(4);
   });
 
-  it('filters by site', async () => {
+  it('filters by site — and a FLEET-WIDE asset shows at every site', async () => {
+    insertEquipment({ id: 'eq-fleet', display_name: '281577 — Great Dane', site_id: null });
     const rows = await list(`?site=${WOODLAND}`);
-    expect(rows.map((r) => r.id)).toEqual(['eq-3']);
+    expect(rows.map((r) => r.id).sort()).toEqual(['eq-3', 'eq-fleet']);
+    expect((await list('?site=fleet')).map((r) => r.id)).toEqual(['eq-fleet']);
+  });
+
+  it('search is unit-aware: `eq 43.` finds `EQ43 — Terex Shear`', async () => {
+    expect((await list('?q=eq43.')).map((r) => r.id)).toEqual(['eq-1']);
   });
 
   it('filters by category', async () => {

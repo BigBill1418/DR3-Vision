@@ -1293,7 +1293,8 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
       equipmentLinks: {
         equipmentIds: [],
         notEquipmentRelated: false,
-        equipmentRequestDescription: 'Yellow Hyster forklift, unit 7, Woodland',
+        equipmentRequestDescription:
+          'Unit #: 7\nType: Forklift\nMake: Hyster\nNotes: yellow, Woodland',
       },
     });
 
@@ -1303,7 +1304,7 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
       site_id: 'site-w',
       status: 'open',
       requested_by: 'u-morena',
-      description: 'Yellow Hyster forklift, unit 7, Woodland',
+      description: 'Unit #: 7\nType: Forklift\nMake: Hyster\nNotes: yellow, Woodland',
     });
 
     // EXACTLY ONE disposition on the link — the other two must stay empty, which
@@ -1342,7 +1343,7 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
       equipmentLinks: {
         equipmentIds: [],
         notEquipmentRelated: false,
-        equipmentRequestDescription: 'Yellow Hyster forklift, unit 7',
+        equipmentRequestDescription: 'Unit #: 7\nType: Forklift\nMake: Hyster',
       },
     });
     // `writeAudit` is spied (see the module mock at the top of this file), so the
@@ -1382,7 +1383,8 @@ describe('decideRequest — structured Approve (Amendment 5)', () => {
       equipmentLinks: {
         equipmentIds: [],
         notEquipmentRelated: false,
-        equipmentRequestDescription: 'Kenworth tractor, the blue one',
+        equipmentRequestDescription:
+          'Unit #: 88\nType: Semi Truck\nMake: Kenworth\nNotes: the blue one',
       },
     });
     expect(res.secondApprovalPending).toBe(true);

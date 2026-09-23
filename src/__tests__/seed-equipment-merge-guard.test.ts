@@ -19,7 +19,7 @@ const WOODLAND = 'site-woodland';
 
 interface Row {
   id: string;
-  site_id: string;
+  site_id: string | null;
   display_name: string;
   category: string;
   is_active: boolean;
@@ -30,7 +30,7 @@ function db(rows: Row[]) {
   return {
     equipment: {
       findFirst: vi.fn(
-        async ({ where }: { where: { site_id: string; display_name: string } }) =>
+        async ({ where }: { where: { site_id: string | null; display_name: string } }) =>
           rows.find((r) => r.site_id === where.site_id && r.display_name === where.display_name) ??
           null,
       ),
@@ -103,5 +103,28 @@ describe('resolveSeedTarget — the resurrection guard', () => {
       'terex MACHINE',
     );
     expect((target as Row).id).toBe('eq-mid');
+  });
+});
+
+describe('ADR-0135 — a seeded asset made FLEET-WIDE is found, not re-created', () => {
+  it('falls back to the fleet-wide row carrying the same name', async () => {
+    const fleet: Row = {
+      id: 'eq-fleet',
+      site_id: null,
+      display_name: '281577 — Great Dane',
+      category: 'vehicle',
+      is_active: true,
+      merged_into_id: null,
+    };
+    const got = await resolveSeedTarget(db([fleet]), WOODLAND, '281577 — Great Dane');
+    expect(got).toMatchObject({ id: 'eq-fleet' });
+  });
+
+  it('still prefers the row at the site when both exist', async () => {
+    const atSite: Row = { ...winner, id: 'eq-site', display_name: 'X' };
+    const fleet: Row = { ...winner, id: 'eq-fleet', site_id: null, display_name: 'X' };
+    expect(await resolveSeedTarget(db([fleet, atSite]), WOODLAND, 'X')).toMatchObject({
+      id: 'eq-site',
+    });
   });
 });

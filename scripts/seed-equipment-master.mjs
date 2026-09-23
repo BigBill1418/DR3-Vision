@@ -345,10 +345,17 @@ export const MERGED_TARGET_MISSING = Symbol('merged-target-missing');
  */
 export async function resolveSeedTarget(prisma, site_id, display_name) {
   const SELECT = { id: true, category: true, is_active: true, merged_into_id: true };
-  const matched = await prisma.equipment.findFirst({
-    where: { site_id, display_name },
-    select: SELECT,
-  });
+  // ADR-0135 — a seeded trailer may since have been made FLEET-WIDE (site_id
+  // NULL: it moves between yards). The per-site lookup no longer finds it, and
+  // re-creating it at its old yard would be exactly the duplicate ADR-0135 exists
+  // to stop (the live-name index would refuse it anyway, crashing the run). So a
+  // miss at the site falls back to a fleet-wide row carrying the same name.
+  const matched =
+    (await prisma.equipment.findFirst({ where: { site_id, display_name }, select: SELECT })) ??
+    (await prisma.equipment.findFirst({
+      where: { site_id: null, display_name },
+      select: SELECT,
+    }));
   if (!matched?.merged_into_id) return matched;
 
   const winner = await prisma.equipment.findUnique({

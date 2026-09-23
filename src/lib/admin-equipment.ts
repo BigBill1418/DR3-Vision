@@ -668,7 +668,7 @@ export function resolveCreateFields(input: CreateEquipmentInput): ResolvedFields
 export async function createEquipmentInTx(
   tx: Prisma.TransactionClient,
   input: CreateEquipmentInput,
-  actor: ActorContext,
+  actor: AnyActorContext,
 ): Promise<{ ok: true; row: Equipment } | CreateEquipmentFailure> {
   const fields = resolveCreateFields(input);
   if (!fields.ok) return { ok: false, reason: fields.reason };
@@ -743,7 +743,7 @@ export async function createEquipmentInTx(
   });
   await tx.auditLog.create({
     data: {
-      actor_user_id: actor.actorUserId,
+      ...actorAuditFields(actor),
       action: 'insert' satisfies AuditAction,
       table_name: 'equipment',
       row_id: row.id,
@@ -755,8 +755,6 @@ export async function createEquipmentInTx(
         // gate found nothing to override.
         duplicate_override: override,
       } as Prisma.InputJsonValue,
-      ip: actor.ip,
-      user_agent: actor.userAgent,
     },
   });
   if (override) {
@@ -765,7 +763,8 @@ export async function createEquipmentInTx(
       data: override.distinct_from.map((d) => ({
         ...orderedPair(row.id, d.id),
         reason: `create override: ${override.reason}`,
-        decided_by: actor.actorUserId,
+        decided_by: actorUserIdOrNull(actor),
+        decided_label: isSystemActor(actor) ? actor.actorLabel : null,
       })),
       skipDuplicates: true,
     });
@@ -1101,7 +1100,39 @@ export async function mergeEquipment(
 ): Promise<MergeEquipmentResult> {
   if (winnerId === loserId) return { ok: false, reason: 'same_row' };
 
-  const outcome = await prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction((tx) =>
+    mergeEquipmentInTx(tx, winnerId, loserId, actor, opts),
+  );
+  if (!outcome.ok) return outcome;
+
+  const [codes, counts] = await Promise.all([siteCodeById(), linkCounts([winnerId])]);
+  return {
+    ok: true,
+    winner: toDto(outcome.winnerRow, codes, counts.get(winnerId) ?? 0),
+    repointedLinks: outcome.repointed.links,
+    repointedRequests: outcome.repointed.requests,
+    repointed: outcome.repointed,
+  };
+}
+
+/**
+ * The merge as a TRANSACTION PARTICIPANT — every read, guard, repoint and audit
+ * row against the caller's `tx` (same seam as {@link createEquipmentInTx}).
+ * `mergeEquipment` is the only production caller; the seam exists so a
+ * verification can run the real merge inside a transaction it then rolls back.
+ */
+export async function mergeEquipmentInTx(
+  tx: Prisma.TransactionClient,
+  winnerId: string,
+  loserId: string,
+  actor: AnyActorContext,
+  opts: MergeOptions = {},
+): Promise<
+  | { ok: true; winnerRow: Equipment; repointed: MergeRepointCounts }
+  | { ok: false; reason: MergeFailure; conflictDates?: string[] }
+> {
+  if (winnerId === loserId) return { ok: false, reason: 'same_row' };
+  {
     const [winner, loser] = await Promise.all([
       tx.equipment.findUnique({ where: { id: winnerId } }),
       tx.equipment.findUnique({ where: { id: loserId } }),
@@ -1231,18 +1262,7 @@ export async function mergeEquipment(
     });
 
     return { ok: true, winnerRow, repointed } as const;
-  });
-
-  if (!outcome.ok) return outcome;
-
-  const [codes, counts] = await Promise.all([siteCodeById(), linkCounts([winnerId])]);
-  return {
-    ok: true,
-    winner: toDto(outcome.winnerRow, codes, counts.get(winnerId) ?? 0),
-    repointedLinks: outcome.repointed.links,
-    repointedRequests: outcome.repointed.requests,
-    repointed: outcome.repointed,
-  };
+  }
 }
 
 /**

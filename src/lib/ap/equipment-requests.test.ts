@@ -42,12 +42,15 @@ interface Link {
 }
 interface Equip {
   id: string;
-  site_id: string;
+  site_id: string | null;
   display_name: string;
   category: string;
   is_active: boolean;
   /** ADR-0075 D5 — non-null means merged away; never a valid resolve target. */
   merged_into_id: string | null;
+  unit_number?: string | null;
+  vin_serial?: string | null;
+  asset_type?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -78,6 +81,7 @@ const links: Link[] = [];
 const equipment = new Map<string, Equip>();
 const users = new Map<string, UserRow>();
 const audits: AuditRow[] = [];
+const distinctPairs: Record<string, unknown>[] = [];
 let seq = 0;
 /** Injected failure: the resolve stamp throws, to prove atomicity. */
 let stampThrows = false;
@@ -100,6 +104,7 @@ function reset(): void {
   equipment.clear();
   users.clear();
   audits.length = 0;
+  distinctPairs.length = 0;
   seq = 0;
   stampThrows = false;
   addUser({
@@ -239,6 +244,9 @@ function client(inTx: boolean) {
           category: data['category'] as string,
           is_active: (data['is_active'] as boolean) ?? true,
           merged_into_id: null,
+          unit_number: (data['unit_number'] as string | null) ?? null,
+          vin_serial: (data['vin_serial'] as string | null) ?? null,
+          asset_type: (data['asset_type'] as string | null) ?? null,
           created_at: new Date('2026-07-29T00:00:00Z'),
           updated_at: new Date('2026-07-29T00:00:00Z'),
         };
@@ -269,6 +277,12 @@ function client(inTx: boolean) {
           return { ...e };
         },
       ),
+    },
+    equipmentDistinctPair: {
+      createMany: vi.fn(async ({ data }: { data: Record<string, unknown>[] }) => {
+        distinctPairs.push(...data);
+        return { count: data.length };
+      }),
     },
     site: {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
@@ -383,13 +397,30 @@ type P = Parameters<typeof listEquipmentRequests>[0];
 const db = fakePrisma as unknown as NonNullable<P>;
 const actor = { actorUserId: 'u-morena', ip: '10.0.0.1', userAgent: 'vitest' };
 
+function seedAsset(over: Partial<Equip> = {}): string {
+  const id = `eq-seed-${++seq}`;
+  equipment.set(id, {
+    id,
+    site_id: WOODLAND,
+    display_name: 'Terex Machine',
+    category: 'terex',
+    is_active: true,
+    merged_into_id: null,
+    created_at: new Date('2026-07-01T00:00:00Z'),
+    updated_at: new Date('2026-07-01T00:00:00Z'),
+    ...over,
+  });
+  return id;
+}
+
 /** File a request the way `decideRequest` does — inside a transaction. */
 async function fileRequest(opts: { siteId?: string; description?: string } = {}): Promise<string> {
   return fakePrisma.$transaction(async (tx) =>
     createEquipmentRequestInTx(tx as never, {
       apRequestId: 'ap-1',
       siteId: opts.siteId ?? WOODLAND,
-      description: opts.description ?? 'Yellow Hyster forklift, unit 7, Woodland',
+      description:
+        opts.description ?? 'Unit #: 7\nType: Forklift\nMake: Hyster\nNotes: yellow, Woodland',
       requestedBy: 'u-approver',
     }),
   ) as Promise<string>;
@@ -413,6 +444,34 @@ describe('createEquipmentRequestInTx', () => {
     // thrown before reaching here.
   });
 
+  it('ADR-0135 E — refuses a legacy free-text paragraph (a stale tab) before the decision commits', async () => {
+    await expect(
+      fileRequest({ description: 'Fix and repair trailer: 53489, 5340, 35, 282859' }),
+    ).rejects.toMatchObject({ status: 400, message: /type and unit number/ });
+    expect(reqs.size).toBe(0);
+  });
+
+  it('ADR-0135 E — ONE asset per request: a unit list is refused', async () => {
+    await expect(
+      fileRequest({ description: 'Unit #: 53489, 5340\nType: Trailer' }),
+    ).rejects.toMatchObject({ status: 400, message: /One unit number per request/ });
+    await expect(fileRequest({ description: 'Unit #: none\nType: Trailer' })).rejects.toMatchObject(
+      { status: 400, message: /unit number/ },
+    );
+    expect(reqs.size).toBe(0);
+  });
+
+  it('ADR-0135 E — the worklist gets the structured fields back', async () => {
+    await fileRequest({ description: 'Unit #: 5327\nType: Trailer\nMake: Great Dane' });
+    const [row] = await listEquipmentRequests(db, { status: 'open' });
+    expect(row?.structured).toEqual({
+      assetType: 'trailer',
+      unitNumber: '5327',
+      make: 'Great Dane',
+      notes: '',
+    });
+  });
+
   it('refuses a blank description — the hatch is never a free pass', async () => {
     await expect(fileRequest({ description: '   ' })).rejects.toBeInstanceOf(
       ApEquipmentRequestError,
@@ -433,8 +492,8 @@ describe('createEquipmentRequestInTx', () => {
 
 describe('listEquipmentRequests / openEquipmentRequestCount — site reach', () => {
   beforeEach(async () => {
-    await fileRequest({ siteId: WOODLAND, description: 'Woodland forklift' });
-    await fileRequest({ siteId: EUGENE, description: 'Eugene baler' });
+    await fileRequest({ siteId: WOODLAND, description: 'Unit #: 7\nType: Forklift' });
+    await fileRequest({ siteId: EUGENE, description: 'Unit #: none\nType: Baler\nMake: Harris' });
   });
 
   it('undefined reach (admin / all_sites) sees both sites', async () => {
@@ -444,7 +503,7 @@ describe('listEquipmentRequests / openEquipmentRequestCount — site reach', () 
 
   it('a single-site manager sees only their own site', async () => {
     const rows = await listEquipmentRequests(db, { siteIds: [WOODLAND] });
-    expect(rows.map((r) => r.description)).toEqual(['Woodland forklift']);
+    expect(rows.map((r) => r.description)).toEqual(['Unit #: 7\nType: Forklift']);
     expect(await openEquipmentRequestCount(db, { siteIds: [WOODLAND] })).toBe(1);
   });
 
@@ -556,25 +615,151 @@ describe('resolveEquipmentRequest', () => {
     expect(taken.message).not.toMatch(/\/admin\/equipment/);
   });
 
+  // ── ADR-0135 C/D — structured create + the hard duplicate gate ───────────
+  describe('ADR-0135 — structured create and the hard gate', () => {
+    it('generates the name `<unit> — <make> <type>` and stores the identity in columns', async () => {
+      const id = await fileRequest();
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { assetType: 'trailer', unitNumber: '#5327', make: 'Great Dane' },
+        actor,
+      );
+      expect(res.equipmentDisplayName).toBe('5327 — Great Dane Trailer');
+      expect(equipment.get(res.equipmentId)).toMatchObject({
+        unit_number: '5327',
+        asset_type: 'trailer',
+        category: 'vehicle',
+      });
+    });
+
+    it('REFUSES `161053.` next to `161053 — Freightliner …` and hands back the row', async () => {
+      const existing = seedAsset({
+        site_id: WOODLAND,
+        display_name: '161053 — Freightliner Semi Truck (Day Cab S/A)',
+      });
+      const id = await fileRequest();
+      const err = await resolveEquipmentRequest(
+        db,
+        id,
+        { assetType: 'semi_truck', unitNumber: '161053.' },
+        actor,
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApEquipmentNameTakenError);
+      const e = err as InstanceType<typeof ApEquipmentNameTakenError>;
+      expect(e.code).toBe('probable_duplicate');
+      expect(e.existing.map((x) => x.id)).toEqual([existing]);
+      expect(equipment.size).toBe(1);
+      expect(reqs.get(id)?.status).toBe('open');
+    });
+
+    it('matches ACROSS sites — a Woodland create is refused on a Eugene trailer', async () => {
+      seedAsset({ site_id: EUGENE, display_name: '281577 — Great Dane' });
+      const id = await fileRequest({ siteId: WOODLAND });
+      await expect(
+        resolveEquipmentRequest(db, id, { assetType: 'trailer', unitNumber: '281577' }, actor),
+      ).rejects.toMatchObject({ code: 'probable_duplicate' });
+    });
+
+    it('does NOT refuse `48-68` next to `4868 — Fruehauf …` — the dash is a different trailer', async () => {
+      seedAsset({ site_id: EUGENE, display_name: '4868 — Fruehauf 28 Ft Roll Up Door Trailer' });
+      const id = await fileRequest();
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { assetType: 'trailer', unitNumber: '48-68' },
+        actor,
+      );
+      expect(res.equipmentDisplayName).toBe('48-68 — Trailer');
+    });
+
+    it('the override needs a real reason AND every match acknowledged, then is audited', async () => {
+      const t3a = seedAsset({ site_id: EUGENE, display_name: '3 — Fruehauf 48 Ft Trailer' });
+      const id = await fileRequest();
+      const base = { assetType: 'trailer', unitNumber: '3', make: 'Wabash' } as const;
+
+      await expect(
+        resolveEquipmentRequest(
+          db,
+          id,
+          { ...base, confirmDistinct: { reason: 'new', distinctFromIds: [t3a] } },
+          actor,
+        ),
+      ).rejects.toMatchObject({ code: 'override_reason_required' });
+      await expect(
+        resolveEquipmentRequest(
+          db,
+          id,
+          { ...base, confirmDistinct: { reason: 'different VIN, Wabash', distinctFromIds: [] } },
+          actor,
+        ),
+      ).rejects.toMatchObject({ code: 'override_incomplete' });
+
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        {
+          ...base,
+          confirmDistinct: { reason: 'different VIN, this is the Wabash', distinctFromIds: [t3a] },
+        },
+        actor,
+      );
+      expect(res.equipmentDisplayName).toBe('3 — Wabash Trailer');
+      const insert = audits.find(
+        (a) => a.table_name === 'equipment' && a.row_id === res.equipmentId,
+      );
+      expect(insert?.after).toMatchObject({
+        duplicate_override: {
+          reason: 'different VIN, this is the Wabash',
+          distinct_from: [{ id: t3a, matched_on: 'same_unit' }],
+        },
+      });
+      expect(distinctPairs).toHaveLength(1);
+    });
+
+    it('an exact (case-only) name is NEVER overridable', async () => {
+      const terex = seedAsset({
+        site_id: WOODLAND,
+        display_name: 'Shear Machine',
+        category: 'terex',
+      });
+      const id = await fileRequest();
+      await expect(
+        resolveEquipmentRequest(
+          db,
+          id,
+          {
+            assetType: 'shear',
+            confirmDistinct: { reason: 'I promise it is different', distinctFromIds: [terex] },
+          },
+          actor,
+        ),
+      ).rejects.toMatchObject({ code: 'name_taken' });
+    });
+
+    it('a trailer without a unit number is refused', async () => {
+      const id = await fileRequest();
+      await expect(
+        resolveEquipmentRequest(db, id, { assetType: 'trailer', make: 'Great Dane' }, actor),
+      ).rejects.toMatchObject({ status: 409, message: /unit number/ });
+    });
+
+    it('registers a FLEET-WIDE asset when siteId is null', async () => {
+      const id = await fileRequest();
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { assetType: 'trailer', unitNumber: '5327', siteId: null },
+        actor,
+      );
+      expect(equipment.get(res.equipmentId)?.site_id).toBeNull();
+    });
+  });
+
   // ── ADR-0075 D1 — resolve against an asset that already exists ────────────
 
   describe('mode: existing', () => {
     /** Register an asset the way the admin surface would, outside any request. */
-    function seedAsset(over: Partial<Equip> = {}): string {
-      const id = `eq-seed-${++seq}`;
-      equipment.set(id, {
-        id,
-        site_id: WOODLAND,
-        display_name: 'Terex Machine',
-        category: 'terex',
-        is_active: true,
-        merged_into_id: null,
-        created_at: new Date('2026-07-01T00:00:00Z'),
-        updated_at: new Date('2026-07-01T00:00:00Z'),
-        ...over,
-      });
-      return id;
-    }
 
     it('creates NO new equipment row — it points at the one that exists', async () => {
       const eqId = seedAsset();
@@ -676,19 +861,39 @@ describe('resolveEquipmentRequest', () => {
       expect(reqs.get(id)?.status).toBe('open');
     });
 
-    it('403s when the target sits OUTSIDE the actor site reach (hard rule #2)', async () => {
-      // The target's site is re-derived from the equipment ROW, never the payload.
+    it('ADR-0135 — a single-site manager MAY point her invoice at the other yard asset', async () => {
+      // Trailers move between yards. Pointing a Woodland invoice at a Eugene-filed
+      // trailer writes only this request + its link (both Woodland) — the same
+      // act every approver performs in the fleet-wide picker. Refusing it was a
+      // dead end once the create gate refuses the duplicate.
       const eugeneAsset = seedAsset({ site_id: EUGENE });
       const id = await fileRequest();
+      const res = await resolveEquipmentRequest(
+        db,
+        id,
+        { mode: 'existing', equipmentId: eugeneAsset },
+        actor,
+        { allSites: false, primarySiteId: WOODLAND },
+      );
+      expect(res.equipmentId).toBe(eugeneAsset);
+      expect(equipment.get(eugeneAsset)?.site_id).toBe(EUGENE);
+    });
 
+    it('403s when REACTIVATING an asset outside the actor site reach (hard rule #2)', async () => {
+      // Reactivation flips the other yard's registry row — that still needs reach.
+      const eugeneAsset = seedAsset({ site_id: EUGENE, is_active: false });
+      const id = await fileRequest();
       await expect(
-        resolveEquipmentRequest(db, id, { mode: 'existing', equipmentId: eugeneAsset }, actor, {
-          allSites: false,
-          primarySiteId: WOODLAND,
-        }),
+        resolveEquipmentRequest(
+          db,
+          id,
+          { mode: 'existing', equipmentId: eugeneAsset, reactivate: true },
+          actor,
+          { allSites: false, primarySiteId: WOODLAND },
+        ),
       ).rejects.toMatchObject({ status: 403 });
       expect(reqs.get(id)?.status).toBe('open');
-      expect(links[0]).toMatchObject({ equipment_request_id: id });
+      expect(equipment.get(eugeneAsset)?.is_active).toBe(false);
     });
 
     it('an all_sites actor MAY point a request at the other yard asset', async () => {

@@ -1,19 +1,18 @@
-// ADR-0075 D3 — the near-duplicate DETECTOR.
+// ADR-0075 D3 — the near-duplicate DETECTOR, as reworked by ADR-0135.
 //
 // `canonicalizeName` is what lets the app notice that "Terex Machine" and "Terex
-// machine" are the same asset, in a world where the DATABASE deliberately does
-// not (a case-insensitive unique index cannot be added: production holds a
-// violating pair today, and migrations run in the deploy's init container, so a
-// unique index that cannot build would crash-loop the deploy).
-//
-// Because the constraint is gone, this function IS the guard. Its exact
-// behaviour — including the blindness it accepts — is pinned here.
+// machine" are the same asset. ADR-0135 made `findSimilarEquipment` a thin
+// wrapper over the shared unit-aware matcher (`@/lib/equipment/match`, pinned
+// in its own test): it now searches the WHOLE FLEET (trailers move between
+// yards), and a merged loser is replaced by its survivor instead of being
+// returned as itself. The database also now refuses a live case/whitespace-only
+// duplicate (`equipment_live_name_ci_key`), proven in `admin-equipment.db.test.ts`.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 interface Equip {
   id: string;
-  site_id: string;
+  site_id: string | null;
   display_name: string;
   category: string;
   is_active: boolean;
@@ -125,28 +124,27 @@ describe('findSimilarEquipment', () => {
     );
   });
 
-  it('finds every case-folded variant at the site, INCLUDING inactive and merged', async () => {
-    const rows = await findSimilarEquipment(WOODLAND, 'terex machine');
-    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b', 'd']);
+  it('finds every case-folded variant FLEET-WIDE, including inactive; a merged row resolves to its survivor', async () => {
+    const rows = await findSimilarEquipment('terex machine');
+    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b', 'e']);
     // The inactive one must be visible or the operator forks it instead of
-    // reactivating it; the merged one must be visible or its name looks lost.
+    // reactivating it. The merged `d` is NOT returned as itself — its name still
+    // finds its survivor `a`.
     expect(rows.find((r) => r.id === 'b')).toMatchObject({ isActive: false });
-    expect(rows.find((r) => r.id === 'd')).toMatchObject({ mergedIntoId: 'a' });
+    expect(rows.every((r) => r.mergedIntoId === null)).toBe(true);
   });
 
-  it('does NOT reach across the site boundary (hard rule #2)', async () => {
-    const rows = await findSimilarEquipment(WOODLAND, 'Terex Machine');
-    expect(rows.map((r) => r.id)).not.toContain('e');
-    expect(rows.every((r) => r.siteCode === 'woodland')).toBe(true);
+  it('reaches across sites (ADR-0135: the same trailer is filed at both yards)', async () => {
+    const rows = await findSimilarEquipment('Terex Machine');
+    expect(rows.find((r) => r.id === 'e')).toMatchObject({ siteCode: 'eugene' });
   });
 
-  it('excludes a name that merely SHARES a prefix', async () => {
-    expect((await findSimilarEquipment(WOODLAND, 'Terex')).map((r) => r.id)).toEqual(['c']);
+  it('excludes a name that merely SHARES a word — a word hit is search, not a duplicate', async () => {
+    expect((await findSimilarEquipment('Terex')).map((r) => r.id)).toEqual(['c']);
   });
 
   it('returns nothing for an empty or punctuation-only name — never the whole registry', async () => {
-    expect(await findSimilarEquipment(WOODLAND, '')).toEqual([]);
-    expect(await findSimilarEquipment(WOODLAND, ' — ')).toEqual([]);
-    expect(await findSimilarEquipment('', 'Terex')).toEqual([]);
+    expect(await findSimilarEquipment('')).toEqual([]);
+    expect(await findSimilarEquipment(' — ')).toEqual([]);
   });
 });

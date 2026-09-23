@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 interface Equip {
   id: string;
-  site_id: string;
+  site_id: string | null;
   display_name: string;
   category: string;
   is_active: boolean;
@@ -59,6 +59,15 @@ const equipment = new Map<string, Equip>();
 const links: Link[] = [];
 const reqs: Req[] = [];
 const audits: AuditRow[] = [];
+/** ADR-0135 — the two tables ADR-0075's merge forgot. */
+interface Day {
+  id: string;
+  equipment_id: string;
+  throughput_date: Date;
+  voided_at: Date | null;
+}
+const days: Day[] = [];
+const gapAlerts: { id: string; equipment_id: string }[] = [];
 
 /**
  * The `ap_requests` writers. These exist ONLY to be asserted un-called — they are
@@ -67,7 +76,9 @@ const audits: AuditRow[] = [];
 const apRequestUpdate = vi.fn();
 const apRequestUpdateMany = vi.fn();
 
-function addEquip(e: Partial<Equip> & { id: string; site_id: string; display_name: string }): void {
+function addEquip(
+  e: Partial<Equip> & { id: string; site_id: string | null; display_name: string },
+): void {
   equipment.set(e.id, {
     category: 'vehicle',
     is_active: true,
@@ -85,6 +96,8 @@ function reset(): void {
   links.length = 0;
   reqs.length = 0;
   audits.length = 0;
+  days.length = 0;
+  gapAlerts.length = 0;
   apRequestUpdate.mockReset();
   apRequestUpdateMany.mockReset();
 
@@ -116,6 +129,74 @@ function client(inTx: boolean) {
           Object.assign(e, data);
           return { ...e };
         },
+      ),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { merged_into_id: string };
+          data: { merged_into_id: string };
+        }) => {
+          let count = 0;
+          for (const e of equipment.values()) {
+            if (e.merged_into_id !== where.merged_into_id) continue;
+            e.merged_into_id = data.merged_into_id;
+            count += 1;
+          }
+          return { count };
+        },
+      ),
+    },
+    equipmentDailyThroughput: {
+      findMany: vi.fn(async ({ where }: { where: { equipment_id: string; voided_at: null } }) =>
+        days
+          .filter((d) => d.equipment_id === where.equipment_id && d.voided_at === null)
+          .map((d) => ({ throughput_date: d.throughput_date })),
+      ),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { equipment_id: string };
+          data: { equipment_id: string };
+        }) => {
+          let count = 0;
+          for (const d of days) {
+            if (d.equipment_id !== where.equipment_id) continue;
+            d.equipment_id = data.equipment_id;
+            count += 1;
+          }
+          return { count };
+        },
+      ),
+      count: vi.fn(
+        async ({ where }: { where: { equipment_id: string } }) =>
+          days.filter((d) => d.equipment_id === where.equipment_id).length,
+      ),
+    },
+    equipmentThroughputGapAlert: {
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { equipment_id: string };
+          data: { equipment_id: string };
+        }) => {
+          let count = 0;
+          for (const g of gapAlerts) {
+            if (g.equipment_id !== where.equipment_id) continue;
+            g.equipment_id = data.equipment_id;
+            count += 1;
+          }
+          return { count };
+        },
+      ),
+      count: vi.fn(
+        async ({ where }: { where: { equipment_id: string } }) =>
+          gapAlerts.filter((g) => g.equipment_id === where.equipment_id).length,
       ),
     },
     apEquipmentLink: {
@@ -169,6 +250,9 @@ function client(inTx: boolean) {
     // must stay un-called.
     apRequest: { update: apRequestUpdate, updateMany: apRequestUpdateMany },
     site: {
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
+        where.id === EUGENE || where.id === WOODLAND ? { id: where.id } : null,
+      ),
       findMany: vi.fn(async () => [
         { id: EUGENE, code: 'eugene', name: 'DR3 Eugene' },
         { id: WOODLAND, code: 'woodland', name: 'DR3 Woodland' },
@@ -199,6 +283,8 @@ const fakePrisma = {
       equipment: new Map(Array.from(equipment, ([k, v]) => [k, { ...v }])),
       links: links.map((l) => ({ ...l })),
       reqs: reqs.map((r) => ({ ...r })),
+      days: days.map((d) => ({ ...d })),
+      gapAlerts: gapAlerts.map((g) => ({ ...g })),
       audits: audits.length,
     };
     try {
@@ -210,6 +296,10 @@ const fakePrisma = {
       links.push(...snapshot.links);
       reqs.length = 0;
       reqs.push(...snapshot.reqs);
+      days.length = 0;
+      days.push(...snapshot.days);
+      gapAlerts.length = 0;
+      gapAlerts.push(...snapshot.gapAlerts);
       audits.length = snapshot.audits;
       throw e;
     }
@@ -366,11 +456,34 @@ describe('mergeEquipment — refusals', () => {
     });
   });
 
-  it('refuses a CROSS-SITE merge (hard rule #2)', async () => {
+  it('refuses a CROSS-SITE merge when nobody said where the survivor lives', async () => {
     const res = await mergeEquipment('eq-machine', 'eq-eugene', actor);
     expect(res).toEqual({ ok: false, reason: 'cross_site' });
     // and nothing moved
     expect(equipment.get('eq-eugene')?.merged_into_id).toBeNull();
+  });
+
+  it('refuses when both machines logged throughput on the same day', async () => {
+    days.push(
+      {
+        id: 'd1',
+        equipment_id: 'eq-terex',
+        throughput_date: new Date('2026-09-01'),
+        voided_at: null,
+      },
+      {
+        id: 'd2',
+        equipment_id: 'eq-machine',
+        throughput_date: new Date('2026-09-01'),
+        voided_at: null,
+      },
+    );
+    expect(await mergeEquipment('eq-terex', 'eq-machine', actor)).toEqual({
+      ok: false,
+      reason: 'throughput_conflict',
+      conflictDates: ['2026-09-01'],
+    });
+    expect(days.map((d) => d.equipment_id)).toEqual(['eq-terex', 'eq-machine']);
   });
 
   it('refuses when either side was ALREADY merged — no chains', async () => {
@@ -409,7 +522,118 @@ describe('mergeEquipment — refusals', () => {
 
 describe('equipmentReferenceCounts', () => {
   it('counts both sides so the admin can see which row should survive', async () => {
-    expect(await equipmentReferenceCounts('eq-machine-lc')).toEqual({ links: 1, requests: 1 });
-    expect(await equipmentReferenceCounts('eq-terex')).toEqual({ links: 1, requests: 0 });
+    days.push({
+      id: 'd1',
+      equipment_id: 'eq-terex',
+      throughput_date: new Date('2026-09-01'),
+      voided_at: null,
+    });
+    expect(await equipmentReferenceCounts('eq-machine-lc')).toEqual({
+      links: 1,
+      requests: 1,
+      throughput: 0,
+      gapAlerts: 0,
+    });
+    expect(await equipmentReferenceCounts('eq-terex')).toEqual({
+      links: 1,
+      requests: 0,
+      throughput: 1,
+      gapAlerts: 0,
+    });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// ADR-0135 F — the latent defect (throughput + gap alerts left on the loser)
+// and the cross-site merge Bill asked for.
+// ────────────────────────────────────────────────────────────────────
+describe('mergeEquipment — ADR-0135', () => {
+  it('repoints daily throughput AND gap alerts onto the survivor', async () => {
+    days.push(
+      {
+        id: 'd1',
+        equipment_id: 'eq-machine',
+        throughput_date: new Date('2026-09-01'),
+        voided_at: null,
+      },
+      {
+        id: 'd2',
+        equipment_id: 'eq-machine',
+        throughput_date: new Date('2026-09-02'),
+        voided_at: new Date(),
+      },
+      {
+        id: 'd3',
+        equipment_id: 'eq-terex',
+        throughput_date: new Date('2026-09-03'),
+        voided_at: null,
+      },
+    );
+    gapAlerts.push({ id: 'g1', equipment_id: 'eq-machine' });
+    const res = await mergeEquipment('eq-terex', 'eq-machine', actor);
+    expect(res.ok && res.repointed).toEqual({
+      links: 1,
+      requests: 0,
+      throughput: 2,
+      gapAlerts: 1,
+      mergedChildren: 0,
+    });
+    expect(days.every((d) => d.equipment_id === 'eq-terex')).toBe(true);
+    expect(gapAlerts[0]?.equipment_id).toBe('eq-terex');
+    const row = audits.find((a) => a.row_id === 'eq-machine');
+    expect(row?.after).toMatchObject({ repointed_daily_throughput: 2, repointed_gap_alerts: 1 });
+  });
+
+  it('a voided reading on the same day is not a conflict', async () => {
+    days.push(
+      {
+        id: 'd1',
+        equipment_id: 'eq-terex',
+        throughput_date: new Date('2026-09-01'),
+        voided_at: null,
+      },
+      {
+        id: 'd2',
+        equipment_id: 'eq-machine',
+        throughput_date: new Date('2026-09-01'),
+        voided_at: new Date(),
+      },
+    );
+    expect((await mergeEquipment('eq-terex', 'eq-machine', actor)).ok).toBe(true);
+  });
+
+  it('rows already merged INTO the loser follow it to the survivor (no chains)', async () => {
+    await mergeEquipment('eq-machine', 'eq-machine-lc', actor);
+    const res = await mergeEquipment('eq-terex', 'eq-machine', actor);
+    expect(res.ok && res.repointed.mergedChildren).toBe(1);
+    expect(equipment.get('eq-machine-lc')?.merged_into_id).toBe('eq-terex');
+  });
+
+  it('merges ACROSS sites into a FLEET-WIDE survivor, auditing the survivor move', async () => {
+    const res = await mergeEquipment('eq-machine', 'eq-eugene', actor, { survivorSiteId: null });
+    expect(res.ok).toBe(true);
+    expect(equipment.get('eq-machine')?.site_id).toBeNull();
+    expect(equipment.get('eq-eugene')?.merged_into_id).toBe('eq-machine');
+    const move = audits.find(
+      (a) =>
+        a.row_id === 'eq-machine' && (a.after as { via?: string }).via === 'merge_survivor_site',
+    );
+    expect(move).toBeDefined();
+    const merge = audits.find((a) => a.row_id === 'eq-eugene');
+    expect(merge?.after).toMatchObject({ cross_site: true, survivor_site_id: null });
+    expect(apRequestUpdate).not.toHaveBeenCalled();
+    expect(apRequestUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('merges across sites into a named yard', async () => {
+    const res = await mergeEquipment('eq-machine', 'eq-eugene', actor, { survivorSiteId: EUGENE });
+    expect(res.ok).toBe(true);
+    expect(equipment.get('eq-machine')?.site_id).toBe(EUGENE);
+  });
+
+  it('refuses an unknown survivor site', async () => {
+    expect(
+      await mergeEquipment('eq-machine', 'eq-eugene', actor, { survivorSiteId: 'nowhere' }),
+    ).toEqual({ ok: false, reason: 'site_not_found' });
   });
 });
