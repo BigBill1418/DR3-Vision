@@ -265,12 +265,9 @@ export const adminMessages = {
     // ── ADR-0075 — collision suggestions + merge (English only; /admin is not
     // localised, ADR-0017. The three-locale rule is hard rule #4 for the
     // OPERATOR-facing app, and this whole surface sits behind the admin gate.)
-    nameTakenSuggest:
-      'That name is already taken here. Use the asset that already exists, or give yours a different name — please do not retype it slightly differently, which is how one machine ends up with three records.',
     similarHeading: 'Already in the fleet',
     useExisting: 'Use this one',
     reactivateAndUse: 'Reactivate and use',
-    renameMine: 'Rename mine',
     mergedBadge: 'Merged',
     mergeHeading: 'Merge into another asset',
     mergeWinner: 'Keep this one (the survivor)',
@@ -309,6 +306,43 @@ export const adminMessages = {
     distinctReasonRequired:
       'Say why these are different assets (at least 10 characters) — the note stays on the record.',
     mergeAlreadyMerged: 'One of those was already merged. Refresh and pick the surviving rows.',
+    // ADR-0135 D — the structured "new asset" form. No free-typed name: the name
+    // is generated from these fields with the seed's `<unit> — <make> <type>`
+    // convention, so every new row reads like the ones already in the registry.
+    typeLabel: 'Type',
+    typeHelp: 'What kind of asset this is. Shear machines are “Shear Machine”.',
+    typeChoose: 'Choose a type…',
+    unitLabel: 'Unit #',
+    unitHelp: 'The number painted on it — e.g. 5327, 32-48 or EQ24. One unit only.',
+    unitHelpOptional: 'The number painted on it, if it has one.',
+    makeLabel: 'Make',
+    makeHelp: 'e.g. Great Dane, Freightliner, Hyster.',
+    detailsLabel: 'Details (optional)',
+    detailsHelp: 'Anything that tells it apart at a glance — e.g. “48 Ft Swing Door”.',
+    vinLabel: 'VIN / serial (optional)',
+    vinHelp: 'The strongest identity there is — two assets can never share one.',
+    previewLabel: 'Will be listed as',
+    previewEmpty: 'Choose a type to see the name.',
+    fleetWideSite: 'Fleet-wide',
+    filterFleetWide: 'Fleet-wide',
+    differentAsset: 'It’s a different asset',
+    differentAssetReasonLabel: 'What makes it a different asset?',
+    differentAssetSubmit: 'Create it as a different asset',
+    // ADR-0135 F — the merge preview names EVERY table the merge repoints, so the
+    // admin judges the direction on the whole evidence, not half of it.
+    mergeReferencesFull: (c: {
+      links: number;
+      requests: number;
+      throughput: number;
+      gapAlerts: number;
+    }) =>
+      `${c.links} AP link${c.links === 1 ? '' : 's'} · ${c.requests} equipment request${c.requests === 1 ? '' : 's'} · ${c.throughput} throughput day${c.throughput === 1 ? '' : 's'} · ${c.gapAlerts} gap alert${c.gapAlerts === 1 ? '' : 's'}`,
+    mergeMovesHeading: 'Merging this record away moves:',
+    mergeSurvivorSiteChoose: 'Choose where it lives…',
+    mergeSurvivorSiteRequired: 'Choose where the surviving asset lives.',
+    mergeFilterPlaceholder: 'Filter by unit number or name',
+    mergeWholeFleetNote:
+      'This list is the rows on screen. To merge with an asset filed at the other yard, use Edit — its merge tool searches the whole fleet.',
     categoryLabel: 'Category',
     categoryHelp: 'Drives nothing today beyond grouping; shear machines belong under Terex.',
     siteLabel: 'Site',
@@ -359,6 +393,53 @@ export const adminMessages = {
     duplicatesDistinctPlaceholder: 'e.g. different VIN — the Wabash, not the Fruehauf',
     duplicatesDistinctSubmit: 'Record as different',
     duplicatesDistinctDone: 'Recorded as different assets. That pair will not be proposed again.',
+  },
+
+  // ADR-0046 Amendment 9 / ADR-0135 A — the equipment-request worklist. The
+  // primary verb is FIND (23 of the first 27 resolutions created a row that
+  // already existed); adding a new asset is the secondary path.
+  equipmentRequests: {
+    empty:
+      'Nothing here. When an approver describes equipment that isn’t in the fleet list, it lands on this list.',
+    findInFleet: 'Find it in the fleet',
+    notEquipment: 'Not equipment',
+    viewInvoice: 'View the invoice',
+    neverMind: 'Never mind',
+    searchLabel: 'Search the whole fleet — both yards and fleet-wide assets',
+    searchPlaceholder: 'Unit number, make or type — e.g. 5327',
+    searching: 'Searching…',
+    searchFailed: 'The search failed. Try again.',
+    noMatches:
+      'Nothing in the fleet matches. Try the unit number on its own — or, if it really is new, add it below.',
+    searchHint: 'Type a unit number, make or type to search.',
+    addNewInstead: 'Add a new asset instead',
+    addNewHelp:
+      'Only when the search above has no match. The name is generated from what you enter, and the fleet is checked again before anything is created.',
+    backToSearch: '← Back to the search',
+    addToFleet: 'Add to the fleet',
+    backfillLabel: 'Point the original invoice at the asset you choose',
+    backfillHelp:
+      'Recommended — it makes the historical invoice read correctly instead of leaving it attached to a description.',
+    resolveFailed: 'Could not resolve this request.',
+    rejectFailed: 'Could not reject this request.',
+    rejectNoteRequired: 'A rejection needs a note explaining why.',
+    rejectNoteLabel: 'Why isn’t this equipment?',
+    required: '(required)',
+    rejectNoteHelp:
+      'The invoice stays approved either way — this only records that no asset needed adding.',
+    rejectSubmit: 'Record as not equipment',
+    resolvedTo: 'Resolved to',
+    resolvedBy: (name: string) => ` by ${name}`,
+    linkNotRepointed: ' · the original invoice was NOT repointed at it',
+    linkRepointed: ' · the original invoice now points at it',
+    rejectedNote: (note: string) => `Not equipment — “${note}”`,
+    invoiceStaysApproved: '. The invoice stays approved.',
+    anApprover: 'An approver',
+    waiting: (age: string) => `waiting ${age}`,
+    vendor: 'Vendor',
+    amount: 'Amount',
+    invoice: 'Invoice',
+    noSubject: '(no subject)',
   },
 
   // File-drop inbox (O-2)

@@ -16,9 +16,18 @@ import { useCallback, useState } from 'react';
 import type { AdminEquipmentDto } from '@/lib/admin-equipment';
 import { adminMessages as M } from '@/app/admin/messages';
 import { CATEGORY_LABEL } from './labels';
+import { MergePanel } from './MergePanel';
+
+interface SiteOption {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface Props {
   equipment: AdminEquipmentDto[];
+  /** For the cross-site merge's "where does the survivor live?" choice. */
+  sites: SiteOption[];
   /**
    * The list's current filters as a bare query string, appended to the Edit
    * link so the edit page can hand the admin back to this same view.
@@ -26,7 +35,7 @@ interface Props {
   listQuery?: string;
 }
 
-export function EquipmentListClient({ equipment, listQuery = '' }: Props) {
+export function EquipmentListClient({ equipment, sites, listQuery = '' }: Props) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,45 +43,12 @@ export function EquipmentListClient({ equipment, listQuery = '' }: Props) {
    * ADR-0075 D4 — the row currently being merged AWAY, if any.
    *
    * The list itself is the picker: the admin opens "Merge into…" on the row that
-   * should disappear and chooses the survivor from the same-site rows already on
-   * screen. That keeps the tool inside the surface where the duplicates are
+   * should disappear and chooses the survivor from the live rows already on
+   * screen — at either yard or fleet-wide (ADR-0135 lifted the same-site rule). That keeps the tool inside the surface where the duplicates are
    * visible side by side, which is where the judgement actually gets made.
    */
   const [mergingId, setMergingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const merge = useCallback(
-    async (winnerId: string, loserId: string) => {
-      if (!window.confirm(M.equipment.mergeConfirm)) return;
-      setPendingId(loserId);
-      setError(null);
-      setNotice(null);
-      try {
-        const res = await fetch('/api/admin/equipment/merge', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ winnerId, loserId }),
-        });
-        const body = (await res.json().catch(() => ({}))) as {
-          error?: string;
-          repointedLinks?: number;
-          repointedRequests?: number;
-        };
-        if (!res.ok) {
-          setError(body.error ?? M.errors.serverError);
-          return;
-        }
-        setNotice(
-          M.equipment.mergeSuccess((body.repointedLinks ?? 0) + (body.repointedRequests ?? 0)),
-        );
-        setMergingId(null);
-        router.refresh();
-      } finally {
-        setPendingId(null);
-      }
-    },
-    [router],
-  );
 
   const setActive = useCallback(
     async (id: string, action: 'deactivate' | 'reactivate') => {
@@ -167,7 +143,7 @@ export function EquipmentListClient({ equipment, listQuery = '' }: Props) {
                   ) : null}
                 </td>
                 <td className="px-4 py-3 text-dr3-mist-dim">{CATEGORY_LABEL[e.category]}</td>
-                <td className="px-4 py-3">{e.site_code ?? '—'}</td>
+                <td className="px-4 py-3">{e.site_code ?? M.equipment.fleetWideSite}</td>
                 <td className="px-4 py-3">
                   {e.is_active ? (
                     <span className="rounded-full bg-emerald-900/40 px-2 py-0.5 text-xs text-emerald-200">
@@ -229,14 +205,18 @@ export function EquipmentListClient({ equipment, listQuery = '' }: Props) {
                     ) : null}
                   </div>
                   {mergingId === e.id ? (
-                    <MergePicker
+                    <MergePanel
                       loser={e}
-                      candidates={equipment.filter(
-                        (c) => c.id !== e.id && c.site_id === e.site_id && !c.merged_into_id,
-                      )}
-                      disabled={pendingId === e.id}
+                      candidates={equipment.filter((c) => c.id !== e.id && !c.merged_into_id)}
+                      sites={sites}
+                      note={M.equipment.mergeWholeFleetNote}
                       onCancel={() => setMergingId(null)}
-                      onMerge={(winnerId) => void merge(winnerId, e.id)}
+                      onMerged={(n) => {
+                        setError(null);
+                        setNotice(M.equipment.mergeSuccess(n));
+                        setMergingId(null);
+                        router.refresh();
+                      }}
                     />
                   ) : null}
                 </td>
@@ -244,87 +224,6 @@ export function EquipmentListClient({ equipment, listQuery = '' }: Props) {
             ))}
           </tbody>
         </table>
-      </div>
-    </section>
-  );
-}
-
-/**
- * ADR-0075 D4 — pick the SURVIVOR for a merge, from the same site only.
- *
- * The reference counts are shown on both sides because the direction matters and
- * is not obvious: the row carrying the invoices is usually the one that should
- * survive, and the admin cannot know that from the names alone. `link_count`
- * comes straight off the list DTO, so no extra request is needed to render it.
- *
- * Cross-site candidates are not offered at all — the API refuses them (hard rule
- * #2), and offering a choice the server will reject is a worse experience than
- * not offering it.
- */
-function MergePicker({
-  loser,
-  candidates,
-  disabled,
-  onCancel,
-  onMerge,
-}: {
-  loser: AdminEquipmentDto;
-  candidates: AdminEquipmentDto[];
-  disabled: boolean;
-  onCancel: () => void;
-  onMerge: (winnerId: string) => void;
-}) {
-  const [winnerId, setWinnerId] = useState('');
-
-  return (
-    <section
-      className="mt-2 flex flex-col gap-2 rounded-md border border-dr3-steel-light/25 bg-dr3-space/60 p-3"
-      data-testid={`admin-equipment-merge-panel-${loser.id}`}
-    >
-      <p className="text-xs text-dr3-mist-dim">
-        <b className="text-dr3-mist">{M.equipment.mergeLoser}:</b> {loser.display_name} ·{' '}
-        {M.equipment.mergeReferences(loser.link_count, loser.resolved_request_count)}
-      </p>
-      {candidates.length === 0 ? (
-        <p className="text-xs text-dr3-mist-dim">{M.equipment.empty}</p>
-      ) : (
-        <label className="flex flex-col gap-1 text-xs text-dr3-mist">
-          {M.equipment.mergeWinner}
-          <select
-            value={winnerId}
-            onChange={(ev) => setWinnerId(ev.target.value)}
-            className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-2 py-1 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
-            data-testid={`admin-equipment-merge-winner-${loser.id}`}
-          >
-            <option value="" className="text-dr3-space">
-              —
-            </option>
-            {candidates.map((c) => (
-              <option key={c.id} value={c.id} className="text-dr3-space">
-                {c.display_name} (
-                {M.equipment.mergeReferences(c.link_count, c.resolved_request_count)})
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onMerge(winnerId)}
-          disabled={disabled || !winnerId}
-          className="rounded-md bg-amber-500 px-3 py-1 text-xs font-semibold text-dr3-space disabled:cursor-not-allowed disabled:opacity-50"
-          data-testid={`admin-equipment-merge-submit-${loser.id}`}
-        >
-          {M.equipment.mergeSubmit}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
-        >
-          {M.equipment.mergeCancel}
-        </button>
       </div>
     </section>
   );

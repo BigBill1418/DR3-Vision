@@ -23,6 +23,14 @@
 import { EQUIPMENT_CATEGORIES, type EquipmentCategoryValue } from '@/app/admin/constants';
 
 export const CATEGORIES = EQUIPMENT_CATEGORIES;
+
+/**
+ * ADR-0135 — the `?site=` value for FLEET-WIDE assets (no home yard). Must equal
+ * `FLEET_SITE_FILTER` in `@/lib/admin-equipment`, which cannot be imported here
+ * (server-only); the list page passes it straight through to `listEquipment`.
+ * No real site can take this code — site codes are `eugene` / `woodland`.
+ */
+export const FLEET_SITE_CODE = 'fleet';
 export const STATUSES = ['active', 'inactive', 'all'] as const;
 
 export type CategoryFilter = EquipmentCategoryValue;

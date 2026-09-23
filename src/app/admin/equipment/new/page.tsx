@@ -7,6 +7,7 @@ import { checkAdmin } from '@/lib/auth-helpers';
 import { adminMessages as M } from '@/app/admin/messages';
 import { EquipmentCreateForm } from './EquipmentCreateForm';
 import {
+  FLEET_SITE_CODE,
   buildEquipmentListHref,
   pickEquipmentListParams,
   type EquipmentListSearchParams,
@@ -35,7 +36,9 @@ export default async function NewEquipmentPage({
   // selects default to what they had filtered to (ADR-0017 Amendment 1).
   const view = pickEquipmentListParams(await searchParams);
   const initialSiteCode =
-    view.site && sites.some((s) => s.code === view.site) ? view.site : undefined;
+    view.site === FLEET_SITE_CODE || sites.some((s) => s.code === view.site)
+      ? view.site
+      : undefined;
   const backHref = buildEquipmentListHref({ ...view, site: initialSiteCode });
 
   return (
@@ -50,11 +53,14 @@ export default async function NewEquipmentPage({
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">{M.equipment.createHeading}</h1>
         </header>
+        {/* ADR-0135 — the fleet-wide "already in the fleet?" lookup. An admin
+            passes its gate (`requireEquipmentRequestAccess` admits role admin). */}
         <EquipmentCreateForm
           sites={sites}
           backHref={backHref}
           initialSiteCode={initialSiteCode}
           initialCategory={view.category}
+          similarEndpoint="/api/admin/equipment/similar"
         />
       </div>
     </main>

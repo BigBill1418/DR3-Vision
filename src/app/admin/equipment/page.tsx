@@ -14,13 +14,14 @@ import { redirect } from 'next/navigation';
 import { HOME_ROUTE } from '@/lib/routes';
 import { prisma } from '@/lib/prisma';
 import { checkAdmin } from '@/lib/auth-helpers';
-import { listEquipment } from '@/lib/admin-equipment';
+import { FLEET_SITE_FILTER, listEquipment } from '@/lib/admin-equipment';
 import { adminMessages as M } from '@/app/admin/messages';
 import { EquipmentListClient } from './EquipmentListClient';
 import { EquipmentSearchClient } from './EquipmentSearchClient';
 import { CATEGORY_LABEL } from './labels';
 import {
   CATEGORIES,
+  FLEET_SITE_CODE,
   buildEquipmentListHref as buildHref,
   buildEquipmentListQuery,
   pickEquipmentListParams,
@@ -52,16 +53,21 @@ export default async function AdminEquipmentPage({
   const siteByCode = new Map(sites.map((s) => [s.code, s]));
   const view = pickEquipmentListParams(sp);
   const siteFilter = view.site ? siteByCode.get(view.site) : undefined;
+  // ADR-0135 — `?site=fleet` lists only the FLEET-WIDE assets (no home yard). A
+  // yard filter lists that yard's assets plus the fleet-wide ones, which move
+  // between yards (`listEquipment`).
+  const fleetOnly = view.site === FLEET_SITE_CODE;
+  const siteCode = fleetOnly ? FLEET_SITE_CODE : siteFilter?.code;
 
   // The view state the create/edit round trip must carry and hand back, so
   // saving returns the admin to the list they were working in rather than the
   // unfiltered registry. `site` is normalised to the resolved code so an
   // unknown `?site=` doesn't ride along.
-  const normalizedView: EquipmentListParams = { ...view, site: siteFilter?.code };
+  const normalizedView: EquipmentListParams = { ...view, site: siteCode };
   const listQuery = buildEquipmentListQuery(normalizedView);
 
   const equipment = await listEquipment({
-    siteId: siteFilter?.id,
+    siteId: fleetOnly ? FLEET_SITE_FILTER : siteFilter?.id,
     category: view.category,
     status: view.status,
     q: view.q,
@@ -128,7 +134,7 @@ export default async function AdminEquipmentPage({
 
         <Filters
           sites={sites}
-          siteCode={siteFilter?.code}
+          siteCode={siteCode}
           category={view.category}
           status={view.status}
           q={view.q}
@@ -136,7 +142,7 @@ export default async function AdminEquipmentPage({
 
         <EquipmentSearchClient view={normalizedView} />
 
-        <EquipmentListClient equipment={equipment} listQuery={listQuery} />
+        <EquipmentListClient equipment={equipment} sites={sites} listQuery={listQuery} />
       </div>
     </main>
   );
@@ -169,6 +175,12 @@ function Filters({ sites, siteCode, category, status, q }: FiltersProps) {
             {s.name}
           </FilterLink>
         ))}
+        <FilterLink
+          href={buildHref({ site: FLEET_SITE_CODE, category, status, q })}
+          active={siteCode === FLEET_SITE_CODE}
+        >
+          {M.equipment.filterFleetWide}
+        </FilterLink>
       </FilterGroup>
       <FilterGroup label={M.equipment.filterCategory}>
         <FilterLink

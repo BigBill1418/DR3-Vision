@@ -8,11 +8,12 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { checkAdmin } from '@/lib/auth-helpers';
-import { getEquipment } from '@/lib/admin-equipment';
+import { equipmentReferenceCounts, getEquipment, listEquipment } from '@/lib/admin-equipment';
 import { adminMessages as M } from '@/app/admin/messages';
 import { EquipmentEditForm } from './EquipmentEditForm';
 import { CATEGORY_LABEL } from '../labels';
 import {
+  FLEET_SITE_CODE,
   buildEquipmentListHref,
   pickEquipmentListParams,
   type EquipmentListSearchParams,
@@ -42,11 +43,23 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
   ]);
   if (!equipment) notFound();
 
+  // ADR-0135 F — the merge section offers EVERY live asset in the fleet (both
+  // yards, fleet-wide, active or not; merged rows excluded by `listEquipment`),
+  // and previews every table the merge would repoint.
+  const merge = equipment.merged_into_id
+    ? null
+    : await Promise.all([listEquipment({ status: 'all' }), equipmentReferenceCounts(id)]);
+  const mergeCandidates = merge?.[0].filter((e) => e.id !== id);
+  const referenceCounts = merge?.[1];
+
   // Return the admin to the filtered list they came from, not the bare one.
   const view = pickEquipmentListParams(await searchParams);
   const backHref = buildEquipmentListHref({
     ...view,
-    site: view.site && sites.some((s) => s.code === view.site) ? view.site : undefined,
+    site:
+      view.site === FLEET_SITE_CODE || sites.some((s) => s.code === view.site)
+        ? view.site
+        : undefined,
   });
 
   return (
@@ -81,7 +94,13 @@ export default async function EditEquipmentPage({ params, searchParams }: PagePr
             View the {equipment.display_name} ledger — maintenance log, AP spend and downtime →
           </Link>
         ) : null}
-        <EquipmentEditForm equipment={equipment} sites={sites} backHref={backHref} />
+        <EquipmentEditForm
+          equipment={equipment}
+          sites={sites}
+          backHref={backHref}
+          mergeCandidates={mergeCandidates}
+          referenceCounts={referenceCounts}
+        />
       </div>
     </main>
   );

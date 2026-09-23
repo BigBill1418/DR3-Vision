@@ -62,9 +62,9 @@ export default async function ApEquipmentRequestsPage({
           <h1 className="text-3xl font-bold tracking-tight">Equipment requests</h1>
           <p className="max-w-3xl text-sm text-dr3-mist-dim">
             When an approver hits an invoice for a machine that isn’t in the fleet list yet, they
-            describe it here instead of guessing. Add the asset properly, and the original invoice
-            can be pointed at it. The invoice itself is already approved — nothing here changes
-            that.
+            describe it here instead of guessing. Find it in the fleet first — most are already
+            there — and the original invoice can be pointed at it. The invoice itself is already
+            approved — nothing here changes that.
           </p>
         </header>
 

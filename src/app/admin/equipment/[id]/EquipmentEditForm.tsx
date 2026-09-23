@@ -16,6 +16,11 @@
 //
 // The AP-citation count is still surfaced — not as a restriction, but so the
 // admin can see an edit is touching an asset that financial approvals point at.
+//
+// ADR-0135 — the site select gains "Fleet-wide" (`site_id: null`, an asset with
+// no home yard); the structured identity (unit #, make, VIN/serial) is editable;
+// and the merge section offers EVERY live asset in the fleet as the survivor,
+// asking where the survivor lives when the two sit at different yards.
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -24,9 +29,17 @@ import type { EquipmentCategory } from '@prisma/client';
 // not pull the server-only module in); the runtime constants come from the
 // pure-data constants module.
 import type { AdminEquipmentDto } from '@/lib/admin-equipment';
-import { DISPLAY_NAME_MAX, EQUIPMENT_CATEGORIES } from '@/app/admin/constants';
+import {
+  DISPLAY_NAME_MAX,
+  EQUIPMENT_CATEGORIES,
+  MAKE_MAX,
+  UNIT_NUMBER_MAX,
+  VIN_SERIAL_MAX,
+} from '@/app/admin/constants';
 import { adminMessages as M } from '@/app/admin/messages';
 import { CATEGORY_LABEL } from '../labels';
+import { FLEET_SITE_CODE } from '../list-url';
+import { MergePanel, type MergeReferenceCounts, type MergeRow } from '../MergePanel';
 
 interface SiteOption {
   id: string;
@@ -38,13 +51,30 @@ interface Props {
   equipment: AdminEquipmentDto;
   sites: SiteOption[];
   backHref?: string | undefined;
+  /** Every live asset in the fleet except this one — the merge survivors. */
+  mergeCandidates?: MergeRow[] | undefined;
+  /** What merging THIS row away would move, table by table. */
+  referenceCounts?: MergeReferenceCounts | undefined;
 }
 
-export function EquipmentEditForm({ equipment, sites, backHref = '/admin/equipment' }: Props) {
+const INPUT_CLASS =
+  'rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan';
+
+export function EquipmentEditForm({
+  equipment,
+  sites,
+  backHref = '/admin/equipment',
+  mergeCandidates,
+  referenceCounts,
+}: Props) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState(equipment.display_name);
   const [category, setCategory] = useState<EquipmentCategory>(equipment.category);
-  const [siteId, setSiteId] = useState(equipment.site_id);
+  const [site, setSite] = useState(equipment.site_id ?? FLEET_SITE_CODE);
+  const [unitNumber, setUnitNumber] = useState(equipment.unit_number ?? '');
+  const [make, setMake] = useState(equipment.make ?? '');
+  const [vinSerial, setVinSerial] = useState(equipment.vin_serial ?? '');
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -78,12 +108,20 @@ export function EquipmentEditForm({ equipment, sites, backHref = '/admin/equipme
       setError(M.equipment.nameTooLong);
       return;
     }
+    // Identity fields ride along only when changed: an empty string CLEARS on
+    // the server, so resending an untouched blank would be harmless, but an
+    // unchanged value never needs re-validating.
+    const changed = (next: string, prev: string | null) =>
+      next.trim() !== (prev ?? '') ? next.trim() : undefined;
     if (
       await patch({
         action: 'update',
         display_name: name,
         category,
-        site_id: siteId,
+        site_id: site === FLEET_SITE_CODE ? null : site,
+        unit_number: changed(unitNumber, equipment.unit_number),
+        make: changed(make, equipment.make),
+        vin_serial: changed(vinSerial, equipment.vin_serial),
       })
     ) {
       router.push(backHref);
@@ -142,9 +180,9 @@ export function EquipmentEditForm({ equipment, sites, backHref = '/admin/equipme
 
       <Field label={M.equipment.siteLabel} helper={M.equipment.siteHelp}>
         <select
-          value={siteId}
-          onChange={(e) => setSiteId(e.target.value)}
-          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
+          value={site}
+          onChange={(e) => setSite(e.target.value)}
+          className={INPUT_CLASS}
           data-testid="admin-equipment-edit-site"
         >
           {sites.map((s) => (
@@ -152,8 +190,44 @@ export function EquipmentEditForm({ equipment, sites, backHref = '/admin/equipme
               {s.name}
             </option>
           ))}
+          <option value={FLEET_SITE_CODE} className="text-dr3-space">
+            {M.equipment.fleetWide}
+          </option>
         </select>
       </Field>
+
+      <div className="grid gap-5 sm:grid-cols-3">
+        <Field label={M.equipment.unitLabel} helper={M.equipment.unitHelpOptional}>
+          <input
+            type="text"
+            value={unitNumber}
+            maxLength={UNIT_NUMBER_MAX}
+            onChange={(e) => setUnitNumber(e.target.value)}
+            className={INPUT_CLASS}
+            data-testid="admin-equipment-edit-unit"
+          />
+        </Field>
+        <Field label={M.equipment.makeLabel} helper={M.equipment.makeHelp}>
+          <input
+            type="text"
+            value={make}
+            maxLength={MAKE_MAX}
+            onChange={(e) => setMake(e.target.value)}
+            className={INPUT_CLASS}
+            data-testid="admin-equipment-edit-make"
+          />
+        </Field>
+        <Field label={M.equipment.vinLabel} helper={M.equipment.vinHelp}>
+          <input
+            type="text"
+            value={vinSerial}
+            maxLength={VIN_SERIAL_MAX}
+            onChange={(e) => setVinSerial(e.target.value)}
+            className={INPUT_CLASS}
+            data-testid="admin-equipment-edit-vin"
+          />
+        </Field>
+      </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <button
@@ -174,6 +248,32 @@ export function EquipmentEditForm({ equipment, sites, backHref = '/admin/equipme
           {M.equipment.cancel}
         </button>
       </div>
+
+      {mergeCandidates && !equipment.merged_into_id ? (
+        <section className="mt-4 flex flex-col gap-3 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-5">
+          <h2 className="text-lg font-semibold">{M.equipment.mergeHeading}</h2>
+          {notice ? (
+            <p
+              className="rounded-md bg-emerald-900/40 px-4 py-2 text-sm text-emerald-100"
+              role="status"
+              data-testid="admin-equipment-edit-merge-notice"
+            >
+              {notice}
+            </p>
+          ) : (
+            <MergePanel
+              loser={equipment}
+              candidates={mergeCandidates}
+              sites={sites}
+              counts={referenceCounts}
+              onMerged={(n) => {
+                setNotice(M.equipment.mergeSuccess(n));
+                router.refresh();
+              }}
+            />
+          )}
+        </section>
+      ) : null}
 
       <section className="mt-4 flex flex-col gap-3 rounded-md border border-dr3-steel-light/25 bg-dr3-space-2 p-5">
         <h2 className="text-lg font-semibold">{M.equipment.deactivateHeading}</h2>

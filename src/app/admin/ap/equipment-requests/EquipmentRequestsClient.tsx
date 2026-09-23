@@ -1,17 +1,32 @@
 'use client';
 
-// ADR-0046 Amendment 9 (§2.5) — the worklist rows + the resolve/reject actions.
+// ADR-0046 Amendment 9 (§2.5) / ADR-0135 A — the worklist rows + the resolve /
+// reject actions.
 //
 // CLAUDE.md hard rule #10 — no `<form>` element anywhere; every action is an
-// `onClick`. The resolve panel embeds the EXISTING `/admin/equipment` create form
-// (ADR-0063) rather than a second copy of it: same validation, same category
-// list, same site-defaulting rule, pre-filled from the approver's description and
-// posted at the resolve endpoint via its `endpoint` / `extraBody` seam.
+// `onClick`.
+//
+// SEARCH FIRST (ADR-0135 A). 23 of the first 27 resolutions created a new row,
+// most of them for assets that were already in the registry — because the
+// panel's only primary button was "Add to the fleet". The primary action is now
+// "Find it in the fleet": a search over BOTH yards and the fleet-wide assets,
+// pre-filled from the request (the approver's structured unit # + type, or the
+// unit tokens of a legacy free-text description), ranked by the shared
+// unit-aware matcher, with "Use this one" on every result. "Add a new asset
+// instead" is the SECONDARY path under the results, and it opens the structured
+// create form (ADR-0135 D) — whose server gate re-checks the fleet anyway.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { assetTypeDef } from '@/app/admin/constants';
 import { EquipmentCreateForm } from '@/app/admin/equipment/new/EquipmentCreateForm';
+import { adminMessages } from '@/app/admin/messages';
+import { unitTokens } from '@/lib/equipment/match';
+import type { StructuredEquipmentRequest } from '@/lib/equipment/request-description';
 import { pacificAgeLabel } from './age';
+
+const M = adminMessages.equipmentRequests;
+const E = adminMessages.equipment;
 
 export interface EquipmentRequestRow {
   id: string;
@@ -33,6 +48,8 @@ export interface EquipmentRequestRow {
   resolvedAt: string | null;
   resolutionNote: string | null;
   linkPending: boolean;
+  /** ADR-0135 E — the approver's structured fields; null for a legacy free-text request. */
+  structured: StructuredEquipmentRequest | null;
 }
 
 interface SiteOption {
@@ -41,10 +58,42 @@ interface SiteOption {
   name: string;
 }
 
+/** One fleet search hit — the `SimilarEquipment` wire shape, the fields we render. */
+interface SearchRow {
+  id: string;
+  displayName: string;
+  category: string;
+  /** null = fleet-wide. */
+  siteCode: string | null;
+  isActive: boolean;
+  mergedIntoId: string | null;
+}
+
+/** Debounce for the fleet search. */
+const SEARCH_DEBOUNCE_MS = 300;
+
 const usd = (cents: number | null): string =>
   typeof cents === 'number'
     ? (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
     : '—';
+
+/**
+ * What the "Find it in the fleet" box starts with.
+ *
+ * Structured request → its unit number (or make, for a type without one) plus
+ * the type label: `5327 Trailer`. Legacy free text → the old name suggestion
+ * when there is one, else every unit token in the description, so a four-trailer
+ * work order searches for all four (`53489 5340 35 282859`) instead of nothing.
+ */
+export function initialSearch(r: Pick<EquipmentRequestRow, 'description' | 'structured'>): string {
+  const s = r.structured;
+  if (s) {
+    return [s.unitNumber || s.make, assetTypeDef(s.assetType)?.label ?? '']
+      .filter(Boolean)
+      .join(' ');
+  }
+  return suggestName(r.description) || unitTokens(r.description).join(' ');
+}
 
 export function EquipmentRequestsClient({
   requests,
@@ -56,8 +105,7 @@ export function EquipmentRequestsClient({
   if (requests.length === 0) {
     return (
       <p className="rounded-md border border-dr3-steel-light/20 bg-dr3-space-2 px-4 py-6 text-sm text-dr3-mist-dim">
-        Nothing here. When an approver describes equipment that isn’t in the fleet list, it lands on
-        this list.
+        {M.empty}
       </p>
     );
   }
@@ -74,75 +122,67 @@ export function EquipmentRequestsClient({
 
 function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: SiteOption[] }) {
   const router = useRouter();
-  const [mode, setMode] = useState<'idle' | 'resolve' | 'reject'>('idle');
+  const [mode, setMode] = useState<'idle' | 'find' | 'create' | 'reject'>('idle');
   const [backfill, setBackfill] = useState(true);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const reject = useCallback(async () => {
-    if (!note.trim()) {
-      setError('A rejection needs a note explaining why.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/admin/ap/equipment-requests/${request.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reject', note: note.trim() }),
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) {
-        setError(body.error ?? 'Could not reject this request.');
-        return;
-      }
-      setMode('idle');
-      router.refresh();
-    } finally {
-      setBusy(false);
-    }
-  }, [note, request.id, router]);
-
-  /**
-   * ADR-0075 D1 — resolve against the asset that already exists.
-   *
-   * Posts to the SAME endpoint as the create path, with `equipmentId` in place of
-   * a name+category. `reactivate` rides along only when the target is inactive,
-   * which is also the case the button labels "Reactivate and use" — so the click
-   * does exactly what its label says and never silently flips a live asset.
-   */
-  const useExisting = useCallback(
-    async (equipmentId: string, isActive: boolean) => {
+  const post = useCallback(
+    async (body: Record<string, unknown>, failed: string): Promise<boolean> => {
       setBusy(true);
       setError(null);
       try {
         const res = await fetch(`/api/admin/ap/equipment-requests/${request.id}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'resolve',
-            equipmentId,
-            backfillLink: backfill,
-            ...(isActive ? {} : { reactivate: true }),
-          }),
+          body: JSON.stringify(body),
         });
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
         if (!res.ok) {
-          setError(body.error ?? 'Could not resolve this request.');
-          return;
+          setError(b.error ?? failed);
+          return false;
         }
         setMode('idle');
         router.refresh();
+        return true;
       } finally {
         setBusy(false);
       }
     },
-    [backfill, request.id, router],
+    [request.id, router],
+  );
+
+  const reject = useCallback(async () => {
+    if (!note.trim()) {
+      setError(M.rejectNoteRequired);
+      return;
+    }
+    await post({ action: 'reject', note: note.trim() }, M.rejectFailed);
+  }, [note, post]);
+
+  /**
+   * ADR-0075 D1 — resolve against the asset that already exists. `reactivate`
+   * rides along only when the target is inactive, which is also the case the
+   * button labels "Reactivate and use" — the click does exactly what it says.
+   */
+  const useExisting = useCallback(
+    async (equipmentId: string, isActive: boolean) => {
+      await post(
+        {
+          action: 'resolve',
+          equipmentId,
+          backfillLink: backfill,
+          ...(isActive ? {} : { reactivate: true }),
+        },
+        M.resolveFailed,
+      );
+    },
+    [backfill, post],
   );
 
   const open = request.status === 'open';
+  const s = request.structured;
 
   return (
     <article
@@ -155,32 +195,31 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
             {request.description}
           </p>
           <p className="text-xs text-dr3-mist-dim">
-            {request.requesterName ?? 'An approver'} · {request.siteName ?? request.siteCode ?? '—'}{' '}
-            · waiting {pacificAgeLabel(new Date(request.requestedAt))}
+            {request.requesterName ?? M.anApprover} · {request.siteName ?? request.siteCode ?? '—'}{' '}
+            · {M.waiting(pacificAgeLabel(new Date(request.requestedAt)))}
           </p>
         </div>
         <StatusPill status={request.status} />
       </div>
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-dr3-mist-dim sm:grid-cols-3">
-        <Row label="Vendor" value={request.vendor ?? '—'} />
-        <Row label="Amount" value={usd(request.amountCents)} />
-        <Row label="Invoice" value={request.subject ?? '(no subject)'} />
+        <Row label={M.vendor} value={request.vendor ?? '—'} />
+        <Row label={M.amount} value={usd(request.amountCents)} />
+        <Row label={M.invoice} value={request.subject ?? M.noSubject} />
       </dl>
 
       {request.status === 'resolved' && (
-        <p className="text-xs text-emerald-300">
-          Added as <b>{request.resolvedEquipmentName}</b>
-          {request.resolverName ? ` by ${request.resolverName}` : ''}
-          {request.linkPending
-            ? ' · the original invoice was NOT repointed at it'
-            : ' · the original invoice now points at it'}
+        <p className="text-xs text-emerald-300" data-testid="equipment-request-resolved">
+          {M.resolvedTo} <b>{request.resolvedEquipmentName}</b>
+          {request.resolverName ? M.resolvedBy(request.resolverName) : ''}
+          {request.linkPending ? M.linkNotRepointed : M.linkRepointed}
         </p>
       )}
       {request.status === 'rejected' && request.resolutionNote && (
         <p className="text-xs text-amber-300">
-          Not equipment — “{request.resolutionNote}”
-          {request.resolverName ? ` (${request.resolverName})` : ''}. The invoice stays approved.
+          {M.rejectedNote(request.resolutionNote)}
+          {request.resolverName ? ` (${request.resolverName})` : ''}
+          {M.invoiceStaysApproved}
         </p>
       )}
 
@@ -194,11 +233,11 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => setMode('resolve')}
+            onClick={() => setMode('find')}
             className="rounded-md bg-dr3-cyan px-4 py-2 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright"
-            data-testid="equipment-request-resolve"
+            data-testid="equipment-request-find"
           >
-            Add to the fleet
+            {M.findInFleet}
           </button>
           <button
             type="button"
@@ -206,23 +245,19 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
             data-testid="equipment-request-reject"
           >
-            Not equipment
+            {M.notEquipment}
           </button>
           <a
             href={`/dashboard/ops/ap?request=${encodeURIComponent(request.apRequestId)}`}
             className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
-            View the invoice
+            {M.viewInvoice}
           </a>
         </div>
       )}
 
-      {open && mode === 'resolve' && (
+      {open && (mode === 'find' || mode === 'create') && (
         <section className="flex flex-col gap-4 rounded-md border border-dr3-steel-light/20 bg-dr3-space/60 p-4">
-          <p className="text-xs text-dr3-mist-dim">
-            Give the asset the name the crew will recognise in the approver’s picker — the
-            description above is what they wrote, not necessarily the name.
-          </p>
           <label className="flex items-center gap-2 text-sm text-dr3-mist">
             <input
               type="checkbox"
@@ -231,34 +266,58 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
               data-testid="equipment-request-backfill"
             />
             <span>
-              Point the original invoice at this new asset
-              <span className="block text-xs text-dr3-mist-dim">
-                Recommended — it makes the historical invoice read correctly instead of leaving it
-                attached to a description.
-              </span>
+              {M.backfillLabel}
+              <span className="block text-xs text-dr3-mist-dim">{M.backfillHelp}</span>
             </span>
           </label>
-          <EquipmentCreateForm
-            sites={sites}
-            initialDisplayName={suggestName(request.description)}
-            initialSiteCode={request.siteCode ?? undefined}
-            endpoint={`/api/admin/ap/equipment-requests/${request.id}`}
-            extraBody={{ action: 'resolve', backfillLink: backfill }}
-            submitLabel="Add to the fleet"
-            onSaved={() => {
-              setMode('idle');
-              router.refresh();
-            }}
-            backHref="/admin/ap/equipment-requests"
-            similarEndpoint="/api/admin/equipment/similar"
-            onUseExisting={useExisting}
-          />
+
+          {mode === 'find' ? (
+            <>
+              <FleetSearch initialQuery={initialSearch(request)} busy={busy} onUse={useExisting} />
+              <div className="flex flex-col gap-1 border-t border-dr3-steel-light/15 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setMode('create')}
+                  className="self-start text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
+                  data-testid="equipment-request-add-new"
+                >
+                  {M.addNewInstead}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setMode('find')}
+                className="self-start text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
+                data-testid="equipment-request-back-to-search"
+              >
+                {M.backToSearch}
+              </button>
+              <p className="text-xs text-dr3-mist-dim">{M.addNewHelp}</p>
+              <EquipmentCreateForm
+                sites={sites}
+                initialSiteCode={request.siteCode ?? undefined}
+                initialAssetType={s?.assetType}
+                initialUnitNumber={s?.unitNumber}
+                initialMake={s?.make}
+                endpoint={`/api/admin/ap/equipment-requests/${request.id}`}
+                extraBody={{ action: 'resolve', backfillLink: backfill }}
+                submitLabel={M.addToFleet}
+                onSaved={() => setMode('idle')}
+                backHref="/admin/ap/equipment-requests"
+                similarEndpoint="/api/admin/equipment/similar"
+                onUseExisting={useExisting}
+              />
+            </>
+          )}
           <button
             type="button"
             onClick={() => setMode('idle')}
             className="self-start text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
           >
-            Never mind
+            {M.neverMind}
           </button>
         </section>
       )}
@@ -266,7 +325,7 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
       {open && mode === 'reject' && (
         <section className="flex flex-col gap-3 rounded-md border border-dr3-steel-light/20 bg-dr3-space/60 p-4">
           <label className="flex flex-col gap-2 text-sm text-dr3-mist">
-            Why isn’t this equipment? <span className="text-amber-300">(required)</span>
+            {M.rejectNoteLabel} <span className="text-amber-300">{M.required}</span>
             <textarea
               value={note}
               rows={2}
@@ -274,31 +333,145 @@ function RequestCard({ request, sites }: { request: EquipmentRequestRow; sites: 
               className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
               data-testid="equipment-request-reject-note"
             />
-            <span className="text-xs text-dr3-mist-dim">
-              The invoice stays approved either way — this only records that no asset needed adding.
-            </span>
+            <span className="text-xs text-dr3-mist-dim">{M.rejectNoteHelp}</span>
           </label>
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={reject}
+              onClick={() => void reject()}
               disabled={busy || !note.trim()}
               className="rounded-md bg-amber-500 px-4 py-2 text-sm font-semibold text-dr3-space disabled:cursor-not-allowed disabled:opacity-50"
               data-testid="equipment-request-reject-submit"
             >
-              Record as not equipment
+              {M.rejectSubmit}
             </button>
             <button
               type="button"
               onClick={() => setMode('idle')}
               className="text-sm text-dr3-mist-dim underline-offset-4 hover:text-dr3-cyan hover:underline"
             >
-              Never mind
+              {M.neverMind}
             </button>
           </div>
         </section>
       )}
     </article>
+  );
+}
+
+/**
+ * ADR-0135 A — "Find it in the fleet". Debounced, fleet-wide (both yards and
+ * fleet-wide assets), ranked by the server's shared matcher exactly as returned.
+ * Merged-away rows are never offered — they are not a thing any more (the
+ * matcher already swaps a merged loser for its survivor; this is the belt).
+ */
+function FleetSearch({
+  initialQuery,
+  busy,
+  onUse,
+}: {
+  initialQuery: string;
+  busy: boolean;
+  onUse: (equipmentId: string, isActive: boolean) => Promise<void>;
+}) {
+  const [q, setQ] = useState(initialQuery);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [rows, setRows] = useState<SearchRow[]>([]);
+
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) {
+      setStatus('idle');
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    setStatus('loading');
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/admin/equipment/similar?search=1&q=${encodeURIComponent(query)}`,
+          );
+          const body = (await res.json().catch(() => ({}))) as { existing?: SearchRow[] };
+          if (cancelled) return;
+          if (!res.ok || !Array.isArray(body.existing)) {
+            setStatus('error');
+            setRows([]);
+            return;
+          }
+          setRows(body.existing.filter((r) => !r.mergedIntoId));
+          setStatus('done');
+        } catch {
+          if (!cancelled) setStatus('error');
+        }
+      })();
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="equipment-request-search">
+      <label className="flex flex-col gap-1 text-sm text-dr3-mist">
+        {M.searchLabel}
+        <input
+          type="search"
+          value={q}
+          placeholder={M.searchPlaceholder}
+          onChange={(e) => setQ(e.target.value)}
+          className="rounded-md border border-dr3-steel-light/30 bg-dr3-space-2 px-3 py-2 text-dr3-mist placeholder:text-dr3-mist-dim focus:outline-none focus:ring-2 focus:ring-dr3-cyan"
+          data-testid="equipment-request-search-input"
+        />
+      </label>
+      {status === 'idle' && <p className="text-xs text-dr3-mist-dim">{M.searchHint}</p>}
+      {status === 'loading' && <p className="text-xs text-dr3-mist-dim">{M.searching}</p>}
+      {status === 'error' && (
+        <p className="text-xs text-red-200" role="alert">
+          {M.searchFailed}
+        </p>
+      )}
+      {status === 'done' && rows.length === 0 && (
+        <p className="text-xs text-dr3-mist-dim" data-testid="equipment-request-no-matches">
+          {M.noMatches}
+        </p>
+      )}
+      {status === 'done' && rows.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {rows.map((r) => (
+            <li
+              key={r.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-dr3-space-2/70 px-3 py-2"
+              data-testid={`equipment-request-result-${r.id}`}
+            >
+              <span className="text-sm text-dr3-mist">
+                {r.displayName}
+                <span className="text-dr3-mist-dim">
+                  {' '}
+                  · {r.category} · {r.siteCode ?? E.fleetWideShort}
+                </span>
+                {!r.isActive ? (
+                  <span className="ms-2 rounded-full bg-stone-900/60 px-2 py-0.5 text-xs text-stone-300">
+                    {E.statusInactive}
+                  </span>
+                ) : null}
+              </span>
+              <button
+                type="button"
+                onClick={() => void onUse(r.id, r.isActive)}
+                disabled={busy}
+                className="rounded-md bg-dr3-cyan px-3 py-1.5 text-sm font-semibold text-dr3-space hover:bg-dr3-cyan-bright disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid={`equipment-request-use-${r.id}`}
+              >
+                {r.isActive ? E.useExisting : E.reactivateAndUse}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
