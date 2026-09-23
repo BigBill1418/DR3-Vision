@@ -49,6 +49,23 @@ function tidy(v: string): string {
 export type RequestFieldProblem = 'type' | 'unit_required' | 'unit_invalid' | 'notes_required';
 
 /**
+ * What the approver is told when the structured request is not acceptable — one
+ * sentence per problem, shown by the approver's panel BEFORE submit and thrown by
+ * `createEquipmentRequestInTx` if a request slips past it. `legacy` is the server's
+ * answer to a free-text description (a stale page).
+ */
+export const REQUEST_PROBLEM_MESSAGE: Record<RequestFieldProblem | 'legacy', string> = {
+  legacy:
+    'The “equipment not in list” form now asks for the type and unit number. Reload the page and fill those in.',
+  type: 'Choose what kind of equipment it is.',
+  unit_required:
+    'Enter the unit number painted on it — trailers, trucks, vans and forklifts need one.',
+  unit_invalid:
+    'One unit number per request — e.g. 5327, 32-48 or EQ24. For several units, pick each one from the list or file them one at a time.',
+  notes_required: 'No unit number? Then add the make or a short note so it can be found.',
+};
+
+/**
  * Validate the approver's fields. ONE unit per request: a comma/`and`/`&` list,
  * or a unit field with a space in it (`trailer 5327`, `5327 5340`), is refused —
  * a four-trailer work order is four equipment picks, not one asset.
@@ -96,6 +113,24 @@ export function formatEquipmentRequestDescription(fields: {
   const notes = (fields.notes ?? '').trim();
   if (notes) lines.push(`${LINE.notes}${notes}`);
   return lines.join('\n');
+}
+
+/**
+ * Check, then format — the approver panel's one call. `ok: false` carries the
+ * plain-English sentence to show; `ok: true` carries the exact
+ * `equipmentRequestDescription` the decide route receives.
+ */
+export function composeEquipmentRequest(fields: {
+  assetType: string;
+  unitNumber: string;
+  make?: string | undefined;
+  notes?: string | undefined;
+}):
+  | { ok: true; description: string }
+  | { ok: false; problem: RequestFieldProblem; message: string } {
+  const problem = checkEquipmentRequest(fields);
+  if (problem) return { ok: false, problem, message: REQUEST_PROBLEM_MESSAGE[problem] };
+  return { ok: true, description: formatEquipmentRequestDescription(fields) };
 }
 
 /**

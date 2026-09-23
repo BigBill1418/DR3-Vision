@@ -115,6 +115,14 @@ export default async function AdminEquipmentPage({
             >
               Equipment requests
             </Link>
+            {' · '}
+            <Link
+              href="/admin/equipment/duplicates"
+              className="underline underline-offset-4 hover:text-dr3-cyan"
+              data-testid="admin-equipment-duplicates-link"
+            >
+              {M.equipment.duplicatesLink}
+            </Link>
           </p>
         </header>
 

@@ -331,6 +331,34 @@ export const adminMessages = {
     noLinkedApprovals: 'Not yet cited by any AP approval.',
     resultCount: (shown: number) =>
       `${shown.toLocaleString()} record${shown === 1 ? '' : 's'} shown.`,
+
+    // ── ADR-0135 F — the "possible duplicates" queue ───────────────────────
+    duplicatesLink: 'Possible duplicates',
+    duplicatesTitle: 'Possible duplicates',
+    duplicatesSubtitle:
+      'Pairs of live assets the matcher thinks are the same machine — same unit number, same VIN, or the same name. It only proposes: for each pair, merge them or record that they are different assets. Pairs at different yards come first.',
+    duplicatesBack: 'Back to equipment',
+    duplicatesEmpty: 'No possible duplicates.',
+    duplicatesCount: (n: number) => `${n.toLocaleString()} pair${n === 1 ? '' : 's'} to review.`,
+    duplicatesCrossSite: 'Different yards',
+    duplicatesWhy: 'Why matched',
+    duplicatesReason: {
+      same_vin: 'Same VIN / serial number',
+      same_name: 'Same name (ignoring capitals and spacing)',
+      same_unit: 'Same unit number',
+      words: 'Shared words',
+    },
+    duplicatesFleetWide: 'Fleet-wide',
+    duplicatesLinks: (n: number) => `${n.toLocaleString()} AP link${n === 1 ? '' : 's'}`,
+    duplicatesOpen: 'Open',
+    duplicatesMerge: 'Merge…',
+    duplicatesKeep: 'Keep this one',
+    duplicatesSurvivorSiteChoose: 'Choose…',
+    duplicatesDistinct: 'Different assets…',
+    duplicatesDistinctLabel: 'What makes them different assets?',
+    duplicatesDistinctPlaceholder: 'e.g. different VIN — the Wabash, not the Fruehauf',
+    duplicatesDistinctSubmit: 'Record as different',
+    duplicatesDistinctDone: 'Recorded as different assets. That pair will not be proposed again.',
   },
 
   // File-drop inbox (O-2)

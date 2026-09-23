@@ -45,23 +45,19 @@ import {
 import {
   checkEquipmentRequest,
   parseEquipmentRequestDescription,
-  type RequestFieldProblem,
+  REQUEST_PROBLEM_MESSAGE,
   type StructuredEquipmentRequest,
 } from '@/lib/equipment/request-description';
 
 const TABLE = 'ap_equipment_requests';
 
-/** ADR-0135 E — what the approver is told when the structured request is not acceptable. */
-export const REQUEST_PROBLEM_MESSAGE: Record<RequestFieldProblem | 'legacy', string> = {
-  legacy:
-    'The “equipment not in list” form now asks for the type and unit number. Reload the page and fill those in.',
-  type: 'Choose what kind of equipment it is.',
-  unit_required:
-    'Enter the unit number painted on it — trailers, trucks, vans and forklifts need one.',
-  unit_invalid:
-    'One unit number per request — e.g. 5327, 32-48 or EQ24. For several units, pick each one from the list or file them one at a time.',
-  notes_required: 'No unit number? Then add the make or a short note so it can be found.',
-};
+/**
+ * ADR-0135 E — what the approver is told when the structured request is not
+ * acceptable. Lives in the pure `request-description` module so the approver's
+ * panel shows the SAME sentence before submitting; re-exported here so existing
+ * server imports keep working.
+ */
+export { REQUEST_PROBLEM_MESSAGE };
 
 /**
  * Storage-DoS boundary on the description, matching the AP route's `NOTE_MAX_LEN`.

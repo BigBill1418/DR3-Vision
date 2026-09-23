@@ -14,6 +14,13 @@ import {
   isInlinePreviewable,
   isPresignStale,
 } from '@/lib/ap/inline-preview';
+import { pickerMatches } from '@/lib/equipment/match';
+import { composeEquipmentRequest } from '@/lib/equipment/request-description';
+import {
+  EMPTY_EQUIPMENT_REQUEST,
+  EquipmentRequestFields,
+  type EquipmentRequestDraft,
+} from './EquipmentRequestFields';
 
 type Status =
   | 'pending'
@@ -46,7 +53,8 @@ interface EquipmentOption {
   /**
    * ADR-0075 — which yard the asset is filed at. The picker has been fleet-wide
    * since 2026-07-28, so without this two similarly-named assets from different
-   * sites are indistinguishable in one flat list.
+   * sites are indistinguishable in one flat list. ADR-0135 — null = fleet-wide
+   * (the asset has no home yard), rendered as `fleet`.
    */
   siteCode?: string | null;
 }
@@ -530,9 +538,11 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   const [equipmentIds, setEquipmentIds] = useState<string[]>([]);
   const [notEquipmentRelated, setNotEquipmentRelated] = useState(false);
   // Amendment 9 (§2.2) — the ESCAPE HATCH. `equipmentNotListed` is the third
-  // mutually exclusive choice; `equipmentDescription` is REQUIRED once it is on.
+  // mutually exclusive choice. ADR-0135 E — once it is on, a STRUCTURED request
+  // (type + one unit #, per `checkEquipmentRequest`) is REQUIRED, not a paragraph.
   const [equipmentNotListed, setEquipmentNotListed] = useState(false);
-  const [equipmentDescription, setEquipmentDescription] = useState('');
+  const [equipmentRequest, setEquipmentRequest] =
+    useState<EquipmentRequestDraft>(EMPTY_EQUIPMENT_REQUEST);
   const [equipmentQuery, setEquipmentQuery] = useState('');
   const [variance, setVariance] = useState<VarianceContext | null>(null);
   const [varianceAck, setVarianceAck] = useState(false);
@@ -556,7 +566,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
     setEquipmentIds([]);
     setNotEquipmentRelated(false);
     setEquipmentNotListed(false);
-    setEquipmentDescription('');
+    setEquipmentRequest(EMPTY_EQUIPMENT_REQUEST);
     setEquipmentQuery('');
     if (!isRealSite) {
       setEquipmentOptions([]);
@@ -613,12 +623,12 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
   }, [vendorFreeform, confirmedAmount, isRealSite]);
 
   // Amendment 9 — the three choices are MUTUALLY EXCLUSIVE, so each setter clears
-  // the other two. Selecting from the list also clears the hatch (and its text, so
-  // a half-typed description can never ride along on an equipment-id decision).
+  // the other two. Selecting from the list also clears the hatch (and its fields, so
+  // a half-typed request can never ride along on an equipment-id decision).
   const toggleEquipment = useCallback((id: string) => {
     setNotEquipmentRelated(false);
     setEquipmentNotListed(false);
-    setEquipmentDescription('');
+    setEquipmentRequest(EMPTY_EQUIPMENT_REQUEST);
     setEquipmentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }, []);
 
@@ -627,7 +637,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
     if (checked) {
       setEquipmentIds([]);
       setEquipmentNotListed(false);
-      setEquipmentDescription('');
+      setEquipmentRequest(EMPTY_EQUIPMENT_REQUEST);
     }
   }, []);
 
@@ -637,7 +647,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       setEquipmentIds([]);
       setNotEquipmentRelated(false);
     } else {
-      setEquipmentDescription('');
+      setEquipmentRequest(EMPTY_EQUIPMENT_REQUEST);
     }
   }, []);
 
@@ -673,14 +683,16 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           return;
         }
         // Amendment 9 (§2.2) — exactly one of the three equipment dispositions. The
-        // hatch is NOT the cheap way out: it costs a required description.
-        if (equipmentNotListed && !equipmentDescription.trim()) {
-          setMsg('Describe the equipment so Morena and Rick can add it to the fleet.');
+        // hatch is NOT the cheap way out: ADR-0135 E — it costs a structured request
+        // (type + one unit #), checked here with the server's own rule.
+        const request = equipmentNotListed ? composeEquipmentRequest(equipmentRequest) : null;
+        if (request && !request.ok) {
+          setMsg(request.message);
           return;
         }
         if (!notEquipmentRelated && !equipmentNotListed && equipmentIds.length === 0) {
           setMsg(
-            'Select the equipment this invoice relates to, describe it if it isn’t in the list, or choose "Not equipment-related".',
+            'Select the equipment this invoice relates to, request it if it isn’t in the list, or choose "Not equipment-related".',
           );
           return;
         }
@@ -700,8 +712,8 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
           vendorFreeform: v,
           explanation: explanation.trim(),
           confirmedAmountCents: parsed,
-          ...(equipmentNotListed
-            ? { equipmentRequestDescription: equipmentDescription.trim() }
+          ...(request?.ok
+            ? { equipmentRequestDescription: request.description }
             : notEquipmentRelated
               ? { notEquipmentRelated: true }
               : { equipmentIds }),
@@ -794,7 +806,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
       equipmentIds,
       notEquipmentRelated,
       equipmentNotListed,
-      equipmentDescription,
+      equipmentRequest,
       varianceTripped,
       varianceAck,
       varianceAckNote,
@@ -879,12 +891,12 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
     !!vendorFreeform.trim() &&
     !!confirmedAmount.trim() &&
     !!explanation.trim() &&
-    // Amendment 9 — the hatch satisfies the equipment requirement only with a
-    // NON-EMPTY description. An empty one leaves Approve disabled, exactly like an
-    // empty selection would.
+    // Amendment 9 / ADR-0135 E — the hatch satisfies the equipment requirement
+    // only with a VALID structured request. An incomplete one leaves Approve
+    // disabled, exactly like an empty selection would.
     (notEquipmentRelated ||
       equipmentIds.length > 0 ||
-      (equipmentNotListed && !!equipmentDescription.trim())) &&
+      (equipmentNotListed && composeEquipmentRequest(equipmentRequest).ok)) &&
     (!varianceTripped || varianceAck) &&
     (!duplicate || !!duplicateReason.trim());
   const approveDisabled = busy || !siteCode || (isRealSite ? !structuredComplete : !note.trim());
@@ -1089,7 +1101,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
               <div className="mt-2 text-xs opacity-80">
                 Equipment{' '}
                 <span className="text-amber-300">
-                  (required — pick one or more, describe one that isn’t listed, or “Not
+                  (required — pick one or more, request one that isn’t listed, or “Not
                   equipment-related”)
                 </span>
                 <label className="mt-1 flex items-center gap-2">
@@ -1113,25 +1125,10 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                     onChange={(e) => chooseEquipmentNotListed(e.target.checked)}
                     data-testid="ap-equipment-not-listed"
                   />
-                  <span>Equipment not in list — describe it</span>
+                  <span>Equipment not in list — request it</span>
                 </label>
                 {equipmentNotListed && (
-                  <div className="mt-1 rounded border border-dr3-cyan/40 bg-dr3-cyan/10 p-2">
-                    <p className="opacity-90">
-                      Describe the equipment as specifically as you can — type, make/model if known,
-                      unit number or the nickname the crew uses, and which site it lives at. Morena
-                      and Rick will add it to the fleet properly.
-                    </p>
-                    <textarea
-                      value={equipmentDescription}
-                      onChange={(e) => setEquipmentDescription(e.target.value)}
-                      rows={3}
-                      maxLength={2000}
-                      placeholder="e.g. Yellow Hyster forklift, unit 7 — the one the crew calls “Big Bird” — lives at Woodland"
-                      className="mt-1 w-full rounded border border-white/15 bg-black/30 px-2 py-1 text-sm text-white"
-                      data-testid="ap-equipment-description"
-                    />
-                  </div>
+                  <EquipmentRequestFields value={equipmentRequest} onChange={setEquipmentRequest} />
                 )}
                 {!notEquipmentRelated && !equipmentNotListed && (
                   <>
@@ -1144,14 +1141,14 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                     <div className="mt-1 max-h-40 overflow-auto rounded border border-white/10">
                       {equipmentOptions.length === 0 && (
                         <p className="px-2 py-1 opacity-60">
-                          No active equipment registered. Describe it above instead of guessing, or
+                          No active equipment registered. Request it above instead of guessing, or
                           Hold the invoice.
                         </p>
                       )}
+                      {/* ADR-0135 B — unit-aware: `Trailer # 19` finds `Trailer #19`,
+                          `161053.` finds `161053 — Freightliner …`. */}
                       {equipmentOptions
-                        .filter((o) =>
-                          o.displayName.toLowerCase().includes(equipmentQuery.trim().toLowerCase()),
-                        )
+                        .filter((o) => pickerMatches(equipmentQuery, o.displayName))
                         .map((o) => (
                           <label
                             key={o.id}
@@ -1165,8 +1162,7 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                             <span>
                               {o.displayName}{' '}
                               <span className="opacity-50">
-                                · {o.category}
-                                {o.siteCode ? ` · ${o.siteCode}` : ''}
+                                · {o.category} · {o.siteCode ?? 'fleet'}
                               </span>
                             </span>
                           </label>
@@ -1449,9 +1445,11 @@ function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided:
               if (hatch?.equipmentRequest) {
                 return (
                   <li>
-                    Equipment: described (not in the fleet list) — “
-                    {hatch.equipmentRequest.description}”
+                    Equipment: requested (not in the fleet list)
                     <span className="opacity-70"> · request {hatch.equipmentRequest.status}</span>
+                    <span className="mt-0.5 block whitespace-pre-wrap border-l border-white/20 pl-2">
+                      {hatch.equipmentRequest.description}
+                    </span>
                   </li>
                 );
               }
