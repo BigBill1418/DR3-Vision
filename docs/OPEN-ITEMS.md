@@ -19,6 +19,56 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 Proposed (design awaits Bill); 4 duplicates merged 2026-09-22 11:26 PM PT; BX-1 decision + BX-2..BX-6 calls stand** (Bill, 2026-09-22)
+
+Bill: _"we can't have staff typing in different equipment with different spellings…
+clean and condense the items that this has happened to check the DB"._ Full analysis
+and design options: `docs/adr/0135-pick-the-asset-dont-type-it.md`.
+
+- **DONE 2026-09-22 — high-confidence cleanup.** Backup
+  `svdp-dev:~/backups-adhoc/dr3-equipment-dedupe-pre-20260922-232239-PT.dump`
+  (restore-tested). Merged via `scripts/one-off/2026-09-22-equipment-dedupe-merge.ts`
+  (`mergeEquipment`, audited, system actor): `terex`→`Terex`, `161053.`→`161053 —
+Freightliner…`, `trailer 32-48`→`32-48 — Trailer 48 Ft…`, `F9`→`F9 — Hyster
+Forklift` (ADR-0087 G6). Links 26→26, spend 2,276,253→2,276,253 cents, 0 links on
+  merged rows. Active equipment 542→538.
+- **BX-1 — DECISION (Bill): approve the ADR-0135 build?** Recommended order: Phase 1
+  (matcher + hard create gate + merge repoints throughput/gap rows + case-insensitive
+  partial unique index, ~2 days) → Phase 2 (search-first resolve panel + structured
+  new-asset form with generated names, ~3–4 days) → Phase 3 (structured approver
+  hatch + duplicates queue + cross-site merge, ~2–3 days). Until Phase 1 ships the
+  registry keeps growing a duplicate roughly every time a request is resolved.
+- **BX-2 — DECISION (Bill/site managers): home yard for three trailers seeded at one
+  site and re-created at the other** — 281577, 282876 (seeded Woodland, re-created
+  Eugene), 284460 (seeded Eugene, re-created Woodland). Once the home yard is named,
+  each is a two-click merge (site transfer, then merge). Plus `48-68 trailer`
+  (Woodland) vs `4868 — Fruehauf 28 Ft` (Eugene): the dash may mean a different
+  trailer (ADR-0087 §1.3) — check the invoice.
+- **BX-3 — DECISION: the three work orders posing as assets** in every approver's
+  picker (`Fix and repair trailer: 53489, 5340, 35, 282859…`, `fix trailer 95 and
+5308`, `relay order from Aleks`, all Woodland, one invoice each). Recommended:
+  repoint each invoice at the real trailer(s) or not-equipment, then deactivate.
+- **BX-4 — CALL (Morena/Janette): which EQ number is the green horizontal baler?**
+  Requested twice at Woodland today (Morena 9:01 AM PT, Janette 11:51 AM PT); a
+  `Green Horizontal baler Topper` row was created at EUGENE on 2026-08-24; Woodland
+  already carries EQ23/EQ44/EQ48/EQ75 Horizontal Balers. Resolve both open requests
+  against the same row, and say whether the Eugene row is really Woodland's.
+- **BX-5 — CALL (Bill): `EQ24 Terex Shredder`** (open since 2026-09-18) → `EQ24 —
+Shear Machine`? And is EQ24 the same machine as the canonical `Terex`? Both carry
+  throughput history, so merging them waits on the Phase 1 merge fix.
+- **BX-6 — CALL: remaining open requests.** `Trailer # 19` (Woodland) vs the existing
+  `Trailer #19` (Eugene) — same trailer moved yards? `Trailer # 5327` — no match in
+  the registry, likely genuinely new. `60` vs `60 — Strick 28 Ft` (Eugene, both seed,
+  no invoices) — ghost unit or real?
+- **BX-7 — AP CHECK (side finding): invoice 6646** (United Fleet Maintenance, Unit
+  #161053, $201.84) is approved TWICE as two AP requests — received 2026-08-10 2:40 PM
+  PT / approved 2026-08-13 5:32 AM PT, and received 2026-09-01 3:27 PM PT / approved
+  2026-09-02 6:14 AM PT. Confirm it was not paid twice.
+- **Accepted residual:** identifier-only names (`1DW1A5321PS807745`, `12BB04252`,
+  `SN 31587 Forklift` filed as `vehicle`, `ZHGC FP25`, `Trailer Number #7677`, `5312
+trailer`, `53641 trailer`, `trailer 540010`, `Trailer #19`) are left as they are —
+  renaming is Phase 2's worklist once the structured form exists.
+
 ## 0.BW — 2026-09-18 four managers could not act as second signer — **FIX SHIPPED; BW-1 (operator confirmation) and BW-2 + BW-3 (decisions) stand** (Bill, 2026-09-18)
 
 Bill relayed that Morena, Janette, Rick and Shannon could not second-sign AP

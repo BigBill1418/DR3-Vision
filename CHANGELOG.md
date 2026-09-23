@@ -9,6 +9,37 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-22 — Equipment duplicates condensed; a design to stop them (ADR-0135, Proposed)
+
+Bill, on the equipment-request worklist: staff keep typing the same equipment with different
+spellings and the registry keeps growing. The production record agrees: of 27 equipment requests
+ever resolved, **23 created a new asset** and 4 picked an existing one, and at least 8 of the 23
+duplicate something already registered. The causes are in the code, not the people: the only hard
+guard is an exact `(site, name)` match (the ADR-0075 similar-name warning is advisory); the
+detector compares whole names, so a typed `161053.` never matches the seeded `161053 — Freightliner
+Semi Truck`; detection and merge are single-site while trailers move yards; and the resolve panel's
+main button is "Add to the fleet". ADR-0135 proposes a unit-aware fleet-wide matcher, a hard create
+gate with an audited "this really is a different asset" door, a search-first resolve panel, a
+structured new-asset form that generates the name, and a duplicates queue — **not built; awaiting
+Bill (OPEN-ITEMS § 0.BX BX-1)**.
+
+### Changed (data, production)
+
+- Four high-confidence duplicates merged through `mergeEquipment` (the admin Merge transaction,
+  audited under `system:equipment-dedupe-merge`): `terex` → `Terex`, `161053.` → `161053 —
+Freightliner Semi Truck (Day Cab S/A)`, `trailer 32-48` → `32-48 — Trailer 48 Ft Swing Door
+Trailer`, `F9` → `F9 — Hyster Forklift`. Invoice links and spend conserved (26 links, $22,762.53
+  before and after); no link or resolved request points at a merged row; active equipment 542 → 538.
+  Backup taken and restore-tested first. Record: `scripts/one-off/2026-09-22-equipment-dedupe-merge.ts`.
+- Eleven ambiguous groups (cross-site trailers, work orders filed as assets, the green baler, EQ24 vs
+  Terex) were **not** merged; they are Bill's list in OPEN-ITEMS § 0.BX.
+
+### Found
+
+- `mergeEquipment` does not repoint `equipment_daily_throughput` or `equipment_throughput_gap_alerts`;
+  merging a machine with throughput history would strand it. Fix is in ADR-0135 Phase 1.
+- Invoice 6646 (Unit #161053, $201.84) is approved twice as two AP requests (OPEN-ITEMS BX-7).
+
 ## 2026-09-18 — Four managers could not act as second signer, and the config was never wrong (ADR-0134)
 
 Bill relayed that Morena, Janette, Rick and Shannon could not second-sign AP invoices >= $1,000
