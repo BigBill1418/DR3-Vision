@@ -35,7 +35,7 @@ import {
 } from '@/lib/admin-equipment';
 import { adminMessages as M } from '@/app/admin/messages';
 import { MAKE_MAX, UNIT_NUMBER_MAX, VIN_SERIAL_MAX } from '@/app/admin/constants';
-import { actorFrom, reasonToResponse } from '../route';
+import { actorFrom, reasonToResponse } from '../_shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

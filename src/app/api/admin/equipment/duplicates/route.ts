@@ -15,7 +15,7 @@ import { requireAdmin } from '@/lib/auth-helpers';
 import { listPossibleDuplicates, markEquipmentDistinct } from '@/lib/admin-equipment';
 import { OVERRIDE_REASON_MAX } from '@/app/admin/constants';
 import { adminMessages as M } from '@/app/admin/messages';
-import { actorFrom } from '../route';
+import { actorFrom } from '../_shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

@@ -21,7 +21,7 @@ import { z } from 'zod';
 import { requireAdmin } from '@/lib/auth-helpers';
 import { mergeEquipment, type MergeFailure } from '@/lib/admin-equipment';
 import { adminMessages as M } from '@/app/admin/messages';
-import { actorFrom } from '../route';
+import { actorFrom } from '../_shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
