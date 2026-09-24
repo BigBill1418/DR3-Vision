@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BY — 2026-09-24 the report named the admin who keyed Eugene's count as its counter — **FIXED (ADR-0138); BY-1 backfill below; BY-2 open**
+## 0.BY — 2026-09-24 the report named the admin who keyed Eugene's count as its counter — **FIXED + LIVE 2026-09-24 7:23 AM PDT (ADR-0138, `05e16c7`); BY-1 backfill DONE; BY-2 open**
 
 Bill, 2026-09-24 6:22 AM PDT: _"on the eugene production report last night it says Bill
 Barnard was the counter - WTF ?"_ The report's Counter row was the snapshot's insert
@@ -33,7 +33,16 @@ prints the keying account as the counter.
   (source commit `3a315881`, BT-6). Every other physical row is left NULL — no named
   counter is recorded for any of them (Woodland `04cb7ae2` is "Bill's hard count" in
   chat; `855a23b1`/`6f8ae03b` "crew counted total only"). If Woodland's 09-14 counter is
-  known, set it with an audited update. Execution evidence: see the line below.
+  known, set it with an audited update. **EXECUTED 2026-09-24 7:27 AM PDT** after the
+  deploy (`05e16c7`, app recreated 7:23 AM PDT, migration `20260865_adr0138_count_counted_by`
+  finished 7:23:30 AM PDT): backup
+  `svdp-dev:~/backups-adhoc/dr3-site_inventory_snapshots-pre-adr0138-backfill-20260924-072713-PT.dump`
+  (plus a pre-deploy one at 06:43:51 PT), then
+  `scripts/one-off/2026-09-24-adr0138-counted-by-backfill.sql` → 1 row, audit row
+  `220f238b` (`system:adr0138-counted-by-backfill`). Rendered read-only through
+  `getEodInventorySnapshot` + `renderEodInventoryHtml` inside the live app container for
+  report day 09-24: Eugene **"Counted by: Chris R, confirmed by Patrick D · entered by Bill
+  Barnard"**; Woodland "Counted by: Not recorded · entered by Bill Barnard".
 - **BY-2 — OPEN: ask "Who counted?" on the iPad floor count.** Deferred because the
   kiosk shell updates lazily and a newly required field would 422 counts from devices on
   the old bundle (ADR-0078 D10). Until then floor counts print "Not recorded · entered by
