@@ -25,6 +25,8 @@ const {
       readonly invoiceNumber: string | null,
       readonly matches: {
         requestId: string;
+        sameInvoiceNumber: boolean;
+        sameFile: boolean;
         subject: string | null;
         vendor: string | null;
         amountCents: number | null;
@@ -412,6 +414,34 @@ describe('POST /api/ops/ap/[id]/decide — variance gate (D-M5-4)', () => {
 });
 
 describe('POST /api/ops/ap/[id]/decide — already-approved invoice (ADR-0136)', () => {
+  it('a same-file match on ANOTHER number does not report this request’s number (13423 carrying 13422’s PDF)', async () => {
+    decideRequest.mockImplementationOnce(async () => {
+      throw new ApDuplicateInvoiceError(
+        '13423',
+        [
+          {
+            requestId: 'x13422',
+            sameInvoiceNumber: false,
+            sameFile: true,
+            subject: 'FW: New payment request from Xtraction, Inc. - invoice 13422',
+            vendor: 'Xtraction',
+            amountCents: 54810,
+            approvedAt: new Date('2026-09-21T20:00:00Z'),
+            approvedBy: 'u-janette',
+          },
+        ],
+        new Map(),
+      );
+    });
+    const res = await call(APPROVE);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      duplicateInvoice: { invoiceNumber: string | null; matches: { sameFile: boolean }[] };
+    };
+    expect(body.duplicateInvoice.invoiceNumber).toBeNull();
+    expect(body.duplicateInvoice.matches[0]!.sameFile).toBe(true);
+  });
+
   it('409s with the matches the UI needs to render the banner', async () => {
     decideRequest.mockImplementationOnce(async () => {
       throw new ApDuplicateInvoiceError(
@@ -419,6 +449,8 @@ describe('POST /api/ops/ap/[id]/decide — already-approved invoice (ADR-0136)',
         [
           {
             requestId: 'first',
+            sameInvoiceNumber: true,
+            sameFile: false,
             subject: 'FW: Invoice: 6646',
             vendor: 'United',
             amountCents: 20184,
@@ -438,6 +470,7 @@ describe('POST /api/ops/ap/[id]/decide — already-approved invoice (ADR-0136)',
       matches: [
         {
           requestId: 'first',
+          sameFile: false,
           subject: 'FW: Invoice: 6646',
           vendor: 'United',
           amountCents: 20184,

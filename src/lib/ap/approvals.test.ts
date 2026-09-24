@@ -3,6 +3,7 @@
 // fallback), refuse-when-no-valid-recipient, optional site tag, stamped PDF +
 // decision_pdf_sha256, pending count, roster-based approver set.
 
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import {
@@ -66,7 +67,7 @@ const stamp = vi.hoisted(() => ({
 // (R2 unconfigured) so the no-attachment tests never touch it; per-test overrides
 // feed bytes to exercise the overlay + archive paths.
 const r2 = vi.hoisted(() => ({
-  getApAttachmentBytes: vi.fn(async (): Promise<Uint8Array | null> => null),
+  getApAttachmentBytes: vi.fn<(key: string) => Promise<Uint8Array | null>>(async () => null),
   putApDecisionPdf: vi.fn(async (): Promise<string | null> => 'ap/x/decision/y.pdf'),
 }));
 
@@ -1640,6 +1641,7 @@ describe('ADR-0136 — an invoice is approved once', () => {
       invoice_number: '6646',
       forwarded_approval: false,
       matched_request_ids: ['first'],
+      same_file_request_ids: [],
     });
     const mail = notifyStaffSpy.mock.calls[0]![0] as { htmlBody: string };
     expect(mail.htmlBody).toContain('Invoice 6646 was ALSO approved in DR3-Vision');
@@ -1719,6 +1721,132 @@ describe('ADR-0136 — an invoice is approved once', () => {
       'This is a forwarded copy of a DR3-Vision approval — the invoice was already approved on',
     );
     expect(db.requests.find((r) => r.id === 'echo')!.status).toBe('pending');
+  });
+
+  // ADR-0136 addendum — the third key. Production 2026-07-20: "Interstate Oil"
+  // ($403.01, 11:30 AM PT) and "Inter State Oil" (11:43 AM PT) carried the same
+  // PDF and were both approved; neither subject names an invoice number.
+  const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46, 7]);
+  const PDF_SHA = createHash('sha256').update(PDF_BYTES).digest('hex');
+  function sameFileCopies(): FakeDb {
+    return newFakeDb({
+      requests: [
+        pendingReq({
+          id: 'first',
+          internet_message_id: '<first@svdp.us>',
+          status: 'approved',
+          subject: 'Interstate Oil',
+          vendor_freeform: 'Interstate Oil',
+          confirmed_amount_cents: 40301,
+          decided_by: 'u-morena',
+          decided_at: new Date('2026-07-20T18:30:00Z'),
+        } as Partial<FakeApRequest>),
+        pendingReq({
+          id: 'second',
+          internet_message_id: '<second@svdp.us>',
+          subject: 'Inter State Oil',
+        }),
+      ],
+      attachments: [
+        {
+          id: 'att-first',
+          request_id: 'first',
+          kind: 'file',
+          filename: 'SIT705135.PDF',
+          content_type: 'application/pdf',
+          byte_size: 48721,
+          storage_key: 'ap/first/att-first/SIT705135.PDF',
+          link_url: null,
+          nested_subject: null,
+          // Recorded when it was approved (its own guard, or the 2026-09-23 backfill).
+          sha256: PDF_SHA,
+        },
+        {
+          id: 'att-second',
+          request_id: 'second',
+          kind: 'file',
+          filename: 'SIT705135.PDF',
+          content_type: 'application/pdf',
+          byte_size: 48721,
+          storage_key: 'ap/second/att-second/SIT705135.PDF',
+          link_url: null,
+          nested_subject: null,
+        },
+      ],
+      users,
+      decisionRecipients: [{ email: 'mary@svdp.us', active: true }],
+    });
+  }
+  const APPROVE_OIL = {
+    ...APPROVE_SECOND,
+    vendorFreeform: 'Inter State Oil',
+    explanation: 'fuel',
+    confirmedAmountCents: 40301,
+  };
+
+  it('refuses a re-forward carrying the SAME invoice file when the subject names no number', async () => {
+    // The re-forward's stored copy is the same bytes under its own R2 key.
+    r2.getApAttachmentBytes.mockResolvedValue(PDF_BYTES);
+    const db = sameFileCopies();
+    const err = await decideRequest({ prisma: fp(db), ...APPROVE_OIL }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApDuplicateInvoiceError);
+    const e = err as ApDuplicateInvoiceError;
+    expect(e.invoiceNumber).toBeNull();
+    expect(e.matches.map((m) => [m.requestId, m.sameFile, m.sameInvoiceNumber])).toEqual([
+      ['first', true, false],
+    ]);
+    expect(e.message).toContain('The same invoice file was already approved on');
+    expect(e.message).toContain('identical, byte for byte');
+    expect(e.message).toContain('cover several invoices or be a statement');
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('pending');
+    expect(writeAudit.mock.calls[0]![0]).toMatchObject({
+      row_id: 'second',
+      after: {
+        outcome: 'refused_duplicate_invoice',
+        invoice_number: null,
+        matched_request_ids: ['first'],
+        same_file_request_ids: ['first'],
+      },
+    });
+    // The guard recorded the hash it computed on the re-forward's file.
+    expect(db.attachments.find((a) => a.id === 'att-second')!.sha256).toBe(PDF_SHA);
+  });
+
+  it('different bytes under the same no-number subject are not a duplicate', async () => {
+    r2.getApAttachmentBytes.mockImplementation(async (key: string) =>
+      new TextEncoder().encode(key),
+    );
+    const db = sameFileCopies();
+    await decideRequest({ prisma: fp(db), ...APPROVE_OIL });
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('approved');
+  });
+
+  it('an unreadable file never blocks the Approve on its own', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(null);
+    const db = sameFileCopies();
+    await decideRequest({ prisma: fp(db), ...APPROVE_OIL });
+    expect(db.requests.find((r) => r.id === 'second')!.status).toBe('approved');
+  });
+
+  it('the override approves it, audits the same-file ids, and the mail tells accounting it is the same file', async () => {
+    r2.getApAttachmentBytes.mockResolvedValue(PDF_BYTES);
+    const db = sameFileCopies();
+    const res = await decideRequest({
+      prisma: fp(db),
+      ...APPROVE_OIL,
+      duplicateOverrideReason: 'The PDF covers two invoices; this approval is the second one',
+    });
+    expect(res.mail).toBe('sent');
+    const won = writeAudit.mock.calls
+      .map((c) => c[0] as { after?: Record<string, unknown> })
+      .find((a) => a.after?.['outcome'] === 'won');
+    expect(won?.after?.['duplicate_override']).toMatchObject({
+      invoice_number: null,
+      same_file_request_ids: ['first'],
+    });
+    const mail = notifyStaffSpy.mock.calls[0]![0] as { htmlBody: string };
+    expect(mail.htmlBody).toContain('The same invoice file was ALSO approved in DR3-Vision');
+    expect(mail.htmlBody).toContain('Pay it once.');
   });
 
   it('a first approval of an invoice nobody approved yet is untouched by the guard', async () => {

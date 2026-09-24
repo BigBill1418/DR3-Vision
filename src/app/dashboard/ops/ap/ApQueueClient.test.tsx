@@ -231,6 +231,55 @@ describe('ApQueueClient — mail-not-sent badge (ADR-0126 D6)', () => {
 // the audited override on the next click.
 
 describe('DetailPanel — already-approved invoice (ADR-0136)', () => {
+  it('a same-file match says the same file was approved and names the statement case', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (!String(url).endsWith('/decide'))
+          return { ok: false, status: 500, json: async () => ({}) };
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: 'The same invoice file was already approved on Jul 20, 2026, 11:30 AM PT.',
+            duplicateInvoice: {
+              invoiceNumber: null,
+              matches: [
+                {
+                  requestId: 'first',
+                  sameFile: true,
+                  subject: 'Interstate Oil',
+                  vendor: 'Interstate Oil',
+                  amountCents: 40301,
+                  approvedAt: '2026-07-20T18:30:00.000Z',
+                  approvedBy: 'Morena Gomez',
+                },
+              ],
+            },
+          }),
+        };
+      }) as unknown as typeof fetch,
+    );
+    render(<DetailPanel detail={pendingDetail()} onDecided={() => undefined} />);
+    selectSite('woodland');
+    fireEvent.change(screen.getByRole('textbox', { name: /enter the vendor name carefully/i }), {
+      target: { value: 'Inter State Oil' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /confirmed amount usd/i }), {
+      target: { value: '403.01' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: /what was this transaction for/i }), {
+      target: { value: 'fuel' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /not equipment-related/i }));
+    fireEvent.click(approveBtn());
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('ALREADY APPROVED — this invoice');
+    expect(banner.textContent).toContain('Interstate Oil · same file');
+    expect(banner.textContent).toContain('The same file was already approved');
+    expect(banner.textContent).toContain('cover several invoices or be a statement');
+  });
+
   it('shows the banner, gates Approve on a reason, then sends the reason as the override', async () => {
     const decideBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(

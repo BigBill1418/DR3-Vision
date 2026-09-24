@@ -9,6 +9,37 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-23 — An invoice FILE is approved once (ADR-0136 addendum); two equipment pairs judged distinct (BX-11)
+
+Bill: "push on" (2026-09-23 ~10:52 PM PDT).
+
+### Fixed
+
+- **The duplicate-approval guard now matches on the invoice file, not only the subject.** A
+  re-forward whose subject names no invoice number (`FW: Ramos/EFuel`, `FW: Invoice(s) Posted`)
+  slipped through the number key. `ap_attachments.sha256` (migration
+  `20260864_adr0136_ap_attachment_sha256`) records each file's sha256; the Approve guard
+  computes and records it for the request's invoice files (`invoiceFileHashes`,
+  `src/lib/ap/duplicate-invoice.ts`) and refuses when an `approved` / `pending_second_approval`
+  request carries the same bytes (or its stamp's `original_attachment_sha256` equals one). Same
+  409, banner, audited override (`same_file_request_ids`) and decision-mail line, worded as "the
+  same invoice file"; the banner says one file can cover several invoices or be a statement.
+  Signature/logo images are never a key (`src/lib/ap/signature-images.ts`: < 50 KB images, moved
+  from `approvals.ts`, plus Outlook `image00N.*` body images — the same 70 KB logo rides on 12
+  approved requests). An unreadable file never blocks an Approve. No intake change.
+- A same-file match on another invoice number no longer reports this request's own number as
+  "already approved" (route `duplicateInvoice.invoiceNumber` is null unless a match was by number).
+
+### Changed (production data)
+
+- Backfill `scripts/one-off/2026-09-23-ap-attachment-sha256-backfill.mjs` hashed every stored AP
+  file (run in the app container after the deploy).
+- `/admin/equipment/duplicates`: `3 — Fruehauf` / `3 — Wabash` and the two `Truck 9`s marked
+  **Different assets** 11:13 PM PDT via `markEquipmentDistinct` (system actor, audited;
+  `scripts/one-off/2026-09-23-mark-distinct-equipment-pairs.ts`). The queue shows 2 pairs, both
+  Bill's (`2`, `908`). ADR-0135 §8 corrected: ADR-0087's Wabash/Fruehauf pair is `95`; `3` is
+  proven distinct by its two VLM VINs.
+
 ## 2026-09-23 — The throughput machine is designated, not inferred (BX-12, ADR-0137)
 
 Bill approved 2026-09-23 ~7:20 AM PDT. Woodland's daily Terex readings had been saved on

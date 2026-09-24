@@ -74,7 +74,70 @@ back into the inbox and approved again (OPEN-ITEMS §0.BX BX-8 has the list).
   `FW: Kelliher Machine Invoice-Green Baler` re-sent as `… Invoice 0174`) is not
   caught. The scan found three such pairs by identical PDF bytes, but that hash is only
   computed when a decision is stamped, after the approval. Hashing attachments at
-  intake would close it; not built.
+  intake would close it; not built. **Closed by the addendum below** (hashed at the
+  Approve, not at intake).
 - The check runs outside the decide transaction, like the variance gate. Two approvers
   approving two copies of the same invoice in the same second can both win; the
   decision mail line still flags the pair.
+
+## Addendum — 2026-09-23 (Pacific): the third key is the invoice file
+
+Bill, 2026-09-23 ~10:52 PM PDT: "push on" — close the residual above.
+
+**When the hash existed.** `ap_requests.original_attachment_sha256` is written only when
+the decision mail is stamped (`sendDecisionEmail`, after the Approve), and it records only
+the FIRST stamped original. Nothing hashed a file at intake. Half the approved requests
+(85 of 179) carry two or more stampable files, so the first-original column alone would
+miss a duplicate that is the second file, and a request waiting for its second signer has
+no stamp yet. So the key needed per-file hashes that exist before the Approve.
+
+**Decision.**
+
+1. **`ap_attachments.sha256`** (migration `20260864_adr0136_ap_attachment_sha256`,
+   indexed). No intake change: the Approve guard computes it. `invoiceFileHashes`
+   reads each of the request's invoice files from R2, hashes it, and records the hash
+   (only a NULL is ever written). Every request that reaches `approved` or
+   `pending_second_approval` passes through that guard, so its files are hashed from
+   then on; the 2026-09-23 backfill
+   (`scripts/one-off/2026-09-23-ap-attachment-sha256-backfill.mjs`) hashed every file
+   stored before.
+2. **What counts as the invoice file.** Stored `kind='file'` rows, minus signature/logo
+   images (`signature-images.ts`): images under 50 KB (the stamp's rule, moved there) and
+   Outlook body images named `image00N.jpg/png`. The second rule is load-bearing:
+   production has the same 69,918-byte `image002.jpg` on 12 approved requests and an
+   80,204-byte `image001.jpg` on 7 — above the 50 KB line, and they would have matched
+   every forward from the same AP clerk.
+3. **The match.** Another request that is `approved` or `pending_second_approval` and
+   has an invoice file with the same sha256, or whose `original_attachment_sha256`
+   equals one (the fallback for an approval whose files were never hashed). No vendor
+   check: identical bytes are the same document. Same refusal (409), banner, audited
+   override (`same_file_request_ids` on both the refusal and the `duplicate_override`
+   audit), and the decision mail's line.
+4. **The wording says it was the same file.** "The same invoice file was already approved
+   … The attached file is identical, byte for byte, to the one approved there. One file
+   can cover several invoices or be a statement — if so, approve anyway and say so." The
+   banner marks each such match "same file". When the only match is by file, the
+   request's own invoice number is not reported as "already approved" (invoice 13423's
+   PDF is byte-identical to 13422's; "invoice 13423 was already approved" would be false).
+5. **An unreadable file never blocks an Approve.** The key is computed without it and a
+   warning is logged; the number and forwarded-approval keys still run.
+
+**Replay against production history (2026-09-23, read-only: every stored file hashed,
+each approval checked against the approvals before it).** The file key catches every
+subject-key pair that had the same PDF, plus five the subject key missed:
+
+| Approved (PT)       | Request / subject                                  | Twin approved (PT)                                    |
+| ------------------- | -------------------------------------------------- | ----------------------------------------------------- |
+| 2026-07-20 11:43 AM | `82c1fd09` "Inter State Oil"                       | `a01cbb13` 11:30 AM, $403.01                          |
+| 2026-07-27 12:01 PM | `81903703` "FW: Invoice(s) Posted-Ramos/E-fuel"    | `513ea80b` same minute, $1,023.16                     |
+| 2026-08-14 1:21 PM  | `6cc11851` "FW: Ramos/E-Fuel Invoice IN-0320844"   | `244e14c1` "FW: Ramos/EFuel" 08-11 9:15 AM, $1,902.68 |
+| 2026-09-21 1:07 PM  | `01e83eb3` Xtraction invoice 13423 ($676.20)       | `53ddca05` invoice 13422, 1:00 PM, $548.10 — same PDF |
+| 2026-09-22 11:52 AM | `99873399` "…Green Baler Invoice 0174" ($4,005.00) | `317ab9d0` "…Green Baler" 08-24 10:17 AM              |
+
+The subject key alone still owns two that are not the same bytes: Xtraction 13422's second
+copy (`6fb945b5`, its PDF is 13423's) and the forwarded-approval echoes (Kelliher
+`900f473a`, Allied U047M248 `8aa1d792`). Shared files between an approved and a REJECTED
+request (DR3 105730/105731, `5312.jpg`, `Invoice 19…29.pdf`) are not matches, by design.
+
+**Residual.** The same invoice re-scanned or re-exported (different bytes) under a subject
+with no number. The check still runs outside the decide transaction.

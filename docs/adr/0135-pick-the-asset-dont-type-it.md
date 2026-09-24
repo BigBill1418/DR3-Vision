@@ -245,7 +245,14 @@ Fruehauf 28 Ft …` cannot match a query for trailer `28`. Merged losers are nev
   First prod run without that rule: 18 queue pairs, mostly `Truck N`/`Van N`/`Bus N`
   noise; with it: **4** (`2 — Great Dane`/`2 — Trailmobile` and `908`/`Truck 908`
   cross-site; `3` Fruehauf/Wabash and `Truck 9` ×2 at Eugene — the last two are the
-  ADR-0087 known-distinct pairs, for "Different assets").
+  ADR-0087 known-distinct pairs, for "Different assets"). **Correction 2026-09-23:**
+  ADR-0087 documents `Truck 9` / `Truck #9` (register G7) but its Wabash/Fruehauf pair is
+  unit `95` (G3), not `3`. The `3` pair is proven distinct by the VLM register itself
+  (unit `3` Wabash, VIN 1JJV281N9PL180863; unit `03` 1984 Fruehauf, VIN
+  1H4V02812EJ023049). Both pairs were marked **Different assets** 2026-09-23 11:13 PM PDT
+  (`scripts/one-off/2026-09-23-mark-distinct-equipment-pairs.ts`, system actor, audited;
+  backup `svdp-dev:~/backups-adhoc/dr3-equipment-distinct-pairs-pre-20260923-231240-PT.dump`).
+  The queue now holds exactly `2` Great Dane/Trailmobile and `908`/`Truck 908`, for Bill.
 - **The hard gate** — `createEquipmentInTx` runs the matcher over the whole registry
   before every insert (admin create AND equipment-request resolve). A probable
   duplicate is refused (`409 probable_duplicate` + the rows) unless the caller sends

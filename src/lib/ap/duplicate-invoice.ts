@@ -21,11 +21,21 @@
 // way on 2026-09-22). The original subject is inside it, so the approved original
 // is found by subject, no invoice number needed.
 //
-// WHAT IT DOES NOT SEE: a re-forward whose subject names no invoice number
-// ("Invoices", "Ramos/EFuel") and is not a forwarded decision. ADR-0136 lists
-// that residual; the decision mail's duplicate line (approvals.ts) shares these keys.
+// THE THIRD KEY — the same file (ADR-0136 addendum, 2026-09-23). A re-forward whose
+// subject names no number ("FW: Ramos/EFuel", "FW: Invoice(s) Posted") still carries
+// the SAME invoice PDF, byte for byte. The sha256 of each invoice file on the request
+// is compared with the files of every approved request. Signature/logo images are
+// never a key (signature-images.ts): the forwarder's logo rides on every forward.
+// One file CAN legitimately be two approvals (a statement, one PDF covering several
+// invoices) — the audited override is the way through, as for the other keys.
+//
+// WHAT IT STILL DOES NOT SEE: the same invoice re-scanned or re-exported (different
+// bytes) under a subject with no number. The decision mail's duplicate line
+// (approvals.ts) shares all three keys.
 
+import { createHash } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
+import { isSignatureImage, type AttachmentShape } from './signature-images';
 
 /**
  * `Invoice: 6646`, `Invoice #: T705145`, `Your Invoice IM25013731`, `Inv 12513`,
@@ -120,6 +130,10 @@ export const APPROVED_STATUSES = ['approved', 'pending_second_approval'] as cons
 
 export interface DuplicateApproval {
   requestId: string;
+  /** Matched on the invoice number the subject names (+ a compatible vendor). */
+  sameInvoiceNumber: boolean;
+  /** Carries a byte-identical invoice file. */
+  sameFile: boolean;
   status: string;
   subject: string | null;
   vendor: string | null;
@@ -146,11 +160,67 @@ export function extractionVendor(extraction: unknown): string | null {
 
 type Reader = Pick<PrismaClient, 'apRequest'>;
 
+interface FileRow extends AttachmentShape {
+  kind: string;
+  storage_key: string | null;
+}
+
+/** A stored file that is a document, not the sender's signature/logo image. */
+export function isInvoiceFile(a: FileRow): boolean {
+  return a.kind === 'file' && !!a.storage_key && !isSignatureImage(a);
+}
+
+/**
+ * The sha256 of each invoice file on a request — the same-file key. A hash already
+ * recorded on `ap_attachments.sha256` is reused; a missing one is computed from the
+ * stored bytes and recorded (idempotent: only a NULL is ever written, and the bytes
+ * under a storage key never change). A file whose bytes cannot be read is counted in
+ * `unreadable` and left out, so the caller can say the key was partial.
+ */
+export async function invoiceFileHashes(
+  db: Pick<PrismaClient, 'apAttachment'>,
+  requestId: string,
+  readBytes: (storageKey: string) => Promise<Uint8Array | null>,
+): Promise<{ hashes: string[]; unreadable: number }> {
+  const rows = await db.apAttachment.findMany({
+    where: { request_id: requestId, kind: 'file' },
+    select: {
+      id: true,
+      kind: true,
+      filename: true,
+      content_type: true,
+      byte_size: true,
+      storage_key: true,
+      sha256: true,
+    },
+  });
+  const hashes = new Set<string>();
+  let unreadable = 0;
+  for (const a of rows.filter(isInvoiceFile)) {
+    let sha = a.sha256;
+    if (!sha) {
+      const bytes = await readBytes(a.storage_key!).catch(() => null);
+      if (!bytes) {
+        unreadable++;
+        continue;
+      }
+      sha = createHash('sha256').update(bytes).digest('hex');
+      await db.apAttachment.updateMany({
+        where: { id: a.id, sha256: null },
+        data: { sha256: sha },
+      });
+    }
+    hashes.add(sha);
+  }
+  return { hashes: [...hashes], unreadable };
+}
+
 /**
  * Every OTHER request already approved (or first-approved) for the same invoice
- * number and a compatible vendor — or, for a forwarded approval mail, the request
- * that mail approved. `null` when the subject gives neither key: the check has
- * nothing to key on, and says so rather than "no match".
+ * number and a compatible vendor, or carrying a byte-identical invoice file — or,
+ * for a forwarded approval mail, the request that mail approved. `null` when there
+ * is no key at all (no number, not a forwarded approval, no hashed file): the check
+ * has nothing to key on, and says so rather than "no match".
  */
 export async function findApprovedDuplicates(
   db: Reader,
@@ -159,11 +229,14 @@ export async function findApprovedDuplicates(
     subject: string | null;
     /** The vendor spellings known for THIS request (typed, extracted). */
     vendors: readonly (string | null | undefined)[];
+    /** sha256 of THIS request's invoice files ({@link invoiceFileHashes}). */
+    fileHashes?: readonly string[];
   },
 ): Promise<DuplicateCheck | null> {
   const invoiceNumber = extractInvoiceNumber(args.subject);
   const echoed = forwardedApprovalSubject(args.subject);
-  if (!invoiceNumber && !echoed) return null;
+  const fileHashes = [...(args.fileHashes ?? [])];
+  if (!invoiceNumber && !echoed && fileHashes.length === 0) return null;
   const mine = args.vendors.filter((v): v is string => typeof v === 'string');
   const candidates = await db.apRequest.findMany({
     where: {
@@ -184,6 +257,14 @@ export async function findApprovedDuplicates(
               },
             ]
           : []),
+        // `original_attachment_sha256` is the decision stamp's record of the first
+        // original — it covers an approval whose own files were never hashed.
+        ...(fileHashes.length > 0
+          ? [
+              { original_attachment_sha256: { in: fileHashes } },
+              { attachments: { some: { sha256: { in: fileHashes } } } },
+            ]
+          : []),
       ],
     },
     orderBy: { received_at: 'asc' },
@@ -200,6 +281,18 @@ export async function findApprovedDuplicates(
       decided_by: true,
       first_approved_at: true,
       first_approver_id: true,
+      original_attachment_sha256: true,
+      attachments: {
+        where: { sha256: { in: fileHashes } },
+        select: {
+          kind: true,
+          filename: true,
+          content_type: true,
+          byte_size: true,
+          storage_key: true,
+          sha256: true,
+        },
+      },
     },
   });
   const sameInvoice = (r: (typeof candidates)[number]): boolean =>
@@ -214,10 +307,16 @@ export async function findApprovedDuplicates(
   // characters), so the original need only START with it.
   const approvedHere = (r: (typeof candidates)[number]): boolean =>
     !!echoed && !!r.subject && normalizeSubject(r.subject).startsWith(echoed);
+  const mineHashes = new Set(fileHashes);
+  const sameFile = (r: (typeof candidates)[number]): boolean =>
+    (!!r.original_attachment_sha256 && mineHashes.has(r.original_attachment_sha256)) ||
+    r.attachments.some((a) => isInvoiceFile(a) && !!a.sha256 && mineHashes.has(a.sha256));
   const matches = candidates
-    .filter((r) => r.id !== args.requestId && (sameInvoice(r) || approvedHere(r)))
+    .filter((r) => r.id !== args.requestId && (sameInvoice(r) || approvedHere(r) || sameFile(r)))
     .map((r) => ({
       requestId: r.id,
+      sameInvoiceNumber: sameInvoice(r),
+      sameFile: sameFile(r),
       status: r.status,
       subject: r.subject,
       vendor: r.vendor_freeform ?? r.vendor ?? extractionVendor(r.extraction),

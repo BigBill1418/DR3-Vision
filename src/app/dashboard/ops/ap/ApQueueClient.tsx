@@ -71,6 +71,8 @@ interface DuplicateInvoice {
   invoiceNumber: string | null;
   matches: {
     requestId: string;
+    /** ADR-0136 addendum — carries a byte-identical invoice file. */
+    sameFile?: boolean;
     subject: string | null;
     vendor: string | null;
     amountCents: number | null;
@@ -1236,9 +1238,16 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
                         {m.vendor ? ` · ${m.vendor}` : ''}
                         {m.amountCents !== null ? ` · ${dollars(m.amountCents)}` : ''}
                         {m.subject ? ` · ${m.subject}` : ''}
+                        {m.sameFile ? ' · same file' : ''}
                       </li>
                     ))}
                   </ul>
+                  {duplicate.matches.some((m) => m.sameFile) && (
+                    <p className="mt-1">
+                      The same file was already approved — identical, byte for byte. One file can
+                      cover several invoices or be a statement; if so, approve anyway and say so.
+                    </p>
+                  )}
                   <p className="mt-1">
                     If it was re-sent by mistake, Reject it. If it is a deliberate re-send (for
                     example, to correct the approval note), approve anyway and say why.

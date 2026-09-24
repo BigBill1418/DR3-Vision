@@ -41,8 +41,10 @@ import { recordVisionApproval } from './baselines';
 import {
   extractionVendor,
   findApprovedDuplicates,
+  invoiceFileHashes,
   type DuplicateApproval,
 } from './duplicate-invoice';
+import { isLikelyInlineImage } from './signature-images';
 import {
   stampApproval,
   stampImage,
@@ -145,8 +147,9 @@ export class ApAlreadyDecidedError extends Error {
 
 /**
  * ADR-0136 — the invoice this request names is ALREADY approved on another
- * request (same invoice number, compatible vendor). Approving again would mail
- * accounting a second stamped copy to pay. Refused unless the approver says why
+ * request (same invoice number + compatible vendor, a forwarded approval, or — the
+ * addendum — a byte-identical invoice file). Approving again would mail accounting
+ * a second stamped copy to pay. Refused unless the approver says why
  * (`duplicateOverrideReason`), which is audited on the winning decision row.
  */
 export class ApDuplicateInvoiceError extends Error {
@@ -165,11 +168,18 @@ export class ApDuplicateInvoiceError extends Error {
       matches.length > 1
         ? ` (and ${matches.length - 1} more time${matches.length > 2 ? 's' : ''})`
         : '';
-    const what = invoiceNumber
-      ? `Invoice ${invoiceNumber} was already approved`
-      : 'This is a forwarded copy of a DR3-Vision approval — the invoice was already approved';
+    const what =
+      invoiceNumber && matches.some((m) => m.sameInvoiceNumber)
+        ? `Invoice ${invoiceNumber} was already approved`
+        : matches.every((m) => m.sameFile)
+          ? 'The same invoice file was already approved'
+          : 'This is a forwarded copy of a DR3-Vision approval — the invoice was already approved';
+    const file = matches.some((m) => m.sameFile)
+      ? 'The attached file is identical, byte for byte, to the one approved there. One file can ' +
+        'cover several invoices or be a statement — if so, approve anyway and say so. '
+      : '';
     super(
-      `${what}${when}${who}${more}. Approving it again could pay it twice. ` +
+      `${what}${when}${who}${more}. ${file}Approving it again could pay it twice. ` +
         'If it is a deliberate re-send (for example, correcting the approval note), give the reason under “Approve anyway” and approve again; otherwise reject it.',
     );
     this.name = 'ApDuplicateInvoiceError';
@@ -397,14 +407,29 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   // BEFORE the transaction, like the variance gate: a refusal writes nothing but
   // its own audit row. Re-approving THIS row is already impossible — the
   // conditional flip below only matches an actionable status.
-  const duplicate =
-    args.decision === 'approved' && !args.filedNotDr3
-      ? await findApprovedDuplicates(prisma, {
-          requestId: args.requestId,
-          subject: row.subject,
-          vendors: [args.vendorFreeform, args.vendor, row.vendor, extractionVendor(row.extraction)],
-        })
-      : null;
+  //
+  // The addendum's third key is the invoice FILE: its sha256 is computed here (and
+  // recorded) from the stored bytes, so a re-forward with no number in the subject
+  // is still caught. An unreadable file narrows the check to the other keys; it
+  // never blocks the Approve on its own.
+  const guarded = args.decision === 'approved' && !args.filedNotDr3;
+  const files = guarded
+    ? await invoiceFileHashes(prisma, args.requestId, getApAttachmentBytes)
+    : null;
+  if (files && files.unreadable > 0) {
+    log.warn(
+      { requestId: args.requestId, unreadable: files.unreadable },
+      '[ap-approvals] duplicate guard: invoice file(s) unreadable — same-file key checked without them',
+    );
+  }
+  const duplicate = guarded
+    ? await findApprovedDuplicates(prisma, {
+        requestId: args.requestId,
+        subject: row.subject,
+        vendors: [args.vendorFreeform, args.vendor, row.vendor, extractionVendor(row.extraction)],
+        fileHashes: files?.hashes ?? [],
+      })
+    : null;
   const duplicateMatches = duplicate?.matches ?? [];
   const overrideReason = args.duplicateOverrideReason?.trim() || null;
   if (duplicate && duplicateMatches.length > 0 && !overrideReason) {
@@ -419,6 +444,7 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
         invoice_number: duplicate.invoiceNumber,
         forwarded_approval: duplicate.forwardedApproval,
         matched_request_ids: duplicateMatches.map((m) => m.requestId),
+        same_file_request_ids: duplicateMatches.filter((m) => m.sameFile).map((m) => m.requestId),
       },
     });
     const names = new Map<string, string>();
@@ -585,6 +611,9 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
                     invoice_number: duplicate.invoiceNumber,
                     forwarded_approval: duplicate.forwardedApproval,
                     matched_request_ids: duplicateMatches.map((m) => m.requestId),
+                    same_file_request_ids: duplicateMatches
+                      .filter((m) => m.sameFile)
+                      .map((m) => m.requestId),
                   },
                 }
               : {}),
@@ -1226,14 +1255,25 @@ export async function sendDecisionEmail(
   // must never block the decision mail.
   const duplicate =
     req.status === 'approved' && !filedNotDr3
-      ? await findApprovedDuplicates(prisma, {
-          requestId,
-          subject: req.subject,
-          vendors: [req.vendor_freeform, req.vendor, extractionVendor(req.extraction)],
-        }).catch(() => null)
+      ? await invoiceFileHashes(prisma, requestId, getApAttachmentBytes)
+          .then((files) =>
+            findApprovedDuplicates(prisma, {
+              requestId,
+              subject: req.subject,
+              vendors: [req.vendor_freeform, req.vendor, extractionVendor(req.extraction)],
+              fileHashes: files.hashes,
+            }),
+          )
+          .catch(() => null)
       : null;
+  const duplicateWhat =
+    duplicate?.invoiceNumber && duplicate.matches.some((m) => m.sameInvoiceNumber)
+      ? `Invoice ${escapeHtml(duplicate.invoiceNumber)}`
+      : duplicate?.matches.every((m) => m.sameFile)
+        ? 'The same invoice file'
+        : 'This invoice';
   const duplicateLine = duplicate?.matches.length
-    ? `<li>⚠ <b>${duplicate.invoiceNumber ? `Invoice ${escapeHtml(duplicate.invoiceNumber)}` : 'This invoice'} was ALSO approved in DR3-Vision</b> (${duplicate.matches
+    ? `<li>⚠ <b>${duplicateWhat} was ALSO approved in DR3-Vision</b> (${duplicate.matches
         .map((m) =>
           m.approvedAt ? `${escapeHtml(formatPacificDateTime(m.approvedAt))} PT` : 'date unknown',
         )
@@ -1561,25 +1601,6 @@ interface FileAttachmentRow {
   content_type: string | null;
   storage_key: string | null;
   byte_size: number | null;
-}
-
-/**
- * Inline-image heuristic (ADR-0046 post-amendment, 2026-07-15). Forwards drag in
- * signature/logo images (`image/*`, a few KB) that must not be stamped and mailed
- * as if they were the invoice. We have no exact inline signal yet — `normalizeFile`
- * (msgraph-mail/normalize.ts) drops Graph's `isInline`/`contentId`, so `ap_attachments`
- * carries no inline column. Ship-now proxy: exclude tiny images (`image/*` AND
- * byte_size < 50 KB); a scanned/photographed invoice is virtually always >200 KB,
- * logos/signatures <20 KB. PDFs and non-image files are ALWAYS kept regardless of size.
- * Durable follow-up: capture `isInline`+`contentId` into a new `ap_attachments.is_inline`
- * column and filter on that exactly (retiring this size heuristic) — see ADR-0046.
- */
-const INLINE_IMAGE_MAX_BYTES = 50_000;
-function isLikelyInlineImage(a: FileAttachmentRow): boolean {
-  // ADR-0132 D2 — normalized, so a parameterized or whitespace-padded
-  // `image/jpeg; name="sig.jpg"` is still recognized as the signature logo it is.
-  const ct = normalizeMime(a.content_type);
-  return ct.startsWith('image/') && a.byte_size != null && a.byte_size < INLINE_IMAGE_MAX_BYTES;
 }
 
 /**

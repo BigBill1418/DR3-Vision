@@ -346,9 +346,13 @@ export async function POST(
         {
           error: e.message,
           duplicateInvoice: {
-            invoiceNumber: e.invoiceNumber,
+            // The number is only news when a match was found BY it; a same-file
+            // match on another number (13423's PDF approved as 13422) must not
+            // read as "invoice 13423 was already approved".
+            invoiceNumber: e.matches.some((m) => m.sameInvoiceNumber) ? e.invoiceNumber : null,
             matches: e.matches.map((m) => ({
               requestId: m.requestId,
+              sameFile: m.sameFile,
               subject: m.subject,
               vendor: m.vendor,
               amountCents: m.amountCents,

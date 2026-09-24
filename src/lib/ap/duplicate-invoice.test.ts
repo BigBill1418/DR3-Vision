@@ -4,11 +4,19 @@
 
 import { describe, expect, it } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
-import { makeFakePrisma, newFakeDb, type FakeApRequest } from './__testutils__/fake-prisma';
+import { createHash } from 'node:crypto';
+import {
+  makeFakePrisma,
+  newFakeDb,
+  type FakeApAttachment,
+  type FakeApRequest,
+} from './__testutils__/fake-prisma';
 import {
   extractInvoiceNumber,
   findApprovedDuplicates,
   forwardedApprovalSubject,
+  invoiceFileHashes,
+  isInvoiceFile,
   vendorsCompatible,
 } from './duplicate-invoice';
 
@@ -239,5 +247,241 @@ describe('forwarded approval mail (the second key)', () => {
     expect(r?.forwardedApproval).toBe(true);
     expect(r?.invoiceNumber).toBeNull();
     expect(r?.matches.map((m) => m.requestId)).toEqual(['orig', 'again']);
+  });
+});
+
+// ── ADR-0136 addendum — the third key: the same invoice FILE ─────────────────
+//
+// Production, 2026-07..09: five approved doubles carried a byte-identical PDF under
+// a subject the number key cannot read ("FW: Invoice(s) Posted", "FW: Ramos/EFuel",
+// "Inter State Oil", "…Green Baler Invoice 0174" vs "…Green Baler", and invoice
+// 13423 whose PDF is 13422's). The attachment shapes below are real ones.
+
+function att(over: Partial<FakeApAttachment>): FakeApAttachment {
+  return {
+    id: 'a',
+    request_id: 'r',
+    kind: 'file',
+    filename: 'Invoice_IN-0312251.PDF',
+    content_type: 'application/octet-stream',
+    byte_size: 98755,
+    storage_key: `ap/${over.request_id ?? 'r'}/${over.id ?? 'a'}`,
+    link_url: null,
+    nested_subject: null,
+    ...over,
+  };
+}
+const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
+const PDF = sha('ramos invoice(s) posted pdf');
+const LOGO = sha("gloria's signature logo");
+
+describe('isInvoiceFile — which files are a key', () => {
+  it.each([
+    ['Invoice_IN-0312251.PDF', 'application/octet-stream', 98755],
+    ['invoice_6646.pdf', 'application/pdf', 5568],
+    ['5312.jpg', 'image/jpeg', 1185684],
+    ['Service_Order_Attachment_1_image.jpg', 'image/jpeg', 512943],
+  ])('%s (%s, %d B) is a document', (filename, content_type, byte_size) => {
+    expect(isInvoiceFile(att({ filename, content_type, byte_size }))).toBe(true);
+  });
+
+  it.each([
+    // Outlook body images above the 50 KB size rule — on 12 and 7 approved requests.
+    ['image002.jpg', 'image/jpeg', 69918],
+    ['image001.jpg', 'image/jpeg', 80204],
+    ['image001.png', 'image/png', 1284],
+    ['image.png', 'image/png', 8228],
+  ])('%s (%s, %d B) is a signature image, never a key', (filename, content_type, byte_size) => {
+    expect(isInvoiceFile(att({ filename, content_type, byte_size }))).toBe(false);
+  });
+
+  it('a link or an unstored file is not a key', () => {
+    expect(isInvoiceFile(att({ kind: 'reference_link' }))).toBe(false);
+    expect(isInvoiceFile(att({ storage_key: null }))).toBe(false);
+  });
+});
+
+describe('invoiceFileHashes', () => {
+  it('hashes invoice files from their bytes, records each once, skips the logo', async () => {
+    const db = newFakeDb({
+      attachments: [
+        att({ id: 'pdf', request_id: 'r1' }),
+        att({
+          id: 'logo',
+          request_id: 'r1',
+          filename: 'image002.jpg',
+          content_type: 'image/jpeg',
+          byte_size: 69918,
+        }),
+        att({ id: 'other', request_id: 'r2' }),
+      ],
+    });
+    const read = async (key: string): Promise<Uint8Array> =>
+      new TextEncoder().encode(`bytes of ${key}`);
+    const reads: string[] = [];
+    const prisma = makeFakePrisma(db) as unknown as PrismaClient;
+    const first = await invoiceFileHashes(prisma, 'r1', async (k) => (reads.push(k), read(k)));
+    expect(first).toEqual({ hashes: [sha('bytes of ap/r1/pdf')], unreadable: 0 });
+    expect(reads).toEqual(['ap/r1/pdf']); // the logo's bytes are never fetched
+    expect(db.attachments.find((a) => a.id === 'pdf')!.sha256).toBe(sha('bytes of ap/r1/pdf'));
+    expect(db.attachments.find((a) => a.id === 'logo')!.sha256).toBeUndefined();
+    // Second call reuses the recorded hash — no second read.
+    const again = await invoiceFileHashes(prisma, 'r1', async (k) => (reads.push(k), read(k)));
+    expect(again.hashes).toEqual(first.hashes);
+    expect(reads).toHaveLength(1);
+  });
+
+  it('counts an unreadable file instead of inventing a hash for it', async () => {
+    const db = newFakeDb({ attachments: [att({ id: 'pdf', request_id: 'r1' })] });
+    const r = await invoiceFileHashes(
+      makeFakePrisma(db) as unknown as PrismaClient,
+      'r1',
+      async () => {
+        throw new Error('R2 down');
+      },
+    );
+    expect(r).toEqual({ hashes: [], unreadable: 1 });
+    expect(db.attachments[0]!.sha256).toBeUndefined();
+  });
+});
+
+describe('findApprovedDuplicates — the same file', () => {
+  function db(rows: FakeApRequest[], attachments: FakeApAttachment[]): PrismaClient {
+    return makeFakePrisma(newFakeDb({ requests: rows, attachments })) as unknown as PrismaClient;
+  }
+
+  it('catches the "Invoice(s) Posted" re-forward the number key cannot read', async () => {
+    const prisma = db(
+      [
+        req({ id: 'first', subject: 'FW: Invoice(s) Posted' }),
+        req({ id: 'second', status: 'pending' }),
+      ],
+      [att({ id: 'f1', request_id: 'first', sha256: PDF })],
+    );
+    const subject = 'FW: Invoice(s) Posted-Ramos/E-fuel';
+    expect(extractInvoiceNumber(subject)).toBeNull(); // the number key has nothing
+    const r = await findApprovedDuplicates(prisma, {
+      requestId: 'second',
+      subject,
+      vendors: ['Ramos oil'],
+      fileHashes: [PDF],
+    });
+    expect(r).not.toBeNull();
+    expect(r!.matches).toEqual([
+      expect.objectContaining({ requestId: 'first', sameFile: true, sameInvoiceNumber: false }),
+    ]);
+  });
+
+  it('without the file hashes the same pair is invisible (the pre-addendum behaviour)', async () => {
+    const prisma = db(
+      [
+        req({ id: 'first', subject: 'FW: Invoice(s) Posted' }),
+        req({ id: 'second', status: 'pending' }),
+      ],
+      [att({ id: 'f1', request_id: 'first', sha256: PDF })],
+    );
+    expect(
+      await findApprovedDuplicates(prisma, {
+        requestId: 'second',
+        subject: 'FW: Invoice(s) Posted-Ramos/E-fuel',
+        vendors: [],
+      }),
+    ).toBeNull();
+  });
+
+  it('13423 carrying 13422’s PDF is a same-file match, NOT an invoice-number match', async () => {
+    const prisma = db(
+      [
+        req({
+          id: '13422',
+          subject: 'FW: New payment request from Xtraction, Inc. - invoice 13422',
+        }),
+        req({ id: '13423', status: 'pending' }),
+      ],
+      [
+        att({
+          id: 'x',
+          request_id: '13422',
+          filename: '08_07_2026.pdf',
+          content_type: 'application/pdf',
+          sha256: PDF,
+        }),
+      ],
+    );
+    const r = await findApprovedDuplicates(prisma, {
+      requestId: '13423',
+      subject: 'FW: New payment request from Xtraction, Inc. - invoice 13423',
+      vendors: ['Xtraction'],
+      fileHashes: [PDF],
+    });
+    expect(r!.invoiceNumber).toBe('13423');
+    expect(r!.matches).toEqual([
+      expect.objectContaining({ requestId: '13422', sameFile: true, sameInvoiceNumber: false }),
+    ]);
+  });
+
+  it('falls back to the stamp’s original_attachment_sha256 for an approval never hashed', async () => {
+    const prisma = db(
+      [
+        req({ id: 'first', subject: 'Interstate Oil', original_attachment_sha256: PDF }),
+        req({ id: 'second', status: 'pending' }),
+      ],
+      [],
+    );
+    const r = await findApprovedDuplicates(prisma, {
+      requestId: 'second',
+      subject: 'Inter State Oil',
+      vendors: [],
+      fileHashes: [PDF],
+    });
+    expect(r!.matches.map((m) => [m.requestId, m.sameFile])).toEqual([['first', true]]);
+  });
+
+  it('counts a first-approved (awaiting the second signer) request with the same file', async () => {
+    const prisma = db(
+      [
+        req({ id: 'first', status: 'pending_second_approval', decided_at: null }),
+        req({ id: 'second', status: 'pending' }),
+      ],
+      [att({ id: 'f1', request_id: 'first', sha256: PDF })],
+    );
+    const r = await findApprovedDuplicates(prisma, {
+      requestId: 'second',
+      subject: null,
+      vendors: [],
+      fileHashes: [PDF],
+    });
+    expect(r!.matches.map((m) => m.status)).toEqual(['pending_second_approval']);
+  });
+
+  it('a shared signature logo, a rejected twin, and the request itself are not matches', async () => {
+    const prisma = db(
+      [
+        req({ id: 'logo-only', subject: 'FW: Invoice from someone else' }),
+        req({ id: 'rejected', status: 'rejected' }),
+        req({ id: 'self', status: 'pending' }),
+      ],
+      [
+        // Recorded hashes on logo rows can only come from a backfill of EVERY file;
+        // the match still refuses them.
+        att({
+          id: 'l',
+          request_id: 'logo-only',
+          filename: 'image002.jpg',
+          content_type: 'image/jpeg',
+          byte_size: 69918,
+          sha256: LOGO,
+        }),
+        att({ id: 'rj', request_id: 'rejected', sha256: PDF }),
+        att({ id: 's', request_id: 'self', sha256: PDF }),
+      ],
+    );
+    const r = await findApprovedDuplicates(prisma, {
+      requestId: 'self',
+      subject: null,
+      vendors: [],
+      fileHashes: [PDF, LOGO],
+    });
+    expect(r!.matches).toEqual([]);
   });
 });

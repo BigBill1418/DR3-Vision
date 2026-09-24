@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 DONE (ADR-0137) — Woodland throughput designated to the Terex, 16 days + 5 alerts moved back off the EQ24 shear**; BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
+## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136) + same-file key added 2026-09-23 night (ADR-0136 addendum); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 DONE (ADR-0137) — Woodland throughput designated to the Terex, 16 days + 5 alerts moved back off the EQ24 shear**; BX-10 down to 2 pairs for Bill (`3` + `Truck 9` marked Different assets 11:13 PM PT); BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…
 clean and condense the items that this has happened to check the DB"._ Full analysis
@@ -130,6 +130,13 @@ Trailer`. `Trailer # 5327` — no 5327 at either site, so created as `5327 — T
   no payment path (GP is keyed by hand), so a double payment is **unlikely** — AP itself
   re-sent it as a correction — but only GP can prove it. **Ask Mary:** United Fleet
   Maintenance invoice 6646 paid once? Guard shipped so it cannot recur silently.
+  **2026-09-23 night — the residual is closed (ADR-0136 addendum):** the guard now also
+  matches on the sha256 of the invoice FILE (`ap_attachments.sha256`, computed at the
+  Approve; every stored file backfilled), so a re-forward whose subject names no number
+  is refused too. Replayed against history it catches five doubles the subject key missed —
+  Interstate Oil 07-20, Ramos "Invoice(s) Posted" 07-27, Ramos `FW: Ramos/EFuel` →
+  IN-0320844 08-14, Xtraction 13423 (13422's PDF) 09-21, Kelliher "Invoice 0174" 09-22 —
+  all already on BX-8's list below.
 - **BX-8 — AP CHECK: other invoices approved more than once** (scan 2026-09-23, same key
   as the guard, plus identical original-PDF bytes). All Woodland, all decision mails
   sent. Each needs Mary to confirm it was paid once:
@@ -162,7 +169,10 @@ Trailer`. `Trailer # 5327` — no 5327 at either site, so created as `5327 — T
      **Use this one** and **It's a different asset** (reason required). Press Never mind — do not
      create it.
   3. `/admin/equipment?site=fleet` lists the three fleet-wide trailers.
-  4. `/admin/equipment/duplicates` shows 4 pairs (see ADR-0135 §8); mark `3` Fruehauf/Wabash and
+  4. **Half DONE 2026-09-23 11:13 PM PT:** `3` Fruehauf/Wabash (VLM: two VINs — ADR-0087 is
+     about `95`, not `3`; ADR-0135 §8 corrected) and the two `Truck 9`s (ADR-0087 G7) are
+     marked Different assets; the queue now shows **2** pairs. Still Bill's: decide `2` and `908`.
+     Original item: `/admin/equipment/duplicates` shows 4 pairs (see ADR-0135 §8); mark `3` Fruehauf/Wabash and
      the two `Truck 9`s **Different assets** if they are, and decide `2` and `908`.
   5. Next AP approval that needs the hatch: **Equipment not in list** now asks Type + Unit #.
 - **BX-10 — NEW (ADR-0135): work the duplicates queue.** `/admin/equipment/duplicates` lists

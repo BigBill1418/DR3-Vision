@@ -190,6 +190,9 @@ export interface FakeApAttachment {
   storage_key: string | null;
   link_url: string | null;
   nested_subject: string | null;
+  // ADR-0136 addendum — the same-file key. Optional so existing fixtures need not
+  // enumerate it; absent reads as NULL (never hashed).
+  sha256?: string | null;
 }
 export interface FakeUser {
   id: string;
@@ -526,7 +529,22 @@ export function makeFakePrisma(db: FakeDb) {
         } else {
           rows = [...rows].sort((a, b) => a.received_at.getTime() - b.received_at.getTime());
         }
-        return rows.map((r) => (args.select ? pick(r, args.select) : { ...r }));
+        // ADR-0136 addendum — the duplicate lookup selects each candidate's
+        // attachments narrowed by `where: { sha256: { in } }` (a relation select).
+        const attSel = args.select?.['attachments'] as
+          | { where?: { sha256?: { in?: string[] } }; select?: AnyRecord }
+          | undefined;
+        return rows.map((r) => {
+          const out = (args.select ? pick(r, args.select) : { ...r }) as unknown as AnyRecord;
+          if (attSel) {
+            const inSet = attSel.where?.sha256?.in;
+            out['attachments'] = db.attachments
+              .filter((a) => a.request_id === r.id)
+              .filter((a) => !inSet || (a.sha256 != null && inSet.includes(a.sha256)))
+              .map((a) => pick({ sha256: null, ...a }, attSel.select));
+          }
+          return out as unknown as FakeApRequest;
+        });
       },
       async create(args: { data: AnyRecord; select?: AnyRecord }) {
         const d = args.data;
@@ -690,9 +708,26 @@ export function makeFakePrisma(db: FakeDb) {
       async findMany(args: { where?: AnyRecord; orderBy?: AnyRecord; select?: AnyRecord } = {}) {
         const w = args.where ?? {};
         const rows = db.attachments.filter(
-          (a) => w['request_id'] === undefined || a.request_id === w['request_id'],
+          (a) =>
+            (w['request_id'] === undefined || a.request_id === w['request_id']) &&
+            (w['kind'] === undefined || a.kind === w['kind']),
         );
-        return rows.map((a) => (args.select ? pick(a, args.select) : { ...a }));
+        return rows.map((a) =>
+          args.select ? pick({ sha256: null, ...a }, args.select) : { sha256: null, ...a },
+        );
+      },
+      // ADR-0136 addendum — `invoiceFileHashes` records a hash with
+      // `{ where: { id, sha256: null }, data: { sha256 } }`: only a NULL is written.
+      async updateMany(args: { where: AnyRecord; data: AnyRecord }) {
+        const w = args.where;
+        let count = 0;
+        for (const a of db.attachments) {
+          if (a.id !== w['id']) continue;
+          if (w['sha256'] === null && (a.sha256 ?? null) !== null) continue;
+          Object.assign(a, args.data);
+          count++;
+        }
+        return { count };
       },
     },
     apSenderConfig: {
