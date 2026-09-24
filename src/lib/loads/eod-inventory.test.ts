@@ -18,11 +18,16 @@ interface AnchorRow {
   id: string;
   snapshot_at: Date;
   pool_attribution: string;
+  counted_by?: string | null;
+  confirmed_by?: string | null;
 }
 
 const store = {
   anchor: null as AnchorRow | null,
   audit: null as null | { actor_label: string | null; actor: { name: string } | null },
+  // ADR-0138 — a Tier-2 hold whose release produced the anchor, and its submitter.
+  hold: null as null | { created_by: string },
+  users: new Map<string, string>(),
   // Balance by asOf epoch — the module reads end-of-report-day and end-of-prior-day.
   balances: new Map<number, { program: number; nonProgram: number }>(),
   // Latest flow-row date per source (drives flowThrough / movementToday). Default null
@@ -50,6 +55,15 @@ vi.mock('@/lib/prisma', () => ({
     },
     auditLog: {
       findFirst: async () => store.audit,
+    },
+    inventoryCountHold: {
+      findFirst: async () => store.hold,
+    },
+    user: {
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        const name = store.users.get(where.id);
+        return name === undefined ? null : { name };
+      },
     },
     inboundLoad: {
       aggregate: async () => ({ _max: { arrived_at: store.flowMax.inboundArrivedAt } }),
@@ -107,6 +121,8 @@ function countedAt(y: number, m1: number, d: number): Date {
 beforeEach(() => {
   store.anchor = null;
   store.audit = null;
+  store.hold = null;
+  store.users = new Map();
   store.balances = new Map();
   store.flowMax = {
     inboundArrivedAt: null,
@@ -296,7 +312,9 @@ describe('getEodInventorySnapshot', () => {
     expect(eod.programPct).toBe(94.2);
     expect(eod.nonProgramPct).toBe(5.8);
     expect(eod.anchor?.daysSince).toBe(0);
-    expect(eod.anchor?.counter).toBe('Morena');
+    // ADR-0138 — no counted_by captured: the audit actor is the ENTERER, labelled
+    // as such, never promoted to counter.
+    expect(eod.anchor?.counter).toBe('Not recorded · entered by Morena');
     expect(eod.staleDays).toBe(14);
   });
 
@@ -327,7 +345,7 @@ describe('getEodInventorySnapshot', () => {
 
     const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
     expect(eod.state).toBe('healthy');
-    expect(eod.anchor?.counter).toBe('system:inventory-reconcile');
+    expect(eod.anchor?.counter).toBe('Not recorded · entered by system:inventory-reconcile');
   });
 
   it('STALE — anchor older than the window keeps its date + age and refuses healthy', async () => {
@@ -519,5 +537,49 @@ describe('assessInboundRecency (ADR-0130 Am.2)', () => {
     // "This site has no intake feed" must never render as "the feed died".
     const r = assessInboundRecency(null, day('2026-09-18'), NO_HOL);
     expect(r).toEqual({ calendarDaysSince: null, businessDaysSince: null, stale: false });
+  });
+});
+
+// ── ADR-0138 — the report names who COUNTED, not who keyed the count in ────────
+// Eugene 2026-09-16 (snapshot 7232d092): counted by Chris R, confirmed by Patrick D,
+// keyed by an admin (Bill Barnard) through the manager route. The report printed
+// "Counter: Bill Barnard" every night until a new count.
+describe('getEodInventorySnapshot — ADR-0138 counter attribution', () => {
+  const anchorOn = (extra: Partial<AnchorRow>): AnchorRow => ({
+    id: 'snap-eugene',
+    snapshot_at: countedAt(2026, 7, 22),
+    pool_attribution: 'measured',
+    ...extra,
+  });
+
+  it('names the people who counted, and the keying account only as "entered by"', async () => {
+    store.anchor = anchorOn({ counted_by: 'Chris R', confirmed_by: 'Patrick D' });
+    store.audit = { actor_label: null, actor: { name: 'Bill Barnard' } };
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.anchor?.counter).toBe('Chris R, confirmed by Patrick D · entered by Bill Barnard');
+    // The defect itself: the keying actor must never stand alone as the counter.
+    expect(eod.anchor?.counter).not.toBe('Bill Barnard');
+  });
+
+  it('omits "entered by" when the counter keyed it themselves', async () => {
+    store.anchor = anchorOn({ counted_by: 'Janette Tomas' });
+    store.audit = { actor_label: null, actor: { name: 'Janette Tomas' } };
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.anchor?.counter).toBe('Janette Tomas');
+  });
+
+  it('a released Tier-2 hold is entered by its SUBMITTER, not the approver', async () => {
+    store.anchor = anchorOn({ counted_by: null });
+    store.audit = { actor_label: null, actor: { name: 'Approving Manager' } };
+    store.hold = { created_by: 'user-operator' };
+    store.users.set('user-operator', 'Juan Perez');
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.anchor?.counter).toBe('Not recorded · entered by Juan Perez');
+  });
+
+  it('null when nothing at all is known', async () => {
+    store.anchor = anchorOn({});
+    const eod = await getEodInventorySnapshot(SITE, REPORT_DATE);
+    expect(eod.anchor?.counter).toBeNull();
   });
 });

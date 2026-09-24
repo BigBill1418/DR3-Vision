@@ -426,6 +426,8 @@ async function gateAndCorrect(
       non_program_units: true,
       pool_attribution: true,
       reconciled_delta: true,
+      counted_by: true,
+      confirmed_by: true,
       voided_at: true,
     },
   });
@@ -484,10 +486,10 @@ async function gateAndCorrect(
 
   // ── Whose entry this corrects — ATTRIBUTION, never authorization ─────────
   // The original insert audit row, oldest first, exactly as `voidSnapshot` and
-  // `eod-inventory.resolveCounter` resolve it. Snapshots carry no counter column
-  // and none is added here: a denormalised copy is a second truth that can
-  // disagree with the append-only record. NULL means "we do not know", which is
-  // true for a system-written snapshot, and it is never backfilled.
+  // `eod-inventory.resolveCounter` resolve it — the ENTERER, which is what the
+  // cross-operator check is about. (Who physically COUNTED is a different fact,
+  // the snapshot's `counted_by` column since ADR-0138, carried forward below.)
+  // NULL means "we do not know", which is true for a system-written snapshot.
   const entry = await tx.auditLog.findFirst({
     where: { table_name: TABLE, row_id: snapshot.id, action: 'insert' },
     orderBy: { created_at: 'asc' },
@@ -533,6 +535,8 @@ interface CorrectionPlan {
     non_program_units: Prisma.Decimal | null;
     pool_attribution: string;
     reconciled_delta: number | null;
+    counted_by: string | null;
+    confirmed_by: string | null;
   };
   correctedInput: {
     units_indoor: number | null;
@@ -596,6 +600,10 @@ async function applyCorrection(
       program_units: plan.programUnits,
       non_program_units: plan.nonProgramUnits,
       pool_attribution: plan.poolAttribution,
+      // ADR-0138 — a correction fixes a keyed number; the people who counted
+      // did not change, so they carry forward with it.
+      counted_by: original.counted_by,
+      confirmed_by: original.confirmed_by,
     },
     select: { id: true },
   });
@@ -606,11 +614,12 @@ async function applyCorrection(
   // corrected snapshot instead of finding no insert row and reporting null.
   //
   // `actor_user_id` is the MANAGER, because they are who put this number on the
-  // record — and the consequence is real and is recorded in ADR-0105: the daily
-  // report's "counted by" line names the manager for a corrected count. The
-  // operator who physically counted is carried in `counted_by` rather than
-  // being silently substituted into the actor column, which would write a claim
-  // that a person entered a number they did not enter.
+  // record. ADR-0105 recorded the consequence — the daily report named the
+  // manager as counter for a corrected count; ADR-0138 closed it: the report
+  // prints the snapshot's `counted_by` column (carried forward above) and shows
+  // the audit actor only as "entered by". `after.counted_by` below is the
+  // ORIGINAL ENTRY's user id (historical key name, kept for the audit record's
+  // format) — not the column of the same name, which holds the floor people.
   await writeAuditRow(tx, {
     actor_user_id: args.actorUserId,
     action: 'insert',

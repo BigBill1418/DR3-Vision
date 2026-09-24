@@ -162,6 +162,9 @@
     "units_processing_label": "Unidades en procesamiento",
     "program_units_label": "Unidades del programa",
     "non_program_units_label": "Unidades fuera del programa",
+    "counted_by_label": "¿Quién contó?",
+    "counted_by_placeholder": "Nombre de la persona que contó",
+    "confirmed_by_label": "Confirmado por (opcional)",
     "count_total_label": "Total del conteo físico",
     "split_entered_label": "Programa + fuera del programa ingresado",
     "computed_total_label": "Total calculado del balance",
@@ -170,7 +173,8 @@
     "recording": "Registrando…",
     "save_success": "Conteo físico registrado.",
     "save_failed": "Error al guardar",
-    "mismatch_error": "Programa ({{program}}) + fuera del programa ({{nonProgram}}) = {{sum}}, que no es igual al total físico {{total}}. Ajuste los grupos para que sumen."
+    "mismatch_error": "Programa ({{program}}) + fuera del programa ({{nonProgram}}) = {{sum}}, que no es igual al total físico {{total}}. Ajuste los grupos para que sumen.",
+    "counted_by_required": "Indique quién contó antes de registrar el conteo."
   },
   "yard": {
     "heading": "Patio",

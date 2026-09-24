@@ -161,6 +161,9 @@
     "units_processing_label": "Units in processing",
     "program_units_label": "Program units",
     "non_program_units_label": "Non-program units",
+    "counted_by_label": "Who counted?",
+    "counted_by_placeholder": "Name of the person who counted",
+    "confirmed_by_label": "Confirmed by (optional)",
     "count_total_label": "Physical count total",
     "split_entered_label": "Program + non-program entered",
     "computed_total_label": "Computed running total",
@@ -169,7 +172,8 @@
     "recording": "Recording…",
     "save_success": "Physical count recorded.",
     "save_failed": "Save failed",
-    "mismatch_error": "Program ({{program}}) + non-program ({{nonProgram}}) = {{sum}}, which does not equal the physical total {{total}}. Adjust the pools so they add up."
+    "mismatch_error": "Program ({{program}}) + non-program ({{nonProgram}}) = {{sum}}, which does not equal the physical total {{total}}. Adjust the pools so they add up.",
+    "counted_by_required": "Enter who counted before recording the count."
   },
   "yard": {
     "heading": "Yard",

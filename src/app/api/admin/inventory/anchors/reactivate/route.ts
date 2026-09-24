@@ -43,6 +43,8 @@ export async function POST(req: Request): Promise<Response> {
   const restoreFrom = await prisma.siteInventorySnapshot.findUnique({
     where: { id: parsed.data.snapshotId },
     select: {
+      counted_by: true,
+      confirmed_by: true,
       id: true,
       site_id: true,
       units_indoor: true,
@@ -110,6 +112,10 @@ export async function POST(req: Request): Promise<Response> {
           restoreFrom.non_program_units === null ? null : Number(restoreFrom.non_program_units),
         poolAttribution: restoreFrom.pool_attribution === 'legacy' ? 'legacy' : 'measured',
         actorUserId: gate.ctx.userId,
+        // ADR-0138 — the figures are the restored count's, so are the people who
+        // counted them; the reactivating admin is recorded as the enterer.
+        countedBy: restoreFrom.counted_by,
+        confirmedBy: restoreFrom.confirmed_by,
         tx,
       });
 

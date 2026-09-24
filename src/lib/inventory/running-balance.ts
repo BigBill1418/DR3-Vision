@@ -552,6 +552,13 @@ export async function reconcilePhysicalCount(args: {
   poolAttribution?: 'measured' | 'legacy';
   actorUserId: string | null;
   /**
+   * ADR-0138 — the people who physically counted / confirmed, as the entry form
+   * captured them. Distinct from `actorUserId`, who KEYED the count in. Omit when
+   * the path does not ask; the column stays NULL and nothing is inferred.
+   */
+  countedBy?: string | null;
+  confirmedBy?: string | null;
+  /**
    * ADR-0078 — an OPEN transaction to write the snapshot + audit row on, so a
    * caller can bind this write to its own (e.g. an idempotency claim). Omit and
    * this opens its own, as it always did.
@@ -617,6 +624,8 @@ export async function reconcilePhysicalCount(args: {
         program_units: args.programUnits ?? null,
         non_program_units: args.nonProgramUnits ?? null,
         pool_attribution: poolAttribution,
+        counted_by: args.countedBy ?? null,
+        confirmed_by: args.confirmedBy ?? null,
       },
       select: { id: true },
     });
@@ -635,6 +644,8 @@ export async function reconcilePhysicalCount(args: {
           program_units: args.programUnits ?? null,
           non_program_units: args.nonProgramUnits ?? null,
           pool_attribution: poolAttribution,
+          counted_by: args.countedBy ?? null,
+          confirmed_by: args.confirmedBy ?? null,
         },
       },
     });

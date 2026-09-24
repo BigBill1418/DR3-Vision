@@ -175,6 +175,10 @@ function PhysicalCountPanel({
   const [processing, setProcessing] = useState('');
   const [program, setProgram] = useState('');
   const [nonProgram, setNonProgram] = useState('');
+  // ADR-0138 — asked, never prefilled with the signed-in user: whoever keys the
+  // count is recorded by the audit row; this is who was on the floor counting.
+  const [countedBy, setCountedBy] = useState('');
+  const [confirmedBy, setConfirmedBy] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<FieldMsg | null>(null);
 
@@ -201,13 +205,18 @@ function PhysicalCountPanel({
           program_units: unitOrNull(program) ?? undefined,
           non_program_units: unitOrNull(nonProgram) ?? undefined,
           pool_attribution: 'measured',
+          counted_by: countedBy.trim(),
+          confirmed_by: confirmedBy.trim() || null,
         }),
       });
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
         setMsg({
           kind: 'err',
-          text: err.message ?? `${t('physical_count.save_failed')} (${res.status}).`,
+          text:
+            err.error === 'counted_by_required'
+              ? t('physical_count.counted_by_required')
+              : (err.message ?? `${t('physical_count.save_failed')} (${res.status}).`),
         });
         return;
       }
@@ -217,12 +226,14 @@ function PhysicalCountPanel({
       setProcessing('');
       setProgram('');
       setNonProgram('');
+      setCountedBy('');
+      setConfirmedBy('');
     } finally {
       setBusy(false);
     }
   };
 
-  const canSave = physicalTotal > 0 && !mismatch;
+  const canSave = physicalTotal > 0 && !mismatch && countedBy.trim() !== '';
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -289,6 +300,30 @@ function PhysicalCountPanel({
             className={inputCls}
             value={nonProgram}
             onChange={(e) => setNonProgram(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.counted_by_label')}</span>
+          <input
+            type="text"
+            maxLength={80}
+            required
+            className={inputCls}
+            placeholder={t('physical_count.counted_by_placeholder')}
+            value={countedBy}
+            onChange={(e) => setCountedBy(e.target.value)}
+          />
+        </label>
+        <label className={labelCls}>
+          <span className="opacity-70">{t('physical_count.confirmed_by_label')}</span>
+          <input
+            type="text"
+            maxLength={80}
+            className={inputCls}
+            value={confirmedBy}
+            onChange={(e) => setConfirmedBy(e.target.value)}
           />
         </label>
       </div>

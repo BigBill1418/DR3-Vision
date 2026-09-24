@@ -58,6 +58,9 @@ export interface HeldCountInput {
   programUnits: number | null;
   nonProgramUnits: number | null;
   poolAttribution: 'measured' | 'legacy';
+  /** ADR-0138 — who counted / confirmed, carried through to the released anchor. */
+  countedBy?: string | null;
+  confirmedBy?: string | null;
 }
 
 /** Record a Tier 2 count as pending. Writes nothing to inventory. */
@@ -80,6 +83,8 @@ export async function createHold(
       program_units: args.input.programUnits,
       non_program_units: args.input.nonProgramUnits,
       pool_attribution: args.input.poolAttribution,
+      counted_by: args.input.countedBy ?? null,
+      confirmed_by: args.input.confirmedBy ?? null,
       prior_snapshot_id: c.prior?.id ?? null,
       prior_total: c.prior?.total ?? 0,
       new_total: c.newTotal,
@@ -245,6 +250,8 @@ export async function releaseHold(
       nonProgramUnits: hold.non_program_units === null ? null : Number(hold.non_program_units),
       poolAttribution: hold.pool_attribution === 'legacy' ? 'legacy' : 'measured',
       actorUserId: args.approverUserId,
+      countedBy: hold.counted_by,
+      confirmedBy: hold.confirmed_by,
       tx,
     });
 

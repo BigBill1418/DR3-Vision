@@ -162,6 +162,9 @@
     "units_processing_label": "پروسیسنگ میں یونٹس",
     "program_units_label": "پروگرام یونٹس",
     "non_program_units_label": "غیر پروگرام یونٹس",
+    "counted_by_label": "گنتی کس نے کی؟",
+    "counted_by_placeholder": "گنتی کرنے والے شخص کا نام",
+    "confirmed_by_label": "تصدیق کنندہ (اختیاری)",
     "count_total_label": "جسمانی شمار کا کل",
     "split_entered_label": "پروگرام + غیر پروگرام درج شدہ",
     "computed_total_label": "کمپیوٹ شدہ چلتا ہوا کل",
@@ -170,7 +173,8 @@
     "recording": "ریکارڈ ہو رہا ہے…",
     "save_success": "جسمانی شمار ریکارڈ ہو گیا۔",
     "save_failed": "محفوظ کرنے میں ناکامی",
-    "mismatch_error": "پروگرام ({{program}}) + غیر پروگرام ({{nonProgram}}) = {{sum}}، جو جسمانی کل {{total}} کے برابر نہیں ہے۔ پول کو ایسے ایڈجسٹ کریں کہ مجموعہ درست ہو۔"
+    "mismatch_error": "پروگرام ({{program}}) + غیر پروگرام ({{nonProgram}}) = {{sum}}، جو جسمانی کل {{total}} کے برابر نہیں ہے۔ پول کو ایسے ایڈجسٹ کریں کہ مجموعہ درست ہو۔",
+    "counted_by_required": "گنتی درج کرنے سے پہلے بتائیں کہ گنتی کس نے کی۔"
   },
   "yard": {
     "heading": "یارڈ",

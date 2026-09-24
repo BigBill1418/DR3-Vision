@@ -49,6 +49,8 @@ interface SnapRow {
   reconciled_delta: number | null;
   voided_at: Date | null;
   voided_by: string | null;
+  counted_by?: string | null;
+  confirmed_by?: string | null;
 }
 
 interface AuditRow {
@@ -573,6 +575,28 @@ describe("F1 — a manager corrects TODAY's count", () => {
 // ═════════════════════════════════════════════════════════════════════════
 // F2 — the audit row carries WHO / WHEN / FROM / TO, tied to the operator
 // ═════════════════════════════════════════════════════════════════════════
+
+describe('ADR-0138 — a correction keeps who COUNTED', () => {
+  it('carries counted_by / confirmed_by onto the corrected anchor', async () => {
+    seedOperatorCount({
+      id: 'snap-today',
+      units_total: 2_483,
+      counted_by: 'Chris R',
+      confirmed_by: 'Patrick D',
+    });
+    const result = await correctPhysicalCount({
+      snapshotId: 'snap-today',
+      actorUserId: MORENA,
+      siteId: SITE,
+      corrected: { units_total: 2_438, units_in_processing: 0 },
+      poolAttribution: 'legacy',
+      now: MIDDAY_JUL28,
+    });
+    const created = db.snapshots.find((r) => r.id === result.snapshotId)!;
+    expect(created.counted_by).toBe('Chris R');
+    expect(created.confirmed_by).toBe('Patrick D');
+  });
+});
 
 describe('F2 — the correction is audited at the STORAGE layer', () => {
   it('records who changed it, when, from what, to what, and whose entry it was', async () => {

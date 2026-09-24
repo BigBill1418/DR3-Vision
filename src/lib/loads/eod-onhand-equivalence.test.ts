@@ -54,6 +54,7 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     siteInventorySnapshot: { findFirst: async () => anchorRow },
     auditLog: { findFirst: async () => ({ actor_label: 'system', actor: null }) },
+    inventoryCountHold: { findFirst: async () => null },
     inboundLoad: {
       aggregate: async () => ({ _max: { arrived_at: new Date('2026-08-18T15:00:00.000Z') } }),
       count: async () => 0,

@@ -226,9 +226,10 @@ export function renderEodInventoryHtml(
     `<tr><td style="padding:3px 0;font-size:13px;color:${INK}">Change from yesterday</td><td style="padding:3px 0;font-size:13px;color:${INK};text-align:right;white-space:nowrap;padding-left:16px">${eodDeltaHtml(eod.deltaFromYesterday)}</td></tr>` +
     eodRowHtml('Program / non-program split', split) +
     eodRowHtml('Latest physical count', counted) +
-    // Counter is a stored user/system name — escaped, it is the one untrusted
-    // string in this panel.
-    eodRowHtml('Counter', escapeHtml(eod.anchor?.counter ?? '—')) +
+    // ADR-0138 — who physically counted (free text typed on the count form) and,
+    // when different, who keyed it in. Escaped: it is the one untrusted string in
+    // this panel.
+    eodRowHtml('Counted by', escapeHtml(eod.anchor?.counter ?? '—')) +
     // ADR-0059 — when the balance's inbound includes a provisional MyMRC-haul aggregate,
     // say so plainly in the muted/warn tone. It is NOT presented as confirmed truth; the
     // label drops automatically once a paper_bulk (manager) or iPad confirmation replaces

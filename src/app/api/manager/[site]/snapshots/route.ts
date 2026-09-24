@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { reconcilePhysicalCount, PoolSplitMismatchError } from '@/lib/inventory/running-balance';
+import { CountPersonName } from '@/lib/inventory/count-attribution';
 import {
   classifyAnchorWrite,
   describeSwing,
@@ -31,6 +32,11 @@ const Create = z.object({
   program_units: z.number().int().nonnegative().optional(),
   non_program_units: z.number().int().nonnegative().optional(),
   pool_attribution: z.enum(['measured', 'legacy']).optional(),
+  // ADR-0138 — who physically counted. REQUIRED: the signed-in manager is who
+  // KEYED the count, which is recorded by the audit row; it is never assumed to
+  // be who counted (Eugene 09-16 was keyed by an admin, counted by the crew).
+  counted_by: CountPersonName,
+  confirmed_by: CountPersonName.nullable().optional(),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ site: string }> }) {
@@ -63,6 +69,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ site: st
         units_total: true,
         units_in_processing: true,
         reconciled_delta: true,
+        counted_by: true,
+        confirmed_by: true,
         program_units: true,
         non_program_units: true,
         pool_attribution: true,
@@ -85,7 +93,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
   try {
     const ctx = await requireActivatedManager(site);
     const parsed = Create.safeParse(await req.json());
-    if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+    if (!parsed.success) {
+      const missingCounter = parsed.error.issues.some((i) => i.path[0] === 'counted_by');
+      return NextResponse.json(
+        { error: missingCounter ? 'counted_by_required' : 'invalid_input' },
+        { status: 422 },
+      );
+    }
     const d = parsed.data;
 
     // ── ADR-0072 — the guardrail, enforced HERE TOO (handoff #270 Phase 3) ────
@@ -134,6 +148,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
           programUnits: d.program_units ?? null,
           nonProgramUnits: d.non_program_units ?? null,
           poolAttribution: d.pool_attribution ?? 'measured',
+          countedBy: d.counted_by,
+          confirmedBy: d.confirmed_by ?? null,
         },
         classification,
       });
@@ -168,6 +184,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ site: s
       nonProgramUnits: d.non_program_units ?? null,
       poolAttribution: d.pool_attribution ?? 'measured',
       actorUserId: ctx.userId,
+      countedBy: d.counted_by,
+      confirmedBy: d.confirmed_by ?? null,
     });
     // Tier rides back so the desktop can show the same current-vs-new context the
     // iPad does, rather than a silent 201 on a count that moved the floor 19%.

@@ -27,7 +27,7 @@ const PRIOR_TOTAL = 2483;
 
 const calls = {
   reconciled: [] as unknown[],
-  holds: [] as Array<{ siteId: string; newTotal: number }>,
+  holds: [] as Array<{ siteId: string; newTotal: number; input: Record<string, unknown> }>,
 };
 
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
@@ -57,9 +57,17 @@ vi.mock('@/lib/inventory/running-balance', () => ({
 vi.mock('@/lib/inventory/anchor-holds', () => ({
   createHold: async (
     _db: unknown,
-    args: { siteId: string; classification: { newTotal: number } },
+    args: {
+      siteId: string;
+      classification: { newTotal: number };
+      input: Record<string, unknown>;
+    },
   ) => {
-    calls.holds.push({ siteId: args.siteId, newTotal: args.classification.newTotal });
+    calls.holds.push({
+      siteId: args.siteId,
+      newTotal: args.classification.newTotal,
+      input: args.input,
+    });
     return { id: 'hold-1' };
   },
   eligibleApprovers: async () => [{ id: 'u1', name: 'Kelsey' }],
@@ -92,7 +100,12 @@ function postCount(body: Record<string, unknown>): Promise<Response> {
     new Request('https://dr3-vision.svdp.us/api/manager/woodland/snapshots', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ countedAt: '2026-08-18', units_in_processing: 0, ...body }),
+      body: JSON.stringify({
+        countedAt: '2026-08-18',
+        units_in_processing: 0,
+        counted_by: 'Chris R',
+        ...body,
+      }),
     }),
     { params },
   );
@@ -167,5 +180,46 @@ describe('POST /api/manager/[site]/snapshots — ADR-0072 is enforced on this do
     const res = await postCount({ units_total: 1700, units_in_processing: 800 });
     expect(res.status).toBe(201);
     expect(calls.holds).toHaveLength(0);
+  });
+});
+
+// ── ADR-0138 — who COUNTED is asked, never assumed to be the signed-in account ──
+// Eugene's 09-16 count was keyed through this route by an admin on the crew's
+// behalf, and the daily report named the admin as "Counter" for a week. The route
+// now refuses a count that does not say who counted, and carries the answer to
+// both the anchor write and a Tier-2 hold.
+describe('POST /api/manager/[site]/snapshots — ADR-0138 who counted', () => {
+  it('REFUSES a count with no counted_by, and writes nothing', async () => {
+    const res = await postCount({ units_total: 2500, counted_by: undefined });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { error: string }).error).toBe('counted_by_required');
+    expect(calls.reconciled).toHaveLength(0);
+    expect(calls.holds).toHaveLength(0);
+  });
+
+  it('REFUSES a whitespace-only counted_by', async () => {
+    const res = await postCount({ units_total: 2500, counted_by: '   ' });
+    expect(res.status).toBe(422);
+    expect(calls.reconciled).toHaveLength(0);
+  });
+
+  it('carries counted_by / confirmed_by (trimmed) to the anchor write', async () => {
+    const res = await postCount({
+      units_total: 2500,
+      counted_by: '  Chris R ',
+      confirmed_by: 'Patrick D',
+    });
+    expect(res.status).toBe(201);
+    const args = calls.reconciled[0] as Record<string, unknown>;
+    expect(args['countedBy']).toBe('Chris R');
+    expect(args['confirmedBy']).toBe('Patrick D');
+    // The signed-in account stays the ENTERER (the audit actor), not the counter.
+    expect(args['actorUserId']).toBe('user-manager');
+  });
+
+  it('carries counted_by onto a Tier-2 hold so the release can write it', async () => {
+    await postCount({ units_total: 1700, counted_by: 'Chris R' });
+    expect(calls.holds[0]!.input['countedBy']).toBe('Chris R');
+    expect(calls.holds[0]!.input['confirmedBy']).toBeNull();
   });
 });

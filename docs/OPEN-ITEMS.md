@@ -19,6 +19,28 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BY — 2026-09-24 the report named the admin who keyed Eugene's count as its counter — **FIXED (ADR-0138); BY-1 backfill below; BY-2 open**
+
+Bill, 2026-09-24 6:22 AM PDT: _"on the eugene production report last night it says Bill
+Barnard was the counter - WTF ?"_ The report's Counter row was the snapshot's insert
+audit actor — who **keyed** the count, not who counted. Eugene's 09-16 count (`7232d092`)
+was counted by Chris R, confirmed by Patrick D, relayed by Rick and keyed by an admin
+session (BT-6 below). Fixed in ADR-0138: `counted_by` / `confirmed_by` columns, required
+"Who counted?" on the manager count form + route, report row "Counted by" that never
+prints the keying account as the counter.
+
+- **BY-1 — backfill of documented counters.** `7232d092` → `Chris R` / `Patrick D`
+  (source commit `3a315881`, BT-6). Every other physical row is left NULL — no named
+  counter is recorded for any of them (Woodland `04cb7ae2` is "Bill's hard count" in
+  chat; `855a23b1`/`6f8ae03b` "crew counted total only"). If Woodland's 09-14 counter is
+  known, set it with an audited update. Execution evidence: see the line below.
+- **BY-2 — OPEN: ask "Who counted?" on the iPad floor count.** Deferred because the
+  kiosk shell updates lazily and a newly required field would 422 counts from devices on
+  the old bundle (ADR-0078 D10). Until then floor counts print "Not recorded · entered by
+  <operator>". Needs: optional field on `count-client.tsx` + `CountCreate`, EN/ES/UR.
+
+---
+
 ## 0.BX — 2026-09-22 equipment names drift on every resolve — **ADR-0135 IMPLEMENTED 2026-09-23 (all 3 phases, BX-1 DONE); BX-2 three trailer pairs merged fleet-wide; BX-3 + BX-6 executed 2026-09-23 1:15 AM PT; BX-7 answered + guard shipped (ADR-0136) + same-file key added 2026-09-23 night (ADR-0136 addendum); BX-2 (48-68) / BX-4 / BX-5 DONE 7:15 AM PT on Morena's answers (0 open equipment requests); BX-8 duplicate approvals await AP; **BX-12 DONE (ADR-0137) — Woodland throughput designated to the Terex, 16 days + 5 alerts moved back off the EQ24 shear**; BX-10 down to 2 pairs for Bill (`3` + `Truck 9` marked Different assets 11:13 PM PT); BX-9 / BX-10 / BX-11 stand** (Bill, 2026-09-22/23)
 
 Bill: _"we can't have staff typing in different equipment with different spellings…

@@ -45,6 +45,7 @@ import {
   anchorFlowBounds,
 } from '@/lib/inventory/running-balance';
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
+import { formatCountAttribution } from '@/lib/inventory/count-attribution';
 import { businessDaysBetween } from '@/lib/mymrc/business-days';
 import { DEFAULT_MAX_BUSINESS_DAYS, fleetWideHolidays } from '@/lib/mymrc/freshness';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
@@ -150,7 +151,13 @@ export interface EodAnchorInfo {
   poolAttribution: string;
   /** Whole days between the anchor's Pacific day and the report day. */
   daysSince: number;
-  /** Who recorded it (audit actor name, or the system label). Null when unknown. */
+  /**
+   * ADR-0138 — who counted, as one printable line (`formatCountAttribution`):
+   * "Chris R, confirmed by Patrick D · entered by Bill Barnard", or
+   * "Not recorded · entered by X" when the counter was never captured. The
+   * account that KEYED the count is never presented as the counter. Null when
+   * nothing at all is known.
+   */
   counter: string | null;
 }
 
@@ -335,19 +342,42 @@ function pctOf(part: number, total: number): number | null {
 }
 
 /**
- * Who took the physical count. Snapshots carry no counter column, so the actor
- * comes from the append-only audit row `reconcilePhysicalCount` writes in the
- * same transaction (CLAUDE.md hard rule #6) — the audit log IS the provenance
- * record, so reading it here keeps one truth rather than denormalising a name.
+ * ADR-0138 — who counted, and who entered it, for one anchor.
+ *
+ * Before ADR-0138 this returned the insert audit actor and the report labelled it
+ * "Counter". The audit actor is who KEYED the count; Eugene's 09-16 count was
+ * keyed by an admin on the crew's behalf, so the report named the admin as the
+ * counter for a week. The counter is now the snapshot's own `counted_by` /
+ * `confirmed_by`; the audit actor is only ever the "entered by" half.
+ *
+ * The enterer of a released Tier-2 hold is the person who submitted the held
+ * count (`inventory_count_holds.created_by`), not the approver the snapshot's
+ * insert row names — the approver released it, they did not enter it.
  */
-async function resolveCounter(snapshotId: string): Promise<string | null> {
-  const entry = await prisma.auditLog.findFirst({
-    where: { table_name: 'site_inventory_snapshots', row_id: snapshotId, action: 'insert' },
-    orderBy: { created_at: 'asc' },
-    select: { actor_label: true, actor: { select: { name: true } } },
+async function resolveCounter(anchor: {
+  id: string;
+  counted_by: string | null;
+  confirmed_by: string | null;
+}): Promise<string | null> {
+  const [entry, hold] = await Promise.all([
+    prisma.auditLog.findFirst({
+      where: { table_name: 'site_inventory_snapshots', row_id: anchor.id, action: 'insert' },
+      orderBy: { created_at: 'asc' },
+      select: { actor_label: true, actor: { select: { name: true } } },
+    }),
+    prisma.inventoryCountHold.findFirst({
+      where: { resulting_snapshot_id: anchor.id },
+      select: { created_by: true },
+    }),
+  ]);
+  const holdEnterer = hold
+    ? await prisma.user.findUnique({ where: { id: hold.created_by }, select: { name: true } })
+    : null;
+  return formatCountAttribution({
+    countedBy: anchor.counted_by,
+    confirmedBy: anchor.confirmed_by,
+    enteredBy: holdEnterer?.name ?? entry?.actor?.name ?? entry?.actor_label ?? null,
   });
-  if (!entry) return null;
-  return entry.actor?.name ?? entry.actor_label ?? null;
 }
 
 /**
@@ -452,7 +482,13 @@ export async function getEodInventorySnapshot(
       // `pool_attribution`; naming a different count than the balance used makes
       // the freshness line describe a row the number did not come from.
       orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
-      select: { id: true, snapshot_at: true, pool_attribution: true },
+      select: {
+        id: true,
+        snapshot_at: true,
+        pool_attribution: true,
+        counted_by: true,
+        confirmed_by: true,
+      },
     }),
     latestFlowDayKey(siteId, endOfDay),
   ]);
@@ -462,7 +498,7 @@ export async function getEodInventorySnapshot(
         countedAt: anchorRow.snapshot_at,
         poolAttribution: anchorRow.pool_attribution,
         daysSince: daysSinceAnchor(anchorRow.snapshot_at, reportDate),
-        counter: await resolveCounter(anchorRow.id),
+        counter: await resolveCounter(anchorRow),
       }
     : null;
 

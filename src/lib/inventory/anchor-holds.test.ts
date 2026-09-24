@@ -77,10 +77,7 @@ function fakeDb(over: Partial<Record<string, unknown>> = {}) {
       // is not `pending` makes the guard MISS — which is the whole behaviour
       // under test. A fake that always reports a hit cannot fail when the guard
       // stops guarding.
-      updateMany: async (a: {
-        where: Record<string, unknown>;
-        data: Record<string, unknown>;
-      }) => {
+      updateMany: async (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
         const h = hold as unknown as Record<string, unknown>;
         for (const [k, v] of Object.entries(a.where)) {
           if (k === 'id') continue;
@@ -121,7 +118,7 @@ function fakeDb(over: Partial<Record<string, unknown>> = {}) {
   // claim is not expressible against a fake at all, and is proven in
   // `anchor-holds.db.test.ts` against a real Postgres.
   return Object.assign(self, {
-    $transaction: async <T,>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(self),
+    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(self),
   });
 }
 
@@ -141,6 +138,15 @@ describe('releaseHold', () => {
     expect(db.updates[0]!['status']).toBe('approved');
     expect(db.updates[0]!['approval_path']).toBe('pin');
     expect(db.updates[0]!['approved_by']).toBe(MANAGER);
+  });
+
+  it('ADR-0138 — the release writes the HELD counter, not the approver', async () => {
+    const db = fakeDb({ counted_by: 'Chris R', confirmed_by: 'Patrick D' });
+    await releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' });
+    const args = vi.mocked(reconcilePhysicalCount).mock.calls[0]![0];
+    expect(args.countedBy).toBe('Chris R');
+    expect(args.confirmedBy).toBe('Patrick D');
+    expect(args.actorUserId).toBe(MANAGER);
   });
 
   it('REFUSES a self-release by the operator who entered it', async () => {

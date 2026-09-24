@@ -269,6 +269,20 @@ model SiteInventorySnapshot {
   voided_at         DateTime?
   voided_by         String?
 
+  // ADR-0138 — WHO COUNTED, as distinct from who keyed the count in.
+  //
+  // The insert audit row names the account that submitted the count. That is a
+  // true statement about data entry and a false one about the floor: Eugene's
+  // first count was counted by a crew member, confirmed by another, relayed by
+  // the site manager and keyed by an admin — and the daily report printed the
+  // admin as "Counter" for a week. These are the people who physically counted,
+  // as the entry form captured them (free text: crew members are not all users).
+  // Required on the manager desktop route for new counts; NULL on rows from
+  // before this column and on paths that do not ask (the floor iPad, where the
+  // signed-in operator is recorded as the ENTERER, never promoted to counter).
+  counted_by        String?
+  confirmed_by      String?
+
   @@index([site_id, snapshot_at])
   @@index([site_id, snapshot_kind, snapshot_at])
   // ADR-0120 — a partial UNIQUE index on (site_id, snapshot_at) WHERE
@@ -6181,6 +6195,9 @@ model InventoryCountHold {
   program_units       Decimal? @db.Decimal(7, 1)
   non_program_units   Decimal? @db.Decimal(7, 1)
   pool_attribution    String   @default("measured")
+  // ADR-0138 — who counted / confirmed, held with the count so a release writes them.
+  counted_by          String?
+  confirmed_by        String?
 
   // What made it Tier 2, captured at hold time. Recomputed on approval — these
   // are the record of why it was held, not the authority for writing it.

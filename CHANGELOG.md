@@ -9,6 +9,35 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-24 — The report says who COUNTED, not who keyed the count in (ADR-0138)
+
+Bill, 2026-09-24 6:22 AM PDT: _"on the eugene production report last night it says Bill
+Barnard was the counter - WTF ?"_
+
+### Fixed
+
+- **The daily report's inventory panel named the account that KEYED a count as its
+  counter.** `resolveCounter` (`src/lib/loads/eod-inventory.ts`) read the snapshot's
+  insert audit actor. Eugene's only count (`7232d092`, 751 = 19/732, 09-16) was counted by
+  Chris R and confirmed by Patrick D but keyed by an admin, so every Eugene report since
+  09-16 said "Counter: Bill Barnard". The row is now **Counted by** and prints
+  `formatCountAttribution` (`src/lib/inventory/count-attribution.ts`): "Chris R, confirmed
+  by Patrick D · entered by Bill Barnard"; "Not recorded · entered by X" when no counter
+  was captured. A released Tier-2 hold is "entered by" its submitter, not the approver.
+
+### Added
+
+- `site_inventory_snapshots.counted_by` / `confirmed_by` and the same pair on
+  `inventory_count_holds` (migration `20260865_adr0138_count_counted_by`).
+- The manager count form asks **Who counted?** (required, never prefilled with the
+  signed-in user) and **Confirmed by (optional)**, EN/ES/UR. `POST
+/api/manager/[site]/snapshots` refuses a count without it (`422 counted_by_required`).
+- Hold release, count correction (ADR-0105) and anchor reactivation carry the counter
+  forward with the figures.
+- Backfill: `7232d092` → Chris R / Patrick D (source: commit `3a315881`, OPEN-ITEMS § 0.BT
+  BT-6), `scripts/one-off/2026-09-24-adr0138-counted-by-backfill.sql`. No other physical
+  count has a documented counter; those stay NULL. Execution record: OPEN-ITEMS § 0.BY.
+
 ## 2026-09-23 — An invoice FILE is approved once (ADR-0136 addendum); two equipment pairs judged distinct (BX-11)
 
 Bill: "push on" (2026-09-23 ~10:52 PM PDT).
