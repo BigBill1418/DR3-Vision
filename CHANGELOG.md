@@ -9,6 +9,15 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-24 — Woodland's 09-14 hard count was counted by Juan (ADR-0138 follow-up)
+
+Bill, 8:57 PM PDT: _"Juan counted it."_ Anchor `04cb7ae2` (885, closing 09-14) now carries
+`counted_by = 'Juan'`, so Woodland's report reads "Counted by: Juan · entered by Bill
+Barnard" instead of "Not recorded". One guarded transaction + audit row
+(`scripts/one-off/2026-09-24-adr0138-woodland-counted-by-juan.sql`). The pre-change row-level
+CSV backup failed on a shell-quoting error and was not taken; the prior value (NULL) is in
+the 07:27 AM PDT ADR-0138 backfill dump and the audit row's `before`.
+
 ## 2026-09-24 — The report says who COUNTED, not who keyed the count in (ADR-0138)
 
 Bill, 2026-09-24 6:22 AM PDT: _"on the eugene production report last night it says Bill

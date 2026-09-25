@@ -32,8 +32,10 @@ prints the keying account as the counter.
 - **BY-1 — backfill of documented counters.** `7232d092` → `Chris R` / `Patrick D`
   (source commit `3a315881`, BT-6). Every other physical row is left NULL — no named
   counter is recorded for any of them (Woodland `04cb7ae2` is "Bill's hard count" in
-  chat; `855a23b1`/`6f8ae03b` "crew counted total only"). If Woodland's 09-14 counter is
-  known, set it with an audited update. **EXECUTED 2026-09-24 7:27 AM PDT** after the
+  chat; `855a23b1`/`6f8ae03b` "crew counted total only"). **Woodland `04cb7ae2` → `Juan`
+  DONE 2026-09-24 8:58 PM PDT** (Bill in session: "Juan counted it"), audited update via
+  `scripts/one-off/2026-09-24-adr0138-woodland-counted-by-juan.sql`; prior value NULL (in the
+  07:27 AM PDT backfill dump and the audit row's `before`). **EXECUTED 2026-09-24 7:27 AM PDT** after the
   deploy (`05e16c7`, app recreated 7:23 AM PDT, migration `20260865_adr0138_count_counted_by`
   finished 7:23:30 AM PDT): backup
   `svdp-dev:~/backups-adhoc/dr3-site_inventory_snapshots-pre-adr0138-backfill-20260924-072713-PT.dump`

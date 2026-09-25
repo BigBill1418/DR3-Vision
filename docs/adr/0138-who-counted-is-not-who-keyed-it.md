@@ -71,6 +71,8 @@ Only rows whose counter is **documented** are filled; the rest stay NULL and pri
 `Patrick D`, source commit `3a315881` + OPEN-ITEMS § 0.BT BT-6. Woodland's live anchor
 `04cb7ae2` (885, 09-14) is recorded as "Bill's hard count" relayed in chat; who
 physically counted is not written anywhere, so it is left NULL rather than guessed.
+**Amended 2026-09-24 8:58 PM PDT:** Bill named the counter ("Juan counted it"); `04cb7ae2`
+→ `counted_by = 'Juan'` via `scripts/one-off/2026-09-24-adr0138-woodland-counted-by-juan.sql`.
 Script: `scripts/one-off/2026-09-24-adr0138-counted-by-backfill.sql` (one transaction,
 hard-stop gates, audit row, system actor), after a table backup.
 
