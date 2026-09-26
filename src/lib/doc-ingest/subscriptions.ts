@@ -25,7 +25,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { PrismaClient, DocIngestSubscription } from '@prisma/client';
-import { DocIngestAccessDeniedError, type DocIngestGraph } from './graph';
+import { DocIngestAccessDeniedError, DocIngestGraphError, type DocIngestGraph } from './graph';
 import {
   DOC_INGEST_RENEW_LEAD_MS,
   docIngestNotificationUrl,
@@ -363,7 +363,17 @@ async function createSubscription(
       // EXPECTED outcome for an item-level share (SUBSCRIPTION_SCOPE_NOTE), it
       // is not fixable, and it re-paged every 24h forever. A validation failure
       // or any other refusal still pages: those are actionable.
-      dashboardOnly: isScope,
+      //
+      // 2026-09-25 — and a TRANSIENT Graph failure (5xx / 429 / socket) on a
+      // create whose previous answer was that same structural refusal is a tile
+      // too. Microsoft failed before it could say 403 again; the only possible
+      // outcome of a successful retry is the refusal. Live: all three watched
+      // drives have been refused 47-64 times and never held a subscription, and
+      // a Graph 503 on one of those retries paged Bill 2026-09-24 06:36 PDT
+      // with "only latency is affected" about a push path that has never existed.
+      dashboardOnly:
+        isScope ||
+        (isTransientGraphFailure(e) && wasStructurallyRefused(reuse?.last_error ?? null)),
       now,
     });
   }
@@ -516,6 +526,27 @@ export async function recordNotificationDelivery(
     where: { id },
     data: { last_notification_at: now, notifications_received: { increment: 1 } },
   });
+}
+
+/**
+ * A Graph failure that says nothing about the request: a 5xx, a 429, or no
+ * HTTP answer at all (socket / timeout, `status` null). A 4xx other than 429 is
+ * an answer about the request and stays actionable.
+ */
+export function isTransientGraphFailure(e: unknown): boolean {
+  if (!(e instanceof DocIngestGraphError)) return false;
+  return e.status === null || e.status === 429 || e.status >= 500;
+}
+
+/**
+ * Was the previous attempt on this row Microsoft's structural refusal
+ * (SUBSCRIPTION_SCOPE_NOTE)? Read from the stored `last_error`, which is
+ * `DocIngestAccessDeniedError.message` ("access denied for POST /subscriptions")
+ * or a raw 403 line — the same two shapes `isScope` accepts.
+ */
+export function wasStructurallyRefused(lastError: string | null): boolean {
+  if (!lastError) return false;
+  return /^access denied for POST \/subscriptions|\b403\b|forbidden/i.test(lastError);
 }
 
 function describe(e: unknown): string {

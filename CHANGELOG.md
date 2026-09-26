@@ -9,6 +9,34 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-25 — Vision alert review: three noise sources silenced, and MRC corrections can reach the mirror again (OPEN-ITEMS 0.BZ)
+
+Bill, 6:53 PM PDT: _"look at the ntfy server and only look at the vision related alerts for
+the last 48 hours and tell me what the hell is going on and fix whatever the problem is."_
+
+### Fixed
+
+- **A Delivered haul's detail was frozen at first fetch, so an MRC correction could never
+  land.** `idsNeedingDetail` for `haulsCompleted` re-read a row only while its stored status
+  was not yet `Delivered` (the 2026-08-03 repair). Once delivered, nothing asked MRC again —
+  H-138391 / H-139774 (OPEN-ITEMS BS-1) were last detailed 09-08 / 09-09, and BS-1's promised
+  self-heal ("the hourly scrape then re-details") could not happen. A haul delivered in the
+  last 45 days is now re-read once its detail is 24 h old (`DELIVERED_REDETAIL_INTERVAL_MS`
+  / `_WINDOW_MS` in `src/lib/mymrc/sync.ts`; ~450 rows, ~5 batched POSTs a day).
+- **The invariant digest re-sent the same finding every morning.** INV-INBOUND-PLAUSIBLE
+  named the same two hauls at 02:30 for six days. The digest fingerprint now hashes which
+  invariants and subjects it names (`digestFingerprint`, `src/lib/invariants/notify.ts`):
+  a new or cleared subject publishes at the next run, an unchanged digest at most weekly
+  (`DIGEST_COOLDOWN_MS` 20 h → 7 d). Tier A refusal pages are unchanged.
+- **A Graph 503 paged about a push subscription that has never existed.** All three watched
+  drives have been structurally refused (ADR-0097 §2) 47–64 times; one retry got a 503
+  instead of the 403 and paged `default` on 09-24 6:36 AM. A transient Graph failure
+  (5xx / 429 / socket) on a create whose previous answer was that refusal is now
+  dashboard-only (`isTransientGraphFailure` + `wasStructurallyRefused`,
+  `src/lib/doc-ingest/subscriptions.ts`). A 503 on a drive that was NOT refused still pages.
+- (ops-monitors `1e273a5`, not this repo) the DNS guard's self-check page now needs 3
+  consecutive faulted runs; one Cloudflare blip paged `high` at 12:25 AM 09-25.
+
 ## 2026-09-24 — Woodland's 09-14 hard count was counted by Juan (ADR-0138 follow-up)
 
 Bill, 8:57 PM PDT: _"Juan counted it."_ Anchor `04cb7ae2` (885, closing 09-14) now carries

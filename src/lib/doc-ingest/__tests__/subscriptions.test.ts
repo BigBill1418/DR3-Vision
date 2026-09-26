@@ -17,8 +17,11 @@ import {
   verifyNotification,
   subscriptionRetryDelayMs,
   SUBSCRIPTION_SCOPE_NOTE,
+  isTransientGraphFailure,
+  wasStructurallyRefused,
 } from '../subscriptions';
-import { DocIngestAccessDeniedError, type DocIngestGraph } from '../graph';
+import { DocIngestAccessDeniedError, DocIngestGraphError, type DocIngestGraph } from '../graph';
+import { publishNtfy } from '@/lib/ntfy';
 import {
   makeFakePrisma,
   resetFakeIds,
@@ -256,6 +259,59 @@ describe('ensureSubscriptions', () => {
     const anomaly = prisma._stores.anomalies.find((a) => a['kind'] === 'subscription_renew_failed');
     expect(anomaly?.['context']).toMatchObject({ scopeRelated: true });
     expect(String(anomaly?.['detail'])).toContain('STRUCTURAL limit');
+  });
+
+  it('2026-09-25 — a Graph 503 on a retry of a STRUCTURALLY refused create does not page', async () => {
+    // Live 2026-09-24 06:36 PDT: every watched drive had been refused 47-64 times
+    // and never held a subscription; one retry hit a Graph 503 instead of the
+    // 403 and paged Bill about a push path that has never existed.
+    await seedWatchedSource();
+    let call = 0;
+    const graph = makeGraph({
+      createSubscription: async () => {
+        call += 1;
+        if (call === 1) throw new DocIngestAccessDeniedError('POST /subscriptions');
+        throw new DocIngestGraphError('graph POST /subscriptions → HTTP 503: UnknownError', 503);
+      },
+    });
+    const pub = vi.mocked(publishNtfy);
+    pub.mockClear();
+
+    await ensureSubscriptions(p(), graph, NOW);
+    await ensureSubscriptions(p(), graph, new Date(NOW.getTime() + 86_400_000));
+
+    expect(call).toBe(2);
+    expect(prisma._stores.subscriptions[0]?.['last_error']).toContain('HTTP 503');
+    expect(pub).not.toHaveBeenCalled();
+  });
+
+  it('a Graph 503 on a drive that was NOT structurally refused still pages', async () => {
+    await seedWatchedSource();
+    const graph = makeGraph({
+      createSubscription: async () => {
+        throw new DocIngestGraphError('graph POST /subscriptions → HTTP 503: UnknownError', 503);
+      },
+    });
+    const pub = vi.mocked(publishNtfy);
+    pub.mockClear();
+
+    await ensureSubscriptions(p(), graph, NOW);
+
+    expect(pub).toHaveBeenCalled();
+  });
+
+  it('classifies transient vs answered Graph failures and the stored refusal shapes', () => {
+    expect(isTransientGraphFailure(new DocIngestGraphError('x', 503))).toBe(true);
+    expect(isTransientGraphFailure(new DocIngestGraphError('x', 429))).toBe(true);
+    expect(isTransientGraphFailure(new DocIngestGraphError('x', null))).toBe(true);
+    expect(isTransientGraphFailure(new DocIngestGraphError('x', 400))).toBe(false);
+    expect(isTransientGraphFailure(new Error('x'))).toBe(false);
+    expect(wasStructurallyRefused('access denied for POST /subscriptions')).toBe(true);
+    expect(wasStructurallyRefused('graph POST /subscriptions → HTTP 403: Forbidden')).toBe(true);
+    expect(wasStructurallyRefused('graph POST /subscriptions → HTTP 503: UnknownError')).toBe(
+      false,
+    );
+    expect(wasStructurallyRefused(null)).toBe(false);
   });
 
   it('keeps ONE subscription row per drive across repeated failures', async () => {

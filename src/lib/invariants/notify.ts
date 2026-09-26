@@ -27,6 +27,10 @@
 //     cooldown bounds a persistent failure to one page per day rather than to one
 //     page ever. Closing this needs the `invariant_state` table D5 already
 //     specifies; it is the first thing to build on top of this.
+//     2026-09-25: the DIGEST (Tier B + indeterminate) now gets most of that
+//     benefit without the table - its fingerprint hashes which invariants and
+//     subjects it names (`digestFingerprint`), so a changed finding publishes at
+//     once and an unchanged one repeats at most weekly (DIGEST_COOLDOWN_MS).
 //
 // ## Why the all-green deadman was dropped
 //
@@ -53,9 +57,19 @@ import type { InvariantReport, InvariantRunResult } from './types';
 
 const TOPIC = 'dr3-vision-system';
 
-/** One digest per day. Shorter than 24 h so a fixed daily cron is never skipped
- *  by its own clock jitter, longer than any plausible double-fire. */
-export const DIGEST_COOLDOWN_MS = 20 * 60 * 60 * 1000;
+/**
+ * How often an UNCHANGED digest may repeat. 2026-09-25: the digest re-sent the
+ * identical two Woodland hauls (H-138391 / H-139774, INV-INBOUND-PLAUSIBLE) every
+ * morning at 02:30 from 09-20 on - a finding that is waiting on MRC (OPEN-ITEMS
+ * BS-1), that nobody can act on in five minutes, and whose seventh copy says
+ * nothing the first did not. ADR-0037 gate 1 fails from the second copy on.
+ *
+ * The fingerprint now carries a hash of WHAT was found (see `digestFingerprint`),
+ * so a NEW or CHANGED finding still publishes at the very next run - the digest
+ * lost no sensitivity - while the same finding repeats at most weekly, which is
+ * the reminder that stops a known-open item from being forgotten.
+ */
+export const DIGEST_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** ADR-0131 D6 — a refusal-tier page, and the blindness alarm, get a full day each. */
 export const PAGE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -108,6 +122,44 @@ export function buildDigestBody(report: InvariantReport): string {
       ` in ${report.durationMs}ms${ok.length > 0 ? ` (ok: ${ok.map((r) => r.id).join(' ')})` : ''}`,
   );
   return parts.join('\n\n');
+}
+
+/**
+ * The digest's identity: which invariants are in it, in which state, about which
+ * subjects. Deliberately NOT the violation `detail` text - details carry live
+ * figures (an on-hand count, a percentage) that move every day, and keying on
+ * them would make an unchanged finding look new each morning, which is the exact
+ * repetition this exists to stop. The subject (a site, a haul id) is what makes a
+ * finding a different finding.
+ */
+export function digestFingerprint(results: readonly InvariantRunResult[]): string {
+  const keys = results
+    .map((r) =>
+      r.status === 'indeterminate'
+        ? `${r.id}|indeterminate`
+        : `${r.id}|${r.status}|${r.violations
+            .map((v) => v.subject)
+            .sort()
+            .join(',')}`,
+    )
+    .sort();
+  return `dr3-invariants-digest:${fnv1a64(keys.join('\n'))}`;
+}
+
+/**
+ * FNV-1a, 64-bit, as 16 hex chars. Not a security hash and does not need to be:
+ * it only has to make two different digests land on different cooldown keys.
+ * Written out rather than `node:crypto` because this directory's read-only guard
+ * (`readonly.guard.test.ts`) bans the `.update(` token outright, and a hash
+ * object's `.update()` is indistinguishable from a Prisma write to that scan.
+ */
+function fnv1a64(text: string): string {
+  let h = 0xcbf29ce484222325n;
+  for (let i = 0; i < text.length; i++) {
+    h ^= BigInt(text.charCodeAt(i));
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return h.toString(16).padStart(16, '0');
 }
 
 /**
@@ -167,7 +219,7 @@ export async function notifyInvariantReport(
     (r) => (r.status === 'violated' && r.tier === 'implausibility') || r.status === 'indeterminate',
   );
   if (digestWorthy.length > 0) {
-    const fp = 'dr3-invariants-digest';
+    const fp = digestFingerprint(digestWorthy);
     published.push(fp);
     await publish({
       topic: TOPIC,

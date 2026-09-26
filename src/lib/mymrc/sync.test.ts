@@ -5,6 +5,8 @@ import {
   computeDisappearedIds,
   decideErrorPage,
   decidePage,
+  DELIVERED_REDETAIL_INTERVAL_MS,
+  DELIVERED_REDETAIL_WINDOW_MS,
   isZeroAnomaly,
   makeSiteIdResolver,
   siteCodeFromDiscriminator,
@@ -720,7 +722,28 @@ describe('syncFeed — a detail is not forever (frozen-status regression, 2026-0
     expect(model.findMany).toHaveBeenCalledWith({
       where: {
         id: { in: ['frozen-confirmed-1'] },
-        OR: [{ detail_fetched_at: null }, { status: null }, { status: { not: 'Delivered' } }],
+        OR: [
+          { detail_fetched_at: null },
+          { status: null },
+          { status: { not: 'Delivered' } },
+          {
+            detail_fetched_at: {
+              lt: new Date(NOW().getTime() - DELIVERED_REDETAIL_INTERVAL_MS),
+            },
+            OR: [
+              {
+                recycler_reported_delivery_date: {
+                  gte: new Date(NOW().getTime() - DELIVERED_REDETAIL_WINDOW_MS),
+                },
+              },
+              {
+                docking_appointment_date: {
+                  gte: new Date(NOW().getTime() - DELIVERED_REDETAIL_WINDOW_MS),
+                },
+              },
+            ],
+          },
+        ],
       },
       select: { id: true, external_haul_id: true },
     });

@@ -37,6 +37,20 @@ const DETAIL_BATCH_SIZE = 100;
 const REPAGE_MS = 6 * 60 * 60 * 1000; // re-page a persisting failure at most every 6h
 const DEADMAN_MS = 26 * 60 * 60 * 1000; // no successful run in >26h → page
 
+// 2026-09-25 — a DELIVERED haul's detail was frozen at first fetch. The
+// 2026-08-03 repair re-details a completed-view row only while its stored status
+// is not yet 'Delivered'; once it is, nothing ever asks MRC about it again. So a
+// correction MRC makes to a delivered haul's units can never reach the mirror,
+// and anything reading the mirror (INV-INBOUND-PLAUSIBLE, the inbound bridge)
+// holds the uncorrected figure for ever. Measured live: H-138391 / H-139774 —
+// the two impossible Woodland hauls OPEN-ITEMS BS-1 is waiting on MRC to fix —
+// were last detailed 2026-09-08 / 09-09 and have not been re-read since, while
+// BS-1 said "the hourly scrape then re-details" and the invariant digest re-sent
+// them daily. Recently delivered hauls are now re-read at most once per
+// interval, bounded to the window in which MRC still corrects a haul.
+export const DELIVERED_REDETAIL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const DELIVERED_REDETAIL_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
+
 export type Logger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: Logger = () => undefined;
 
@@ -196,6 +210,7 @@ function haulsAdapter(
   prisma: PrismaClient,
   resolveSiteId: SiteIdResolver,
   feed: 'hauls' | 'haulsCompleted' = 'hauls',
+  now: Date = new Date(),
 ): FeedAdapter {
   const model = prisma.mymrcHaulsMirror;
   return {
@@ -253,11 +268,31 @@ function haulsAdapter(
       // absorb the transition and its unit counts. The ACTIVE view keeps the
       // null-only filter: re-detailing every scheduled haul hourly would be
       // pure detail-load with nothing to absorb.
+      //
+      // 2026-09-25 — and a Delivered detail is not forever either: see
+      // DELIVERED_REDETAIL_*. The fourth branch re-reads a recently delivered
+      // haul once its detail is a day old, so an MRC unit correction lands
+      // within a day instead of never. Bounded by delivery date so the whole
+      // 1,200-row history is not re-read daily (~450 rows in the window today,
+      // ~5 batched POSTs a day).
+      const redetailBefore = new Date(now.getTime() - DELIVERED_REDETAIL_INTERVAL_MS);
+      const deliveredSince = new Date(now.getTime() - DELIVERED_REDETAIL_WINDOW_MS);
       const where =
         feed === 'haulsCompleted'
           ? {
               id: { in: [...listedIds] },
-              OR: [{ detail_fetched_at: null }, { status: null }, { status: { not: 'Delivered' } }],
+              OR: [
+                { detail_fetched_at: null },
+                { status: null },
+                { status: { not: 'Delivered' } },
+                {
+                  detail_fetched_at: { lt: redetailBefore },
+                  OR: [
+                    { recycler_reported_delivery_date: { gte: deliveredSince } },
+                    { docking_appointment_date: { gte: deliveredSince } },
+                  ],
+                },
+              ],
             }
           : { id: { in: [...listedIds] }, detail_fetched_at: null };
       const rows = await model.findMany({
@@ -425,9 +460,10 @@ function adapterFor(
   feed: FeedName,
   prisma: PrismaClient,
   resolveSiteId: SiteIdResolver,
+  now: Date = new Date(),
 ): FeedAdapter {
   if (feed === 'hauls' || feed === 'haulsCompleted') {
-    return haulsAdapter(prisma, resolveSiteId, feed);
+    return haulsAdapter(prisma, resolveSiteId, feed, now);
   }
   if (feed === 'processed') return processedAdapter(prisma, resolveSiteId);
   return outboundAdapter(prisma, resolveSiteId);
@@ -563,7 +599,7 @@ export async function syncFeed(ctx: SyncFeedContext): Promise<SyncFeedResult> {
   }
 
   try {
-    const adapter = adapterFor(ctx.feed, ctx.prisma, resolveSiteId);
+    const adapter = adapterFor(ctx.feed, ctx.prisma, resolveSiteId, started);
     const { ids, complete } = await ctx.client.fetchListRecordIds(ctx.feed);
     rowsListed = ids.length;
 

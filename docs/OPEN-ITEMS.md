@@ -19,6 +19,42 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.BZ — 2026-09-25 Vision alert review (Bill: _"look at the ntfy server … vision related alerts for the last 48 hours and tell me what the hell is going on and fix whatever the problem is"_) — **3 noise sources FIXED; 1 real defect FIXED; 2 items need a human**
+
+Window 2026-09-23 6:53 PM → 2026-09-25 6:53 PM PDT, read from the `ntfy` cache on BOS-HQ
+(`dr3-vision-system`, `dr3-vision-container`, `dr3-vision-dns`, `chad-hq-backup`,
+`vlm-backup`) plus the ntfy.sh fallback topics (all five empty). 20 messages; no Vision
+alert on `infrawatch-*` / `noc-alerts`.
+
+| Alert (count)                                                                                                                 | Verdict                                                                                                                                                                                                                   | Fix                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data invariants: 1 violated` (2 in window, **6 in a row since 09-20**) — INV-INBOUND-PLAUSIBLE, Woodland H-138391 / H-139774 | Known finding, identical daily; waiting on MRC (BS-1)                                                                                                                                                                     | **Digest keyed on its content** (`src/lib/invariants/notify.ts` `digestFingerprint`): unchanged → at most weekly; any new/cleared subject → next run |
+| same                                                                                                                          | **Real defect underneath:** a Delivered haul was never re-detailed, so MRC's correction could NEVER reach the mirror — H-138391 last detailed 09-08, H-139774 09-09. BS-1's "the hourly scrape then re-details" was false | **Recently delivered hauls (45 d) are re-read once their detail is 24 h old** (`src/lib/mymrc/sync.ts` `DELIVERED_REDETAIL_*`)                       |
+| `Document ingestion - subscription renew failed` (1, 09-24 6:36 AM) — Graph 503                                               | Noise. All 3 drives have been structurally refused 47–64 times (ADR-0097 §2) and never held a subscription; a 503 on a retry is Microsoft failing before it says 403                                                      | Transient Graph failure after a structural refusal is dashboard-only (`src/lib/doc-ingest/subscriptions.ts`)                                         |
+| `DNS guard self-check failed` (1, 09-25 12:25 AM) — CF API non-JSON body                                                      | Noise. One Cloudflare blip; next run OK                                                                                                                                                                                   | `ops-monitors` `1e273a5`: page only after 3 consecutive faulted runs                                                                                 |
+| `No bonus entries for DR3 Eugene` (1, 09-24 8:00 PM, `high`)                                                                  | **Real.** Eugene has 3 entries every weekday 09-10 → 09-23 and **zero for Thu 09-24**; no app errors that day, so nothing blocked it                                                                                      | Needs a human — **BZ-1**                                                                                                                             |
+| `Amendment requested - DR3 Woodland Period 20` (1)                                                                            | Real, working as designed (Janette: Abdul 45.8 → 45)                                                                                                                                                                      | Needs Bill's review at /bonus/amendments — **BZ-2**                                                                                                  |
+| `Migration applied` ×2, `Container started` ×2                                                                                | Deploy notices for `d63e554` / `05e16c7`, default priority, as designed                                                                                                                                                   | none                                                                                                                                                 |
+| `[DR3-Vision] PG backup OK` ×2, `[VLM] … backup OK` ×6                                                                        | Daily green digests, as designed (VLM included only because it is SVdP-adjacent)                                                                                                                                          | none                                                                                                                                                 |
+
+- **BZ-1 — EUGENE 09-24 BONUS ENTRIES. _Eugene lead / Bill._** Nobody entered Thursday
+  2026-09-24 for Eugene (the 3 processors are entered every other weekday). If Eugene worked
+  that day, the entries need adding (prior-day correction path), or the period will pay 0 for
+  it. If the site was closed, add a `site_holidays` row so the watchdog and the period math
+  agree.
+- **BZ-2 — Woodland Period 20 amendment** (Abdul Maqsood 45.8 → 45). Bill to approve/deny.
+- **BS-1 is still MRC's action, and still open** — H-138391 = 6,020 / H-139774 = 4,840 program
+  units as of 2026-09-25 6 PM PDT. What changed: the first scrape after this deploy re-reads
+  both hauls, so if MRC HAS already corrected them the mirror and INV-INBOUND-PLAUSIBLE clear
+  on their own. The inbound bridge only re-aggregates the trailing ~10 days
+  (`recentProcessedFloor`), so once MRC's correction lands, 09-04 / 09-09 `inbound_loads`
+  need one run of `scripts/mymrc-inbound-bridge-backfill.mjs` (Woodland's floor is not
+  affected — the 09-14 anchor already sits after both hauls).
+- **Accepted residual:** `processed` / `outbound` mirrors have the same detail-once shape
+  (`detail_fetched_at IS NULL` only). Not widened here; no alert depends on them today.
+
+---
+
 ## 0.BY — 2026-09-24 the report named the admin who keyed Eugene's count as its counter — **FIXED + LIVE 2026-09-24 7:23 AM PDT (ADR-0138, `05e16c7`); BY-1 backfill DONE; BY-2 open**
 
 Bill, 2026-09-24 6:22 AM PDT: _"on the eugene production report last night it says Bill
@@ -843,7 +879,9 @@ has been _filed_ by this system.
    `Recycler_Program_Unit_Count__c` is 6,020 on **H-138391** (delivered
    2026-09-04) and 4,840 on **H-139774** (delivered 2026-09-09). Establish the
    true counts from the dock paperwork or BOLs and have MRC correct them **in
-   MyMRC**. The hourly scrape then re-details, the bridge rewrites the day
+   MyMRC**. _(2026-09-25 correction: until 0.BZ it did NOT — a Delivered haul was
+   never re-detailed, so this path did not exist. It does now, within a day.)_ The
+   hourly scrape then re-details, the bridge rewrites the day
    aggregates (absolute SETs — idempotent by design), and the floor self-heals
    with no code change and no database write. **Do not hand-edit
    `mymrc_hauls_mirror` or `inbound_loads`** — the mirror is a copy and the next

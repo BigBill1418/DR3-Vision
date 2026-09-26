@@ -5,6 +5,7 @@ import {
   pageable,
   DIGEST_COOLDOWN_MS,
   PAGE_COOLDOWN_MS,
+  digestFingerprint,
   type Publisher,
 } from './notify';
 import type { InvariantReport, InvariantRunResult } from './types';
@@ -132,7 +133,8 @@ describe('notifyInvariantReport - ADR-0131 D6 volume controls', () => {
       p,
     );
     const fps = p.mock.calls.map((c) => c[0].fingerprint);
-    expect(fps).toEqual(['dr3-invariants-digest']);
+    expect(fps).toHaveLength(1);
+    expect(fps[0]).toMatch(/^dr3-invariants-digest:[0-9a-f]{16}$/);
     expect(p.mock.calls[0]![0].priority).toBe('default');
   });
 
@@ -145,7 +147,9 @@ describe('notifyInvariantReport - ADR-0131 D6 volume controls', () => {
       ]),
       p,
     );
-    expect(p.mock.calls.map((c) => c[0].fingerprint)).toEqual(['dr3-invariants-digest']);
+    const fps = p.mock.calls.map((c) => c[0].fingerprint);
+    expect(fps).toHaveLength(1);
+    expect(fps[0]).toMatch(/^dr3-invariants-digest:/);
     expect(p.mock.calls[0]![0].cooldownMs).toBe(DIGEST_COOLDOWN_MS);
   });
 
@@ -156,7 +160,9 @@ describe('notifyInvariantReport - ADR-0131 D6 volume controls', () => {
       p,
     );
     const fps = p.mock.calls.map((c) => c[0].fingerprint);
-    expect(fps).toEqual(['dr3-invariants-blind', 'dr3-invariants-digest']);
+    expect(fps).toHaveLength(2);
+    expect(fps[0]).toBe('dr3-invariants-blind');
+    expect(fps[1]).toMatch(/^dr3-invariants-digest:/);
     expect(p.mock.calls[0]![0].priority).toBe('high');
     expect(p.mock.calls[0]![0].title).toMatch(/BLIND/);
   });
@@ -168,6 +174,51 @@ describe('notifyInvariantReport - ADR-0131 D6 volume controls', () => {
       p,
     );
     expect(p.mock.calls.map((c) => c[0].fingerprint)).not.toContain('invariant:INV-A');
+  });
+});
+
+describe('digest identity - 2026-09-25 repeat-page repair', () => {
+  const inbound = (subjects: string[], detail = 'x') =>
+    res({
+      id: 'INV-INBOUND-PLAUSIBLE',
+      tier: 'implausibility',
+      status: 'violated',
+      violations: subjects.map((subject) => ({ subject, detail })),
+    });
+
+  it('an unchanged finding keeps its fingerprint across runs, so the weekly cooldown holds it', () => {
+    const a = digestFingerprint([
+      inbound(['woodland H-138391', 'woodland H-139774'], '6020 units'),
+    ]);
+    // Same hauls, different live figures and order: still the SAME finding.
+    const b = digestFingerprint([
+      inbound(['woodland H-139774', 'woodland H-138391'], '6021 units'),
+    ]);
+    expect(a).toBe(b);
+  });
+
+  it('a NEW subject changes the fingerprint, so it publishes at the next run', () => {
+    const a = digestFingerprint([inbound(['woodland H-138391'])]);
+    const b = digestFingerprint([inbound(['woodland H-138391', 'woodland H-140001'])]);
+    expect(a).not.toBe(b);
+  });
+
+  it('a subject clearing changes the fingerprint too (the digest says it got better)', () => {
+    const a = digestFingerprint([inbound(['woodland H-138391', 'woodland H-139774'])]);
+    const b = digestFingerprint([inbound(['woodland H-139774'])]);
+    expect(a).not.toBe(b);
+  });
+
+  it('an invariant going indeterminate is a different digest from it being violated', () => {
+    const a = digestFingerprint([inbound(['woodland H-138391'])]);
+    const b = digestFingerprint([
+      res({ id: 'INV-INBOUND-PLAUSIBLE', tier: 'implausibility', status: 'indeterminate' }),
+    ]);
+    expect(a).not.toBe(b);
+  });
+
+  it('an unchanged digest repeats at most weekly, not daily', () => {
+    expect(DIGEST_COOLDOWN_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });
 });
 
