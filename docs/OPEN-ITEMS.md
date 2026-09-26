@@ -169,12 +169,10 @@ alert on `infrawatch-*` / `noc-alerts`.
     today's on-hand is unaffected. Decide which is right; if MRC's, correct the day via the
     ADR-0119 processed-units correction path.
 
-- **Residual (both haul and materials fixes): the hourly bridges re-aggregate only the last
-  10 days** (`recentProcessedFloor`, `scripts/mymrc-scrape.mjs`). A correction MRC makes to a
-  record 11–45 days old now reaches the MIRROR within a day but reaches
-  `processed_units_daily` / `inbound_loads` only when someone re-runs the backfill script
-  for that day. Widening the hourly window moves anchored on-hand without a person looking,
-  so it is left for Bill to decide.
+- **Bridge window — CLOSED by `803f398` (0.CA).** The hourly inbound and processed bridges
+  were 10 days wide, so a correction the mirror absorbed 11–45 days back needed a hand-run
+  backfill. 0.CA widened both to `DELIVERED_REDETAIL_WINDOW_MS` (45 d), matching the
+  re-read window.
 
 ---
 
