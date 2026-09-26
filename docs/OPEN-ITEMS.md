@@ -135,7 +135,40 @@ alert on `infrawatch-*` / `noc-alerts`.
   re-read once its detail is 24 h old (`materialsRedetailWhere`, same constants as the haul
   fix). Pre-deploy backup
   `svdp-dev:~/backups-adhoc/dr3-materials-mirrors-pre-redetail-20260925-203514-PT.dump`
-  (both mirrors + `processed_units_daily`). First-run results: see BZ-3.
+  (both mirrors + `processed_units_daily`).
+- **BZ-3 — first re-read, VERIFIED LIVE (`9adb932`, deployed 9:05 PM PDT 09-25).** Scrape
+  9:07 PM PDT re-read **32 processed + 238 outbound** records (before: 0 / 0 every hour);
+  all feeds `ok`. The next scheduled scrape (9:40 PM PDT) was `ok` on all four feeds with
+  0 / 0 processed / outbound details — the 24 h gate holds, no hourly re-read; the next
+  re-read of these rows is the first scrape after ~9:07 PM PDT 09-26. Pre/post snapshot of every in-window row (35 processed, 260 outbound, all
+  Woodland) — MRC had changed 8:
+
+  | Record             | Day   | Before (program / non-program) | After              |
+  | ------------------ | ----- | ------------------------------ | ------------------ |
+  | processed M-185412 | 08-13 | 1,166 / 0                      | 787 / 379          |
+  | processed M-187207 | 08-26 | 1,141 / 0                      | 1,106 / 35         |
+  | processed M-187371 | 08-27 | 1,263 / 0                      | 868 / 395          |
+  | processed M-187567 | 08-28 | 1,106 / 0                      | 1,069 / 37         |
+  | processed M-187813 | 08-31 | 859 / 238                      | 847 / 250          |
+  | outbound M-186369  |       | 08-20, 165 / 0 (US Mattress)   | **08-19**, 0 / 165 |
+  | outbound M-189615  | 09-12 | 0 / 0                          | 2 / 0              |
+  | outbound M-188624  | 09-04 | BOL empty                      | BOL 03-02523814    |
+
+  Every processed correction is a program → non-program reclassification; each day's total
+  is unchanged. **Downstream totals moved: none.** All five processed days are
+  `processed_units_daily` rows with `source='import'` (the ADR-0048 workbook), which the
+  bridge never overwrites — dry run `--days=… --site=woodland --dry-run`: `skip=5`, no
+  re-bridge needed or possible. For 08-13 / 08-26 / 08-27 / 08-28 **MRC now agrees with the
+  workbook** (it was MRC that was wrong). All days are before the 09-14 Woodland anchor, so
+  on-hand is untouched either way. The outbound mirror feeds no stored total (C3 audit joins
+  on ticket/date, dashboard counts freshness); none of the 3 has a Vision `outbound_materials`
+  counterpart. No bonus/payroll data is read from either mirror.
+  - **BZ-3a — Woodland 08-31 split disagrees. _Bill._** Vision (workbook import) 859 program
+    / 238 non-program; MRC now 847 / 250 — 12 units program vs non-program. Vision's row
+    wins by precedence in `processed_units_daily`, and 08-31 is before the 09-14 anchor, so
+    today's on-hand is unaffected. Decide which is right; if MRC's, correct the day via the
+    ADR-0119 processed-units correction path.
+
 - **Residual (both haul and materials fixes): the hourly bridges re-aggregate only the last
   10 days** (`recentProcessedFloor`, `scripts/mymrc-scrape.mjs`). A correction MRC makes to a
   record 11–45 days old now reaches the MIRROR within a day but reaches

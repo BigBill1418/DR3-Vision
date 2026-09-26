@@ -79,6 +79,16 @@ Bill, 8:26 PM PDT: _"fix the processed and outbound feeds too"._
   requested and that the corrected units replaced the stored ones. Falsified: reverting the
   predicate to `detail_fetched_at: null` turns both it and the unit cases red.
 
+### Verified live (`9adb932`, deployed 9:05 PM PDT)
+
+- First scrape (9:07 PM PDT) re-read 32 processed + 238 outbound records. MRC had changed 8:
+  five Woodland processed days re-split program → non-program (08-13, 08-26, 08-27, 08-28,
+  08-31; totals unchanged) and three outbound records (M-186369 moved 08-20 → 08-19 and
+  165 program → non-program; M-189615 0 → 2; M-188624 gained its BOL). No downstream total
+  moved: the five days are workbook-import rows the bridge never overwrites (dry run
+  `skip=5`), and four of them now agree with MRC. 08-31 still differs by 12 units
+  (OPEN-ITEMS BZ-3a, Bill).
+
 ## 2026-09-25 — Vision alert review: three noise sources silenced, and MRC corrections can reach the mirror again (OPEN-ITEMS 0.BZ)
 
 Bill, 6:53 PM PDT: _"look at the ntfy server and only look at the vision related alerts for
