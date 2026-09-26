@@ -34,6 +34,11 @@ the last 48 hours and tell me what the hell is going on and fix whatever the pro
   (5xx / 429 / socket) on a create whose previous answer was that refusal is now
   dashboard-only (`isTransientGraphFailure` + `wasStructurallyRefused`,
   `src/lib/doc-ingest/subscriptions.ts`). A 503 on a drive that was NOT refused still pages.
+- **Verified live (`73f3002`, deployed 7:36 PM PDT):** the first scrape re-read 312 hauls
+  and found MRC had ALREADY corrected BS-1 — H-138391 6,020 → 136 units, H-139774 4,840 → 88.
+  Invariant dry run 9 ok / 0 violated. Woodland September `inbound_loads` re-bridged
+  (backup first; 5 days updated, incl. 09-15 +107 post-anchor, so Woodland program on-hand
+  168 → 275). Detail in OPEN-ITEMS 0.BZ.
 - (ops-monitors `1e273a5`, not this repo) the DNS guard's self-check page now needs 3
   consecutive faulted runs; one Cloudflare blip paged `high` at 12:25 AM 09-25.
 

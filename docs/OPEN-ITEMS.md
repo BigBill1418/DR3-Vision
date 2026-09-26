@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.BZ — 2026-09-25 Vision alert review (Bill: _"look at the ntfy server … vision related alerts for the last 48 hours and tell me what the hell is going on and fix whatever the problem is"_) — **3 noise sources FIXED; 1 real defect FIXED; 2 items need a human**
+## 0.BZ — 2026-09-25 Vision alert review (Bill: _"look at the ntfy server … vision related alerts for the last 48 hours and tell me what the hell is going on and fix whatever the problem is"_) — **3 noise sources FIXED; 1 real defect FIXED; BS-1 CLOSED (MRC had corrected; now absorbed); 2 items need a human**
 
 Window 2026-09-23 6:53 PM → 2026-09-25 6:53 PM PDT, read from the `ntfy` cache on BOS-HQ
 (`dr3-vision-system`, `dr3-vision-container`, `dr3-vision-dns`, `chad-hq-backup`,
@@ -43,13 +43,22 @@ alert on `infrawatch-*` / `noc-alerts`.
   it. If the site was closed, add a `site_holidays` row so the watchdog and the period math
   agree.
 - **BZ-2 — Woodland Period 20 amendment** (Abdul Maqsood 45.8 → 45). Bill to approve/deny.
-- **BS-1 is still MRC's action, and still open** — H-138391 = 6,020 / H-139774 = 4,840 program
-  units as of 2026-09-25 6 PM PDT. What changed: the first scrape after this deploy re-reads
-  both hauls, so if MRC HAS already corrected them the mirror and INV-INBOUND-PLAUSIBLE clear
-  on their own. The inbound bridge only re-aggregates the trailing ~10 days
-  (`recentProcessedFloor`), so once MRC's correction lands, 09-04 / 09-09 `inbound_loads`
-  need one run of `scripts/mymrc-inbound-bridge-backfill.mjs` (Woodland's floor is not
-  affected — the 09-14 anchor already sits after both hauls).
+- **BS-1 — DONE (MRC had already corrected both hauls; Vision could not see it until this
+  fix).** The first scrape on the new build (7:38 PM PDT 09-25) re-read 312 delivered hauls:
+  **H-138391 6,020 → 136 units (331,100 → 7,480 lb), H-139774 4,840 → 88.** Zero Woodland
+  mirror hauls now exceed 350. Invariant dry run (`notify:false`) at 7:50 PM PDT:
+  **9 ok / 0 violated / 0 unchecked.**
+- **Re-bridge of Woodland September `inbound_loads` — DONE 7:47 PM PDT.** Backup
+  `svdp-dev:~/backups-adhoc/dr3-inbound-loads-pre-bs1-rebridge-20260925-194736-PT.dump`
+  (980 rows). `mymrc-inbound-bridge-backfill.mjs --since=2026-09-01 --site=woodland`:
+  21 days, 5 updated, 16 unchanged. Rows changed (program units): 09-03 618→731,
+  09-04 6,547→663, 09-09 5,989→1,237, 09-10 912→970, **09-15 1,305→1,412**. The script's floor
+  gate exited 1 ("drifted 168→275 program") — **expected, and its own message says so**:
+  09-15 is after the 09-14 anchor and 11 days back, just outside the hourly 10-day bridge
+  window, so MRC's +107 revision on that day now correctly reaches the floor. Woodland
+  program on-hand 168 → **275**; non-program unchanged at 1,339.
+- **BS-2 is unblocked:** the September Woodland COR no longer carries the phantom ~10,860
+  units. Re-check the COR prefill before filing.
 - **Accepted residual:** `processed` / `outbound` mirrors have the same detail-once shape
   (`detail_fetched_at IS NULL` only). Not widened here; no alert depends on them today.
 
