@@ -9,6 +9,35 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-25 — The processed and outbound MyMRC mirrors pick up MRC's corrections too (OPEN-ITEMS 0.BZ)
+
+Bill, 8:26 PM PDT: _"fix the processed and outbound feeds too"._
+
+### Fixed
+
+- **A processed / outbound record was detailed once, ever.** Both `Materials__c` adapters in
+  `src/lib/mymrc/sync.ts` chose detail targets by `detail_fetched_at IS NULL` alone, so a
+  correction MRC made to a record after Vision first read it never reached
+  `mymrc_processed_mirror` (→ `processed_units_daily`, the Stripped leg of on-hand) or
+  `mymrc_outbound_mirror` (→ the C3 landfill audit, the ops dashboard, the outbound
+  reconciliation). Same design as the Delivered-haul fix above: a record whose entry date or
+  business date (`processed_date` / `shipment_date`) is in the last 45 days is re-read once
+  its detail is 24 h old (`materialsRedetailWhere`). A Materials record has no terminal
+  status, so the window is keyed on its dates. ~34 processed + ~254 outbound rows today,
+  ≤ 4 batched POSTs a day. Every mirror column is MRC-sourced; `site_id` keeps its
+  never-null-out guard.
+- `mappers.ts`: the comment claiming `Shipment_Date__c` "yields null on real data" was wrong
+  (4,902 of 4,905 outbound payloads carry it) — corrected, since the re-read depends on it.
+
+### Tests
+
+- `sync.test.ts`: the processed and outbound `where` shapes; a re-read row goes through the
+  normal detail write.
+- `sync-materials-redetail.db.test.ts` (ADR-0078 real-DB lane): seeds never / recent-stale /
+  recent-fresh / old rows per feed, runs the real `syncFeed`, asserts exactly which ids were
+  requested and that the corrected units replaced the stored ones. Falsified: reverting the
+  predicate to `detail_fetched_at: null` turns both it and the unit cases red.
+
 ## 2026-09-25 — Vision alert review: three noise sources silenced, and MRC corrections can reach the mirror again (OPEN-ITEMS 0.BZ)
 
 Bill, 6:53 PM PDT: _"look at the ntfy server and only look at the vision related alerts for

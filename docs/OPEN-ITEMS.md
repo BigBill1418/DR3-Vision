@@ -59,8 +59,20 @@ alert on `infrawatch-*` / `noc-alerts`.
   program on-hand 168 → **275**; non-program unchanged at 1,339.
 - **BS-2 is unblocked:** the September Woodland COR no longer carries the phantom ~10,860
   units. Re-check the COR prefill before filing.
-- **Accepted residual:** `processed` / `outbound` mirrors have the same detail-once shape
-  (`detail_fetched_at IS NULL` only). Not widened here; no alert depends on them today.
+- **`processed` / `outbound` detail-once — FIXED 2026-09-25 (Bill 8:26 PM PDT: _"fix the
+  processed and outbound feeds too"_).** Both adapters used `detail_fetched_at IS NULL` only
+  (`src/lib/mymrc/sync.ts` `processedAdapter` / `outboundAdapter` `idsNeedingDetail`). Now a
+  record whose `entry_date` or `processed_date` / `shipment_date` is in the last 45 days is
+  re-read once its detail is 24 h old (`materialsRedetailWhere`, same constants as the haul
+  fix). Pre-deploy backup
+  `svdp-dev:~/backups-adhoc/dr3-materials-mirrors-pre-redetail-20260925-203514-PT.dump`
+  (both mirrors + `processed_units_daily`). First-run results: see BZ-3.
+- **Residual (both haul and materials fixes): the hourly bridges re-aggregate only the last
+  10 days** (`recentProcessedFloor`, `scripts/mymrc-scrape.mjs`). A correction MRC makes to a
+  record 11–45 days old now reaches the MIRROR within a day but reaches
+  `processed_units_daily` / `inbound_loads` only when someone re-runs the backfill script
+  for that day. Widening the hourly window moves anchored on-hand without a person looking,
+  so it is left for Bill to decide.
 
 ---
 

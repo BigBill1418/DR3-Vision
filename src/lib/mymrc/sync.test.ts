@@ -773,6 +773,83 @@ describe('syncFeed — a detail is not forever (frozen-status regression, 2026-0
   });
 });
 
+// ── 2026-09-25: the Materials feeds re-read inside the correction window ─────
+// processed / outbound were detailed once, ever (`detail_fetched_at: null`
+// only), so an MRC correction to a recent record's units could never reach the
+// mirror. Same window + cadence as the Delivered-haul re-read, keyed on each
+// feed's business dates because a Materials record has no terminal status.
+
+describe('syncFeed — processed/outbound re-read recent records daily (2026-09-25)', () => {
+  const since = (): Date => new Date(NOW().getTime() - DELIVERED_REDETAIL_WINDOW_MS);
+  const before = (): Date => new Date(NOW().getTime() - DELIVERED_REDETAIL_INTERVAL_MS);
+
+  it.each([
+    ['processed', 'processed_date'],
+    ['outbound', 'shipment_date'],
+  ] as const)(
+    '%s re-details a listed row whose %s is in the window and detail a day old',
+    async (feed, dateField) => {
+      const { prisma, model } = fakePrisma({ needDetail: [] });
+      const client = fakeClient({ fetchListRecordIds: vi.fn(async () => list(['m-1'], true)) });
+      const { pager } = spyPager();
+
+      await syncFeed({
+        prisma: prisma as unknown as P,
+        client,
+        recordFields: RF,
+        site: 'woodland',
+        feed,
+        pager,
+        now: NOW,
+      });
+
+      expect(model.findMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: ['m-1'] },
+          OR: [
+            { detail_fetched_at: null },
+            {
+              detail_fetched_at: { lt: before() },
+              OR: [{ entry_date: { gte: since() } }, { [dateField]: { gte: since() } }],
+            },
+          ],
+        },
+        select: { id: true, external_materials_id: true },
+      });
+    },
+  );
+
+  it('a re-read record goes through the same detail path and overwrites the stored units', async () => {
+    const { prisma, modelUpdate } = fakePrisma({ needDetail: ['m-corrected'] });
+    const client = fakeClient({
+      fetchListRecordIds: vi.fn(async () => list(['m-corrected'], true)),
+    });
+    const { pager } = spyPager();
+
+    const res = await syncFeed({
+      prisma: prisma as unknown as P,
+      client,
+      recordFields: fakeRecordFields({ record: processedRecordEugene }),
+      site: 'woodland',
+      feed: 'processed',
+      pager,
+      now: NOW,
+    });
+
+    expect(res.detailsFetched).toBe(1);
+    expect(modelUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'm-corrected' },
+        data: expect.objectContaining({
+          program_unit_count: 42,
+          detail_fetched_at: NOW(),
+          site_id: 'site-2',
+        }),
+      }),
+    );
+  });
+});
+
 // ── ADR-0133: the error page is graded on the STREAK, not the first failure ──
 //
 // ADR-0037 Q3: page on crash-loop, not first restart. An hourly retry is free,

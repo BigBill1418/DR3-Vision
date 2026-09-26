@@ -48,11 +48,46 @@ const DEADMAN_MS = 26 * 60 * 60 * 1000; // no successful run in >26h → page
 // BS-1 said "the hourly scrape then re-details" and the invariant digest re-sent
 // them daily. Recently delivered hauls are now re-read at most once per
 // interval, bounded to the window in which MRC still corrects a haul.
+//
+// The same window and cadence apply to the two Materials__c feeds (processed,
+// outbound), which were fetched ONCE per record by `detail_fetched_at IS NULL`
+// alone — a Materials record has no terminal status to key on (it is recorded
+// after the fact and stays 'Active'), so the window is keyed on its business
+// dates instead. See `materialsRedetailWhere`.
 export const DELIVERED_REDETAIL_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DELIVERED_REDETAIL_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
 
 export type Logger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: Logger = () => undefined;
+
+/**
+ * 2026-09-25 (Bill: "fix the processed and outbound feeds too") — which listed
+ * Materials__c mirror rows the detail pass (re-)reads: never-detailed rows, plus
+ * rows whose business date is inside DELIVERED_REDETAIL_WINDOW_MS and whose
+ * detail is at least DELIVERED_REDETAIL_INTERVAL_MS old. Before this the
+ * processed / outbound detail was fetched once, ever, so an MRC correction to a
+ * record's units (the H-138391 class, on the inbound side) could never reach
+ * `processed_units_daily` or the outbound comparisons. Every mirror column is
+ * MRC-sourced (no Vision-edited field lives on these tables), so a re-read
+ * overwrites nothing a person entered; `site_id` keeps its never-null-out guard.
+ */
+function materialsRedetailWhere(
+  listedIds: readonly string[],
+  now: Date,
+  businessDate: 'processed_date' | 'shipment_date',
+): Prisma.MymrcProcessedMirrorWhereInput & Prisma.MymrcOutboundMirrorWhereInput {
+  const since = new Date(now.getTime() - DELIVERED_REDETAIL_WINDOW_MS);
+  return {
+    id: { in: [...listedIds] },
+    OR: [
+      { detail_fetched_at: null },
+      {
+        detail_fetched_at: { lt: new Date(now.getTime() - DELIVERED_REDETAIL_INTERVAL_MS) },
+        OR: [{ entry_date: { gte: since } }, { [businessDate]: { gte: since } }],
+      },
+    ],
+  };
+}
 
 // ── Pure decision helpers (unit-tested directly) ─────────────────────────────
 
@@ -341,7 +376,11 @@ function haulsAdapter(
   };
 }
 
-function processedAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+function processedAdapter(
+  prisma: PrismaClient,
+  resolveSiteId: SiteIdResolver,
+  now: Date = new Date(),
+): FeedAdapter {
   const model = prisma.mymrcProcessedMirror;
   return {
     feed: 'processed',
@@ -364,7 +403,7 @@ function processedAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): 
     },
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
-        where: { id: { in: [...listedIds] }, detail_fetched_at: null },
+        where: materialsRedetailWhere(listedIds, now, 'processed_date'),
         select: { id: true, external_materials_id: true },
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
@@ -397,7 +436,11 @@ function processedAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): 
   };
 }
 
-function outboundAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): FeedAdapter {
+function outboundAdapter(
+  prisma: PrismaClient,
+  resolveSiteId: SiteIdResolver,
+  now: Date = new Date(),
+): FeedAdapter {
   const model = prisma.mymrcOutboundMirror;
   return {
     feed: 'outbound',
@@ -420,7 +463,7 @@ function outboundAdapter(prisma: PrismaClient, resolveSiteId: SiteIdResolver): F
     },
     async idsNeedingDetail(listedIds) {
       const rows = await model.findMany({
-        where: { id: { in: [...listedIds] }, detail_fetched_at: null },
+        where: materialsRedetailWhere(listedIds, now, 'shipment_date'),
         select: { id: true, external_materials_id: true },
       });
       return rows.map((r) => ({ id: r.id, externalId: r.external_materials_id }));
@@ -465,8 +508,8 @@ function adapterFor(
   if (feed === 'hauls' || feed === 'haulsCompleted') {
     return haulsAdapter(prisma, resolveSiteId, feed, now);
   }
-  if (feed === 'processed') return processedAdapter(prisma, resolveSiteId);
-  return outboundAdapter(prisma, resolveSiteId);
+  if (feed === 'processed') return processedAdapter(prisma, resolveSiteId, now);
+  return outboundAdapter(prisma, resolveSiteId, now);
 }
 
 // ── One site+feed run ────────────────────────────────────────────────────────

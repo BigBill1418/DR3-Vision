@@ -273,8 +273,9 @@ export function mapOutboundRecord(rec: SfRecord, opts: OutboundMapOptions = {}):
     bol_id: strVal(rec, 'BOL_ID__c'),
     vendor,
     entry_date: parseIsoDate(strVal(rec, 'Entry_Date__c')),
-    // No real Shipment_Date__c field on Materials — read defensively (forward-
-    // compatible), yields null on real data.
+    // Shipment_Date__c is requested via MATERIALS_OPTIONAL_FIELDS and IS present
+    // on real outbound detail (4,902 of 4,905 mirror payloads, 2026-09-25) — the
+    // daily re-read therefore refreshes it rather than nulling it.
     shipment_date: parseIsoDate(strVal(rec, 'Shipment_Date__c')),
     program_unit_count: programUnits,
     non_program_unit_count: intVal(rec, 'Number_of_Non_Program_Units__c'),
