@@ -214,3 +214,40 @@ psql`) and the repo at `/home/bbarnard065/DR3-Vision` (commit `9edaa0a`, `main`)
 `ProcessedUnitsDaily`, `enum LoadStatus`/`LoadSourceType`/`RecordSource`), and the haul-mirror
 DB probes recorded in the build spec §0 (status/type/count/date distributions, magnitude
 reconciliation, sites). Sibling: ADR-0058 + `docs/plans/2026-07-23-mymrc-processed-inventory-bridge.md`.
+
+## Amendment 1 — 2026-09-25: the backfill gate expects the move it caused; the hourly window matches the re-detail window (OPEN-ITEMS 0.CA)
+
+**What happened.** `73f3002` (0.BZ) made the sync re-read hauls delivered in the last 45 days,
+so MRC corrections reach `mymrc_hauls_mirror`. The hourly bridge still windowed on ten days, so
+a correction to a day 11–45 days back reached the mirror and stopped there. The 0.BZ session
+closed that gap by hand for September with this script, which rewrote 09-15 (+107 program, one
+haul — H-139112 — that Vision had detailed at delivery with 0 units and MRC later completed).
+09-15 is after the 09-14 anchor, so the floor moved 168 → 275, which is correct. D5's gate knew
+only "the floor must not move", paged `[DR3-Vision] MyMRC sync error - admin … anchor-safety
+gate FAILED` at 7:47 PM PDT, and Bill read it as the sync being broken. Every scheduled sync run
+that day was `ok`.
+
+**D5 as amended.** The gate is kept and made exact rather than loosened:
+
+- The bridge result now carries `writes[]` — each day written, with its values before and after.
+  The audit row carries `before` too.
+- The floor-probe route returns `inboundSinceDay`, the first Pacific day `onHand` counts, taken
+  from the same anchor selector the balance uses (`computePoolBalance`), not from a copy of it.
+- The script requires the floor to move by exactly the sum of (after − before) over the rewritten
+  days on or after `inboundSinceDay`. It checks each pool and the total separately and compares
+  whole tenths. With no counted day rewritten, the expected move is zero, which is the original
+  gate. A row that lands on the wrong side of the anchor still fails. So does a counted write that
+  never reaches the floor, a pool shift, or an unknown prior value (NaN). If the probe does not
+  report `inboundSinceDay` (an older app), the gate falls back to the strict zero-move rule.
+- A failure pages as its own kind, `bridge_gate`: "Inventory bridge backfill: floor gate FAILED",
+  priority `high`, 6 h cooldown, click through to the site's loads-inventory page. It no longer
+  goes out as `error` ("MyMRC sync error").
+
+**Hourly window.** `scripts/mymrc-scrape.mjs` now bridges inbound over `inboundBridgeFloor(now,
+DELIVERED_REDETAIL_WINDOW_MS)`, which is 45 days + 1 day of UTC/Pacific slack. Any correction the
+mirror can absorb therefore reaches `inbound_loads` within the hour, and nobody has to run this
+script for a routine MRC correction. This keeps D3's own reasoning: absolute writes plus the
+precedence guard mean a wider window is harmless, and the bridge already loads every Delivered row
+and filters in memory. The processed bridge is aligned the same way, because `9adb932` gave
+the processed mirror the same 45-day re-read. Its one-shot backfill script still has the
+original zero-move gate (OPEN-ITEMS CA-1).

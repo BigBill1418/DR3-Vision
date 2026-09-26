@@ -16,6 +16,20 @@
 // the internal floor-probe route (ADR-0058) BEFORE and AFTER the write (same `asOf`), and
 // ABORTS non-zero if the floor drifted by a single unit.
 //
+// 2026-09-25 (OPEN-ITEMS 0.CA) — "the floor must not move" is only the right
+// expectation when every bridged day is at/before the anchor. Re-bridging a
+// POST-anchor day that MRC has corrected (the reason this script is run at all
+// since ADR-0089/0.BZ) SHOULD move the floor — by exactly the corrected units. The
+// old gate could not tell the two apart, so the 0.BZ re-bridge of 09-15 (+107, one
+// haul MRC had since given its units) paged "[DR3-Vision] MyMRC sync error - admin
+// … anchor-safety gate FAILED" while the hourly sync was healthy. The gate now
+// computes the EXPECTED move from the bridge's own per-day writes on the days the
+// floor counts (on/after the probe's `inboundSinceDay`) and requires the actual move
+// to equal it, pool by pool. A row that lands on the wrong side of the anchor still
+// fails (actual != expected), which is the bug the gate exists to catch. If the
+// probe does not report `inboundSinceDay` (older app), the expectation is zero —
+// the original strict gate.
+//
 // Run it from the APP container (it has INTERNAL_CRON_TOKEN + can reach the internal
 // route on 127.0.0.1:3000, and the shared image carries dist/mymrc):
 //   docker compose exec app node scripts/mymrc-inbound-bridge-backfill.mjs --backfill
@@ -26,9 +40,10 @@
 //   --dry-run             compute + classify only; NO writes, NO floor gate
 //
 // Exit codes:
-//   0 — bridge ran and the live floor was byte-identical before/after (or --dry-run).
-//   1 — floor drifted (INVESTIGATE — a delivery-date encoding bug), a probe failed, or
-//       an unhandled fatal error.
+//   0 — bridge ran and the live floor moved by EXACTLY the units it rewrote on
+//       post-anchor days (zero when it rewrote none), or --dry-run.
+//   1 — floor moved by anything else (INVESTIGATE — a delivery-date encoding bug), a
+//       probe failed, or an unhandled fatal error.
 //   2 — DATABASE_URL missing.
 
 import { PrismaClient } from '@prisma/client';
@@ -80,6 +95,49 @@ export function floorsEqual(a, b) {
   return a.program === b.program && a.nonProgram === b.nonProgram && a.total === b.total;
 }
 
+/**
+ * Parse a Decimal string from the probe ("1412", "1305.0", "-3.5") to an integer
+ * count of TENTHS. Every pool is `Decimal(7,1)` or an integer, so tenths are exact;
+ * a string with more precision than that is refused (NaN) rather than rounded, so
+ * a sub-tenth drift can never be rounded into agreement.
+ */
+export function toTenths(v) {
+  const s = String(v).trim();
+  const m = /^(-?)(\d+)(?:\.(\d))?0*$/.exec(s);
+  if (!m) return Number.NaN;
+  const t = Number(m[2]) * 10 + Number(m[3] ?? 0);
+  return m[1] === '-' ? -t : t;
+}
+
+/**
+ * The floor move the bridge's writes SHOULD cause at one site: the sum of
+ * (after - before) over the days `onHand` counts, i.e. `day >= inboundSinceDay`.
+ * With no `inboundSinceDay` (no anchor at all) every day counts. `sinceDay ===
+ * undefined` means the probe did not say — expect zero (the strict gate).
+ * Returned in tenths, per pool. An insert's `before` is zero.
+ */
+export function expectedFloorMove(writes, siteId, sinceDay) {
+  const out = { program: 0, nonProgram: 0, days: [] };
+  if (sinceDay === undefined) return out;
+  for (const w of writes ?? []) {
+    if (w.siteId !== siteId) continue;
+    if (sinceDay !== null && w.day < sinceDay) continue;
+    const bp = w.before ? w.before.program : 0;
+    const bn = w.before ? w.before.nonProgram : 0;
+    const dp = Math.round((w.after.program - bp) * 10);
+    const dn = Math.round((w.after.nonProgram - bn) * 10);
+    out.program += dp;
+    out.nonProgram += dn;
+    out.days.push(`${w.day} ${fmtSigned(dp)}/${fmtSigned(dn)}`);
+  }
+  return out;
+}
+
+function fmtSigned(tenths) {
+  const v = tenths / 10;
+  return `${v >= 0 ? '+' : ''}${v}`;
+}
+
 /** POST the internal floor-probe route for one site at a FIXED asOf. Throws on any non-200. */
 async function probeFloor(siteCode, asOfIso) {
   const controller = new AbortController();
@@ -99,7 +157,10 @@ async function probeFloor(siteCode, asOfIso) {
       throw new Error(`floor-probe ${siteCode} → HTTP ${res.status}: ${text.slice(0, 200)}`);
     }
     const body = JSON.parse(text);
-    return { program: body.program, nonProgram: body.nonProgram, total: body.total };
+    const snap = { program: body.program, nonProgram: body.nonProgram, total: body.total };
+    // Absent (older app) → undefined → strict zero-move gate. null → no anchor.
+    if ('inboundSinceDay' in body) snap.inboundSinceDay = body.inboundSinceDay;
+    return snap;
   } finally {
     clearTimeout(timer);
   }
@@ -119,16 +180,24 @@ export async function runInboundBridgeBackfill({ mymrc, prisma, probe, opts, log
 
   // Resolve site codes → ids when restricted (the bridge takes siteIds).
   let siteIds;
+  const idByCode = {};
   if (opts.siteCodes) {
     const rows = await prisma.site.findMany({
       where: { code: { in: opts.siteCodes } },
       select: { id: true, code: true },
     });
     siteIds = rows.map((r) => r.id);
+    for (const r of rows) idByCode[r.code] = r.id;
     if (siteIds.length === 0) {
       logFn('error', `no sites resolved for --site=${opts.siteCodes.join(',')}`);
       return 1;
     }
+  } else if (typeof prisma.site?.findMany === 'function') {
+    const rows = await prisma.site.findMany({
+      where: { code: { in: probeSites } },
+      select: { id: true, code: true },
+    });
+    for (const r of rows) idByCode[r.code] = r.id;
   }
 
   const sinceDeliveryDate = opts.since ? new Date(`${opts.since}T00:00:00.000Z`) : undefined;
@@ -174,32 +243,63 @@ export async function runInboundBridgeBackfill({ mymrc, prisma, probe, opts, log
       probeSites.map((c) => `${c}=${after[c].program}/${after[c].nonProgram}/${after[c].total}`).join(' '),
   );
 
-  const drifted = probeSites.filter((c) => !floorsEqual(before[c], after[c]));
-  if (drifted.length > 0) {
-    for (const c of drifted) {
+  // Per site: the move the floor actually made vs the move the writes explain.
+  const unexplained = [];
+  for (const c of probeSites) {
+    const exp = expectedFloorMove(res.writes, idByCode[c], before[c].inboundSinceDay);
+    const actP = toTenths(after[c].program) - toTenths(before[c].program);
+    const actN = toTenths(after[c].nonProgram) - toTenths(before[c].nonProgram);
+    const actT = toTenths(after[c].total) - toTenths(before[c].total);
+    const ok =
+      actP === exp.program && actN === exp.nonProgram && actT === exp.program + exp.nonProgram;
+    const moved = !floorsEqual(before[c], after[c]);
+    if (ok && moved) {
       logFn(
-        'error',
-        `LIVE FLOOR DRIFTED for ${c}: before ${before[c].program}/${before[c].nonProgram}/${before[c].total} ` +
-          `!= after ${after[c].program}/${after[c].nonProgram}/${after[c].total}. A bridged inbound row landed ` +
-          `at/after the anchor unexpectedly (delivery-date encoding bug) — INVESTIGATE before trusting inventory. ` +
-          `(Expected non-zero drift ONLY if post-anchor delivery days were bridged.)`,
+        'info',
+        `${c}: floor moved ${before[c].program}/${before[c].nonProgram}/${before[c].total} -> ` +
+          `${after[c].program}/${after[c].nonProgram}/${after[c].total}, EXACTLY the units rewritten on days ` +
+          `counted since ${before[c].inboundSinceDay ?? 'the beginning (no anchor)'}: ${exp.days.join(', ')}. ` +
+          `Explained — not a gate failure.`,
       );
     }
-    // Page the fleet so the drift is loud (ADR-0036 dr3-vision-system).
+    if (!ok) {
+      unexplained.push(c);
+      logFn(
+        'error',
+        `LIVE FLOOR MOVED UNEXPLAINED for ${c}: before ${before[c].program}/${before[c].nonProgram}/${before[c].total} ` +
+          `-> after ${after[c].program}/${after[c].nonProgram}/${after[c].total} (program ${fmtSigned(actP)}, ` +
+          `non-program ${fmtSigned(actN)}); the bridge's writes on counted days explain ` +
+          `${fmtSigned(exp.program)}/${fmtSigned(exp.nonProgram)}` +
+          (exp.days.length ? ` [${exp.days.join(', ')}]` : ' (no counted day was rewritten)') +
+          `. A bridged row landed on the wrong side of the anchor (delivery-date encoding bug) or something ` +
+          `else wrote inventory during the run — INVESTIGATE before trusting inventory.`,
+      );
+    }
+  }
+
+  if (unexplained.length > 0) {
+    // Page so the failure is loud (ADR-0036 dr3-vision-system). Its OWN kind, not
+    // `error`: that kind's title is "MyMRC sync error", and this is neither the sync
+    // nor necessarily MyMRC — on 2026-09-25 that title read to Bill as "the sync is
+    // broken" while every scheduled run was green (OPEN-ITEMS 0.CA).
     if (typeof mymrc.ntfyPager?.page === 'function') {
       await mymrc.ntfyPager
         .page({
-          kind: 'error',
-          site: 'admin',
-          message: `inbound-bridge backfill: LIVE FLOOR DRIFTED for ${drifted.join(', ')} — anchor-safety gate FAILED. Investigate.`,
+          kind: 'bridge_gate',
+          site: unexplained.join(','),
+          message:
+            `Manual inbound-bridge backfill: the live floor moved by more or less than the days it rewrote ` +
+            `explain (${unexplained.join(', ')}). The hourly MyMRC sync is not implicated by this alert. ` +
+            `Floor may be wrong until investigated; the script's output has the per-day figures.`,
           fingerprint: 'inbound-bridge-floor-drift',
+          click: `https://dr3-vision.svdp.us/dashboard/${unexplained[0]}/loads-inventory`,
         })
         .catch(() => undefined);
     }
     return 1;
   }
 
-  logFn('info', 'floor-invariance gate PASSED — live floor byte-identical before/after.');
+  logFn('info', 'floor gate PASSED — every floor move is explained by the rewritten post-anchor days (or none).');
   return 0;
 }
 

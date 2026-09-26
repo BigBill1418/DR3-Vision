@@ -39,7 +39,10 @@ export async function POST(req: Request): Promise<Response> {
   const raw = await req.json().catch(() => null);
   const parsed = Body.safeParse(raw);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'invalid_body', issues: parsed.error.issues }, { status: 422 });
+    return NextResponse.json(
+      { error: 'invalid_body', issues: parsed.error.issues },
+      { status: 422 },
+    );
   }
 
   const site = await prisma.site.findFirst({
@@ -62,5 +65,9 @@ export async function POST(req: Request): Promise<Response> {
     nonProgram: floor.nonProgram.toString(),
     total: floor.total.toString(),
     anchorPool: floor.anchorPool ?? null,
+    // 2026-09-25 (OPEN-ITEMS 0.CA) — the first Pacific inbound day this floor counts.
+    // A backfill that rewrote a day on/after it MUST see the floor move by exactly
+    // what it wrote there; one that rewrote only earlier days must see zero.
+    inboundSinceDay: floor.inboundSinceDay ?? null,
   });
 }

@@ -47,7 +47,12 @@ import {
 } from '@prisma/client';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { prisma } from '@/lib/prisma';
-import { pacificDayKeyUTC, pacificMidnightInstantOfDayISO, dayISO } from '@/lib/time';
+import {
+  pacificDayKeyUTC,
+  pacificMidnightInstantOfDayISO,
+  dayISO,
+  pacificDayISO,
+} from '@/lib/time';
 import { NOT_VOIDED } from './snapshot-void';
 
 const D = Prisma.Decimal;
@@ -204,6 +209,15 @@ export interface RunningBalance {
    * existing consumers may ignore it.
    */
   anchorPool?: 'measured' | 'legacy';
+  /**
+   * The Pacific calendar day (`YYYY-MM-DD`) of the FIRST inbound day this balance
+   * counts — the day after the anchor's count day, or `null` with no anchor (every
+   * day counts). Additive, like `anchorPool`. Exists so a bridge backfill can tell
+   * which of the days it rewrote SHOULD move the floor (on/after this day) from
+   * the ones that must not (2026-09-25, OPEN-ITEMS 0.CA) — the answer comes from
+   * the same anchor selector the balance used, never from a second copy of it.
+   */
+  inboundSinceDay?: string | null;
 }
 
 /**
@@ -499,7 +513,11 @@ export async function computePoolBalance(
     // audit reconciliation (workbook-promotion / inventory-close, the June 3,977 oracle)
     // still applies the workbook's own recorded subtraction — that parity is unchanged.
   });
-  return { ...balance, anchorPool };
+  return {
+    ...balance,
+    anchorPool,
+    inboundSinceDay: anchor ? pacificDayISO(inboundSince) : null,
+  };
 }
 
 /**

@@ -130,6 +130,25 @@ describe('ntfyPager — redaction at the publisher', () => {
   });
 });
 
+describe('bridge_gate (OPEN-ITEMS 0.CA)', () => {
+  it('is titled as a backfill gate, not a sync error, at high, with the caller click', async () => {
+    await ntfyPager.page({
+      kind: 'bridge_gate',
+      site: 'woodland',
+      message: 'floor moved unexplained',
+      fingerprint: 'inbound-bridge-floor-drift',
+      click: 'https://dr3-vision.svdp.us/dashboard/woodland/loads-inventory',
+    });
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers['X-Title']).toBe(
+      '[DR3-Vision] Inventory bridge backfill: floor gate FAILED - woodland',
+    );
+    expect(headers['X-Title']).not.toMatch(/sync error/i);
+    expect(headers['Priority']).toBe('high');
+    expect(headers['Click']).toBe('https://dr3-vision.svdp.us/dashboard/woodland/loads-inventory');
+  });
+});
+
 describe('fingerprints', () => {
   it('a sustained error has its OWN fingerprint', () => {
     // An escalation that re-uses the fingerprint of the page it escalates is

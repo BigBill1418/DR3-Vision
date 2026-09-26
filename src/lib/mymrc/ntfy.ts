@@ -73,6 +73,11 @@ export type AlertKind =
   // ADR-0089 D2 — a Delivered haul was detailed and carries NO date on any field;
   // the one residual where "ask MRC" is the right move.
   | 'dateless_hauls'
+  // 2026-09-25 (OPEN-ITEMS 0.CA) — a MANUAL bridge backfill's floor gate found a
+  // floor move its own writes do not explain. Not the sync: it had been published
+  // as `error` ("MyMRC sync error") and read as a broken sync while every
+  // scheduled run was green.
+  | 'bridge_gate'
   | 'error';
 
 export interface PageAlert {
@@ -87,6 +92,12 @@ export interface PageAlert {
    * matrix; callers override only when the CONDITION changes the grade.
    */
   cooldownMs?: number;
+  /**
+   * Click override (ADR-0036 tier-1/2). Defaults to this kind's row in
+   * CLICK_BY_KIND; a caller that knows the specific page (e.g. the site's
+   * loads-inventory screen) passes it.
+   */
+  click?: string;
   /**
    * Priority override. Defaults to this kind's row in the ADR-0130 §6 matrix.
    *
@@ -110,6 +121,7 @@ const TITLE_BY_KIND: Record<AlertKind, string> = {
   deadman: 'MyMRC sync deadman (no success >26h)',
   stale_mirror: 'MyMRC mirror stopped advancing',
   dateless_hauls: 'MyMRC Delivered haul(s) with no delivery date',
+  bridge_gate: 'Inventory bridge backfill: floor gate FAILED',
   error: 'MyMRC sync error',
 };
 
@@ -125,6 +137,7 @@ const CLICK_BY_KIND: Record<AlertKind, string> = {
   deadman: CLICK_URL,
   stale_mirror: INGESTION_CLICK_URL,
   dateless_hauls: INGESTION_CLICK_URL,
+  bridge_gate: CLICK_URL,
   error: CLICK_URL,
 };
 
@@ -159,6 +172,12 @@ export const GRADE_BY_KIND: Readonly<
   stale_mirror: { priority: 'default', cooldownMs: 24 * HOUR_MS },
   // Q1 is "ask MRC", i.e. same-day. Residual is 0/7,314 so any fire is genuinely new.
   dateless_hauls: { priority: 'default', cooldownMs: 24 * HOUR_MS },
+  // Q1 yes (the operator who ran the backfill is at the console; the page is the
+  // durable record). Q2: an unexplained floor move means the on-hand figure the
+  // COR is filed from may be wrong — `high`, not `urgent` (monthly billing).
+  // Q3 n/a (one-shot, human-run). Fires only on an UNEXPLAINED move since 0.CA,
+  // so it cannot fire on a legitimate post-anchor rewrite.
+  bridge_gate: { priority: 'high', cooldownMs: 6 * HOUR_MS },
   // Q3 — one hourly retry is free. Caller promotes to `high` after 3 consecutive.
   error: { priority: 'default', cooldownMs: 6 * HOUR_MS },
 };
@@ -247,7 +266,7 @@ export const ntfyPager: Pager = {
     // land as four days of hourly URGENT-adjacent buzzes rather than a daily note.
     const priority = alert.priority ?? grade.priority;
     const tags = `mymrc,${alert.kind},dr3-vision`;
-    const click = CLICK_BY_KIND[alert.kind];
+    const click = alert.click ?? CLICK_BY_KIND[alert.kind];
 
     const ok = await postWithTimeout(`${PRIMARY_BASE}/${TOPIC}`, body, {
       'X-Title': title,

@@ -367,6 +367,38 @@ describe('bridgeInboundHaulsToInventory — idempotency (double-count-proof)', (
     ); // absolute, not 1020
     expect(s.audit).toHaveLength(2); // insert + update
   });
+
+  it('reports each write with its BEFORE and AFTER values, and audits the prior value (0.CA)', async () => {
+    const s = store({ mirror: [mirror({ program_unit_count: 500, non_program_unit_count: 7 })] });
+    const prisma = fakePrisma(s);
+    const first = await bridgeInboundHaulsToInventory({ prisma });
+    expect(first.writes).toEqual([
+      {
+        siteId: 'woodland',
+        day: '2026-07-20',
+        before: null,
+        after: { program: 500, nonProgram: 7 },
+      },
+    ]);
+    s.mirror = [mirror({ program_unit_count: 607, non_program_unit_count: 7 })];
+    const second = await bridgeInboundHaulsToInventory({ prisma });
+    expect(second.writes).toEqual([
+      {
+        siteId: 'woodland',
+        day: '2026-07-20',
+        before: { program: 500, nonProgram: 7 },
+        after: { program: 607, nonProgram: 7 },
+      },
+    ]);
+    expect(s.audit[1]).toMatchObject({
+      action: 'update',
+      before: { program_unit_count: 500, non_program_unit_count: 7 },
+      after: { program_unit_count: 607 },
+    });
+    // an unchanged re-run writes nothing and reports nothing
+    const third = await bridgeInboundHaulsToInventory({ prisma });
+    expect(third.writes).toEqual([]);
+  });
 });
 
 describe('bridgeInboundHaulsToInventory — precedence (a paper_bulk/confirmed row always wins)', () => {
@@ -425,6 +457,14 @@ describe('bridgeInboundHaulsToInventory — window + dry-run + site scope + empt
     });
     const res = await bridgeInboundHaulsToInventory({ prisma: fakePrisma(s), dryRun: true });
     expect(res).toMatchObject({ daysConsidered: 1, inserted: 1, haulsUndated: 1 });
+    expect(res.writes).toEqual([
+      {
+        siteId: 'woodland',
+        day: '2026-07-20',
+        before: null,
+        after: { program: 561, nonProgram: 0 },
+      },
+    ]);
     expect(s.inbound.size).toBe(0);
     expect(s.audit).toHaveLength(0);
   });
@@ -456,6 +496,7 @@ describe('bridgeInboundHaulsToInventory — window + dry-run + site scope + empt
       unchanged: 0,
       haulsUndated: 0,
       skippedPerLoad: 0,
+      writes: [],
     });
     expect(s.inbound.size).toBe(0);
   });

@@ -428,6 +428,9 @@ describe('ADR-0130 §6 — the ADR-0037 grading matrix', () => {
       deadman: { priority: 'high', cooldownMs: 12 * H },
       stale_mirror: { priority: 'default', cooldownMs: 24 * H },
       dateless_hauls: { priority: 'default', cooldownMs: 24 * H },
+      // OPEN-ITEMS 0.CA (2026-09-25) — its own kind, so a manual backfill's gate
+      // no longer reads as "MyMRC sync error".
+      bridge_gate: { priority: 'high', cooldownMs: 6 * H },
       error: { priority: 'default', cooldownMs: 6 * H },
     });
   });

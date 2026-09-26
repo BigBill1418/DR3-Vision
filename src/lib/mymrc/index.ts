@@ -49,6 +49,9 @@ export {
   syncFeed,
   syncSite,
   checkDeadman,
+  // OPEN-ITEMS 0.CA — the hourly inbound bridge windows on this, so a correction
+  // the sync re-reads into the mirror also reaches inventory.
+  DELIVERED_REDETAIL_WINDOW_MS,
   type SyncFeedContext,
   type SyncFeedResult,
   type SyncSiteContext,

@@ -437,7 +437,11 @@ export async function runMymrcScrape({
         try {
           const br = await mymrc.bridgeProcessedToInventory({
             prisma,
-            sinceProductionDate: recentProcessedFloor(),
+            // OPEN-ITEMS 0.CA — since 9adb932 the processed mirror is re-read over
+            // the same 45 d as delivered hauls; bridge over it too, or a corrected
+            // production day 11-45 d back lands in the mirror and never in
+            // `processed_units_daily` (the same gap as the inbound leg).
+            sinceProductionDate: inboundBridgeFloor(new Date(), mymrc.DELIVERED_REDETAIL_WINDOW_MS),
             log: logFn,
           });
           logFn(
@@ -461,7 +465,17 @@ export async function runMymrcScrape({
         try {
           const ir = await mymrc.bridgeInboundHaulsToInventory({
             prisma,
-            sinceDeliveryDate: recentProcessedFloor(),
+            // 2026-09-25 (OPEN-ITEMS 0.CA) — the SAME window the sync re-reads
+            // delivered hauls over, not the 10-day processed window. 73f3002 made
+            // the mirror absorb an MRC correction to any haul delivered in the last
+            // 45 days; with a 10-day bridge window a correction to a day 11-45 days
+            // back reached the mirror but never `inbound_loads`, so the floor held
+            // the stale figure until someone ran the backfill by hand (0.BZ did, for
+            // 09-15, and its gate paged "MyMRC sync error"). Absolute writes +
+            // precedence guard make the wider window harmless; the bridge already
+            // reads every Delivered row and filters in memory, so it costs ~35 more
+            // per-day comparisons an hour.
+            sinceDeliveryDate: inboundBridgeFloor(new Date(), mymrc.DELIVERED_REDETAIL_WINDOW_MS),
             log: logFn,
           });
           logFn(
@@ -582,6 +596,21 @@ function describeErr(err) {
  */
 export function recentProcessedFloor(now = new Date()) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 10));
+}
+
+/** Fallback when the bundle predates the export: the 45 d of `sync.ts` at 73f3002. */
+export const DEFAULT_INBOUND_BRIDGE_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
+
+/**
+ * The hourly INBOUND bridge floor (UTC-midnight day key): as far back as the sync
+ * re-details delivered hauls (`DELIVERED_REDETAIL_WINDOW_MS`), plus one day of
+ * slack for the UTC/Pacific skew, so every correction the mirror can absorb also
+ * reaches `inbound_loads` within the hour (OPEN-ITEMS 0.CA).
+ */
+export function inboundBridgeFloor(now = new Date(), windowMs = DEFAULT_INBOUND_BRIDGE_WINDOW_MS) {
+  const ms = Number.isFinite(windowMs) && windowMs > 0 ? windowMs : DEFAULT_INBOUND_BRIDGE_WINDOW_MS;
+  const days = Math.ceil(ms / 86_400_000) + 1;
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - days));
 }
 
 async function main() {

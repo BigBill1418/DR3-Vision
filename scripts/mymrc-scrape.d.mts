@@ -97,3 +97,15 @@ export function resolveRedactor(mymrc: unknown): (text: string) => string;
 export function recordSessionFailure(
   args: RecordSessionFailureArgs,
 ): Promise<{ ledgered: boolean; recent: number }>;
+
+/** The ~10-day UTC-midnight floor the hourly PROCESSED bridge re-aggregates. */
+export function recentProcessedFloor(now?: Date): Date;
+
+/** 45 days — the fallback when the bundle predates `DELIVERED_REDETAIL_WINDOW_MS`. */
+export const DEFAULT_INBOUND_BRIDGE_WINDOW_MS: number;
+
+/**
+ * OPEN-ITEMS 0.CA — the hourly INBOUND bridge floor: the sync's delivered re-detail
+ * window + 1 day, as a UTC-midnight day key.
+ */
+export function inboundBridgeFloor(now?: Date, windowMs?: number): Date;

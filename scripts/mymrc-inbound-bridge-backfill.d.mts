@@ -9,6 +9,26 @@ export interface FloorSnapshot {
   program: string;
   nonProgram: string;
   total: string;
+  /**
+   * OPEN-ITEMS 0.CA — the first Pacific day the floor counts inbound on
+   * (`YYYY-MM-DD`), `null` with no anchor, absent from an older app (strict gate).
+   */
+  inboundSinceDay?: string | null;
+}
+
+/** One day the bridge wrote (mirrors `InboundBridgeWrite` in inbound-bridge.ts). */
+export interface BridgeWrite {
+  siteId: string;
+  day: string;
+  before: { program: number; nonProgram: number } | null;
+  after: { program: number; nonProgram: number };
+}
+
+/** Expected floor move in TENTHS per pool, plus a human list of the counted days. */
+export interface ExpectedMove {
+  program: number;
+  nonProgram: number;
+  days: string[];
 }
 
 /** Parsed backfill options. */
@@ -40,9 +60,23 @@ export function parseArgs(argv: string[]): BackfillOpts;
 /** True iff two floor snapshots are byte-identical on all three pools. */
 export function floorsEqual(a: FloorSnapshot, b: FloorSnapshot): boolean;
 
+/** Decimal string → exact integer tenths; NaN for finer precision or junk. */
+export function toTenths(v: string | number): number;
+
+/**
+ * The move the writes SHOULD cause at one site: Σ(after − before) over days
+ * `>= sinceDay` (`null` = every day; `undefined` = probe silent → zero).
+ */
+export function expectedFloorMove(
+  writes: BridgeWrite[] | undefined,
+  siteId: string | undefined,
+  sinceDay: string | null | undefined,
+): ExpectedMove;
+
 /**
  * Run the one-shot INBOUND backfill with the MANDATORY floor-invariance gate and
- * RESOLVE the process exit code (never calls `process.exit`): 0 success (or --dry-run) ·
- * 1 the live floor drifted (paged) or a probe/site-resolve failed.
+ * RESOLVE the process exit code (never calls `process.exit`): 0 success — the floor moved by
+ * exactly the rewritten counted days (or --dry-run) · 1 an unexplained move (paged
+ * `bridge_gate`) or a probe/site-resolve failed.
  */
 export function runInboundBridgeBackfill(deps: BackfillDeps): Promise<number>;

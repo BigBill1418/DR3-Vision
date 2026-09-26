@@ -9,6 +9,47 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-25 — "MyMRC sync error" was a manual backfill's gate, not the sync; the gate is now exact and the hourly bridge reaches every correction (OPEN-ITEMS 0.CA)
+
+At 8:41 PM PDT Bill wrote: _"now i am seeing sync errors with MyMRC … fix all this please - this is critical"._
+What he was seeing was one ntfy page at 7:47 PM PDT: `[DR3-Vision] MyMRC sync error - admin |
+inbound-bridge backfill: LIVE FLOOR DRIFTED for woodland — anchor-safety gate FAILED`. The 0.BZ
+session's hand-run re-bridge fired it. It was the only MyMRC error surface. All 108 sync runs in
+the preceding 26 h were `ok`, there were no backfill-cursor errors, the ntfy.sh fallback topics
+were empty, and the invariants read 9 ok / 0 violated.
+
+### Fixed
+
+- **The backfill floor gate could not tell a correct floor move from a bug.** ADR-0059 D5 said
+  "the floor must not move", which only holds when every rewritten day is at or before the anchor.
+  The re-bridge rewrote 09-15 (+107, a day after the 09-14 anchor), so the floor was right to
+  move. The gate now requires the floor to move by exactly the units written on the days the floor
+  counts. A mis-dated row still fails the gate (ADR-0059 Amendment 1). The bridge reports
+  per-day `writes[]`, its audit rows now carry `before`, and the floor probe returns
+  `inboundSinceDay`.
+- **A gate failure was titled "MyMRC sync error".** It now pages as its own `bridge_gate` kind:
+  "Inventory bridge backfill: floor gate FAILED", `high`, with a click through to the site's
+  loads-inventory page (`src/lib/mymrc/ntfy.ts`).
+- **An MRC correction to a haul delivered 11–45 days ago reached the mirror but not inventory.**
+  `73f3002` re-reads 45 days of delivered hauls, but the hourly inbound bridge windowed on 10.
+  It now windows on the same 45 days (+1) (`inboundBridgeFloor`, `scripts/mymrc-scrape.mjs`),
+  so a routine correction no longer needs a hand-run backfill. The processed bridge gets the same
+  window, since `9adb932` re-reads the processed mirror over 45 days. A dry run shows 35 days,
+  all workbook-guarded, so zero writes today. The first tick after deploy is
+  expected to rewrite one day: 08-31 (H-139247, 100 units reclassified by MRC from program to
+  non-program). That day is before the anchor, so the floor does not move.
+
+### Verified
+
+- The +107 on 09-15 is MRC's record. In last night's 2:00 AM PDT dump
+  (`~/backups/postgres/dr3-vision_20260925-090025Z.dump`) the mirror held H-139112 as
+  `Delivered 2026-09-15, program 0`, detailed 09-15 3 PM. Today MRC's record reads program 107
+  (unload count 107). The other 12 hauls that day are unchanged, and their sum is 1,412, which
+  matches the rewritten `inbound_loads` row. Compared with the pre-rebridge backup, exactly 5
+  rows changed, as 0.BZ recorded.
+- The failed gate left no persistent state. The only trace is a 6 h `alert_cooldowns` row
+  (`inbound-bridge-floor-drift`, expires 1:47 AM PDT 09-26). The gate has no cursor, flag or
+  queue.
 ## 2026-09-25 — The processed and outbound MyMRC mirrors pick up MRC's corrections too (OPEN-ITEMS 0.BZ)
 
 Bill, 8:26 PM PDT: _"fix the processed and outbound feeds too"._

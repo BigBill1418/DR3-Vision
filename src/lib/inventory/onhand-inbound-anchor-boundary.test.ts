@@ -98,3 +98,12 @@ describe('onHand — bridged mymrc_haul inbound rows ≤ the anchor day are iner
     expect(b.total.toString()).toBe('3010');
   });
 });
+
+describe('onHand — reports the first inbound day it counts (OPEN-ITEMS 0.CA)', () => {
+  it('inboundSinceDay is the Pacific day AFTER the anchor day — the exact boundary the window above uses', async () => {
+    const b = await onHand('woodland', new Date('2026-07-23T23:59:59.999Z'));
+    // The anchor is 2026-07-22 00:00 PT, so 07-22 is inert and 07-23 is the first
+    // counted day — the same split the two tests above prove on the sums.
+    expect(b.inboundSinceDay).toBe('2026-07-23');
+  });
+});

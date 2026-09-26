@@ -19,6 +19,73 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CA — 2026-09-25 "sync errors with MyMRC" = a manual backfill's floor gate — **FIXED (gate made exact, own alert kind, hourly inbound + processed bridge windows 10 → 45 d); nothing was blocked**
+
+Bill, 8:41 PM PDT: _"now i am seeing sync errors with MyMRC"_, then _"fix all this please - this is critical"_.
+
+**Where he was seeing it.** One MyMRC error surface existed, and it was one page:
+`dr3-vision-system` at 7:47 PM PDT, `[DR3-Vision] MyMRC sync error - admin | inbound-bridge backfill:
+LIVE FLOOR DRIFTED for woodland — anchor-safety gate FAILED`. The 0.BZ re-bridge fired it. Every
+other place an error could show was checked at 8:45 PM PDT and was clean:
+
+- `mymrc_sync_runs`: 108 runs in 26 h, all `ok`. The last one was 8:01 PM PDT, so `/admin/mrc-scrape` "Last run" read OK.
+- `mymrc_backfill_cursors`: every cursor completed in July, with no `error`.
+- ntfy.sh fallback topics for all four `dr3-vision*` topics: empty for 12 h.
+- scrape container: no warn/error lines. App container: only the designed workbook tolerant-match warning.
+- Invariants dry run (`notify:false`): 9 ok / 0 violated.
+- `mymrc_reconciliation_queue`: 17 `pending` new-record hauls, the newest from 09-19. This is an ordinary human review queue at `/admin/mymrc/reconcile`, not an error.
+
+**Root cause (two defects):**
+
+1. **The gate could not tell a correct floor move from a bug.** ADR-0059 D5 expected zero movement.
+   The 0.BZ re-bridge rewrote 09-15, a day after the 09-14 anchor, so the floor had to move, and it
+   paged. The +107 was verified independently against last night's dump
+   (`~/backups/postgres/dr3-vision_20260925-090025Z.dump`): H-139112 was mirrored as
+   `Delivered 2026-09-15, program 0`, detailed 09-15 3 PM PDT, and it is now program 107
+   (unload 107). The other 12 hauls that day are unchanged, and their sum of 1,412 equals the
+   rewritten row. The pre-rebridge `inbound_loads` backup differs from live in exactly the 5 rows
+   0.BZ lists. Woodland program on-hand 168 → 275 is correct.
+2. **The hourly bridge could not see the corrections `73f3002` started absorbing.** The mirror
+   re-reads 45 days of delivered hauls, but the inbound bridge windowed on 10. Every correction
+   for days 11–45 back would have needed a hand-run backfill, and so another page like tonight's.
+
+**Blocked?** No. The gate is a before/after probe with no cursor, flag, or queue. The only
+residue is the page's 6 h cooldown row (`alert_cooldowns` `inbound-bridge-floor-drift`,
+expiring 1:47 AM PDT 09-26), which is harmless.
+
+**Fixed** (ADR-0059 Amendment 1):
+
+- The gate now requires the floor to move by exactly what was written on counted days. It uses
+  the bridge's per-day `writes[]` and the probe's `inboundSinceDay`, and checks each pool and the
+  total in whole tenths. A mis-dated row still fails, as does a counted write that did not land or
+  a pool shift.
+- A failure pages as `bridge_gate`: "Inventory bridge backfill: floor gate FAILED", `high`,
+  clicking through to the site's loads-inventory page. It is no longer "MyMRC sync error".
+- The hourly inbound and processed bridges now window on `DELIVERED_REDETAIL_WINDOW_MS`
+  (45 d, +1).
+- Bridge audit rows carry `before`.
+
+**Open / hand-offs:**
+
+- **CA-1: processed bridge.** The window is aligned in this change. Since `9adb932` the processed
+  mirror re-reads 45 days, and `bridgeProcessedToInventory` now windows on the same floor. A dry
+  run over 08-11 → 09-25 shows 35 days, all guarded by workbook-owned rows, so zero writes today.
+  **Still open. Owner: the next session that touches the processed backfill.**
+  `mymrc-processed-bridge-backfill.mjs` still has the old zero-move gate and pages as
+  `error` / "MyMRC sync error". The hourly window now absorbs routine corrections, so it should
+  rarely be needed. If a post-anchor processed re-bridge is ever run by hand, it will page the way
+  tonight's did until the processed bridge also reports `writes[]` and that script gets the
+  Amendment 1 gate.
+- **CA-2: pre-July inbound history differs from the mirror. Bill decides whether it matters.**
+  A full-history dry run (`--dry-run --site=woodland --since=2026-01-01`) would change 140 days
+  and insert 8. Only 2 of those days are on or after 07-23 (08-31 and one July day). All of them
+  are before the physical anchors, so none of them moves the floor, and no COR has ever been
+  filed (`cor_certificates` is empty). Not rewritten, because it rewrites historical inventory.
+  Run the backfill only if historical inbound reports must match MRC.
+- **Deploy verification:** recorded below once live.
+
+---
+
 ## 0.BZ — 2026-09-25 Vision alert review (Bill: _"look at the ntfy server … vision related alerts for the last 48 hours and tell me what the hell is going on and fix whatever the problem is"_) — **3 noise sources FIXED; 1 real defect FIXED; BS-1 CLOSED (MRC had corrected; now absorbed); 2 items need a human**
 
 Window 2026-09-23 6:53 PM → 2026-09-25 6:53 PM PDT, read from the `ntfy` cache on BOS-HQ
@@ -56,7 +123,9 @@ alert on `infrawatch-*` / `noc-alerts`.
   gate exited 1 ("drifted 168→275 program") — **expected, and its own message says so**:
   09-15 is after the 09-14 anchor and 11 days back, just outside the hourly 10-day bridge
   window, so MRC's +107 revision on that day now correctly reaches the floor. Woodland
-  program on-hand 168 → **275**; non-program unchanged at 1,339.
+  program on-hand 168 → **275**; non-program unchanged at 1,339. _(0.CA: that gate's page was the
+  "sync errors" Bill saw at 8:41 PM PDT. The +107 was independently verified as H-139112, which
+  Vision had frozen at 0 units at delivery. The gate is now exact and has its own title.)_
 - **BS-2 is unblocked:** the September Woodland COR no longer carries the phantom ~10,860
   units. Re-check the COR prefill before filing.
 - **`processed` / `outbound` detail-once — FIXED 2026-09-25 (Bill 8:26 PM PDT: _"fix the

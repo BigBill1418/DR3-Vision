@@ -114,6 +114,24 @@ export interface InboundBridgeResult {
    * such days entirely (the floor confirm path does the same, refusing with a 409).
    */
   skippedPerLoad: number;
+  /**
+   * Every day this run wrote (or, under `dryRun`, would write), with the values
+   * before and after. 2026-09-25 (OPEN-ITEMS 0.CA): the backfill's floor gate
+   * could only ask "did the floor move at all?", so a legitimate rewrite of a
+   * post-anchor day (an MRC correction the hourly window no longer reaches) was
+   * indistinguishable from a date-encoding bug and paged as one. With the per-day
+   * deltas the gate can require the floor to move by EXACTLY what was written on
+   * the days it counts, and by nothing else. `before` is `null` for an insert.
+   */
+  writes: InboundBridgeWrite[];
+}
+
+export interface InboundBridgeWrite {
+  siteId: string;
+  /** The Pacific delivery day the aggregate is FOR (`YYYY-MM-DD`). */
+  day: string;
+  before: { program: number; nonProgram: number } | null;
+  after: { program: number; nonProgram: number };
 }
 
 // ── Pacific-midnight instant (inlined replica of @/lib/time — see module header) ──
@@ -173,6 +191,13 @@ const AGGREGATE_SOURCE_TYPES = ['paper_bulk', 'mymrc_haul', 'ipad_floor'] as con
 // in running-balance.ts; replicated here because this module compiles standalone with no
 // `@/…` imports — see the module header's bundle constraint).
 const VERIFIED_INBOUND_STATUSES = ['verified', 'submitted_to_mymrc', 'processed'] as const;
+
+/**
+ * Sentinel for an UPDATE whose prior values the preload did not see (the row was
+ * created concurrently). NaN makes any delta computed from it NaN, so a floor gate
+ * summing deltas can never mistake "unknown" for "unchanged".
+ */
+const UNKNOWN_BEFORE = { program: Number.NaN, nonProgram: Number.NaN } as const;
 
 // ── mirror + existing-row shapes the bridge needs ──
 
@@ -306,6 +331,7 @@ export async function bridgeInboundHaulsToInventory(
     unchanged: 0,
     haulsUndated: 0,
     skippedPerLoad: 0,
+    writes: [],
   };
 
   // 1. Pull the received (Delivered) B2B (General) haul rows. `disappeared_at` is
@@ -446,9 +472,22 @@ export async function bridgeInboundHaulsToInventory(
       result.unchanged += 1;
       continue;
     }
+    const beforeVals = existing
+      ? {
+          program: toNumber(existing.program_unit_count),
+          nonProgram: toNumber(existing.non_program_unit_count),
+        }
+      : null;
+    const write: InboundBridgeWrite = {
+      siteId: agg.siteId,
+      day: agg.iso,
+      before: beforeVals,
+      after: { program: agg.program, nonProgram: agg.nonProgram },
+    };
     if (dryRun) {
       if (existing) result.updated += 1;
       else result.inserted += 1;
+      result.writes.push(write);
       continue;
     }
 
@@ -484,6 +523,14 @@ export async function bridgeInboundHaulsToInventory(
       const rec = rows[0] as { id: string; inserted: boolean };
       if (rec.inserted) result.inserted += 1;
       else result.updated += 1;
+      // An update's prior values come from the preload; if the row appeared
+      // between preload and upsert (rec.inserted false, no preload), its prior
+      // values are unknown — record them as unknown rather than as zero.
+      result.writes.push(
+        rec.inserted
+          ? { ...write, before: null }
+          : { ...write, before: beforeVals ?? UNKNOWN_BEFORE },
+      );
 
       await tx.auditLog.create({
         data: {
@@ -492,6 +539,16 @@ export async function bridgeInboundHaulsToInventory(
           action: rec.inserted ? 'insert' : 'update',
           table_name: 'inbound_loads',
           row_id: rec.id,
+          // 2026-09-25 — the prior values, so a reviewer can see what a rewrite
+          // changed without restoring a backup (the 0.BZ re-bridge had to).
+          ...(beforeVals && !rec.inserted
+            ? {
+                before: {
+                  program_unit_count: beforeVals.program,
+                  non_program_unit_count: beforeVals.nonProgram,
+                },
+              }
+            : {}),
           after: {
             arrived_at: agg.iso,
             total_units: total,

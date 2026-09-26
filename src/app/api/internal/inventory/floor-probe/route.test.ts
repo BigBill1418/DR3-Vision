@@ -13,16 +13,20 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-const onHand = vi.fn<(...a: unknown[]) => Promise<{
-  program: Prisma.Decimal;
-  nonProgram: Prisma.Decimal;
-  total: Prisma.Decimal;
-  anchorPool: 'measured';
-}>>(async () => ({
+const onHand = vi.fn<
+  (...a: unknown[]) => Promise<{
+    program: Prisma.Decimal;
+    nonProgram: Prisma.Decimal;
+    total: Prisma.Decimal;
+    anchorPool: 'measured';
+    inboundSinceDay: string;
+  }>
+>(async () => ({
   program: new Prisma.Decimal('1597'),
   nonProgram: new Prisma.Decimal('886'),
   total: new Prisma.Decimal('2483'),
   anchorPool: 'measured' as const,
+  inboundSinceDay: '2026-07-23',
 }));
 vi.mock('@/lib/inventory/running-balance', () => ({ onHand: (...a: unknown[]) => onHand(...a) }));
 
@@ -53,6 +57,8 @@ describe('POST /api/internal/inventory/floor-probe', () => {
       nonProgram: '886',
       total: '2483',
       anchorPool: 'measured',
+      // OPEN-ITEMS 0.CA — the backfill gate needs the first counted inbound day.
+      inboundSinceDay: '2026-07-23',
     });
     // the fixed asOf was passed through to onHand
     expect(onHand).toHaveBeenCalledWith('site-wood', new Date('2026-07-23T20:00:00.000Z'));
