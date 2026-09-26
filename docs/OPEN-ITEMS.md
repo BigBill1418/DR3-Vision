@@ -19,6 +19,61 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CB — 2026-09-25 "are we still ingesting the docs and workbooks" — **ANSWERED: workbook sync exact; doc ingest truthful but 9/11 sources are frozen Outlook copies (ADR-0139 check shipped); retirement table in `docs/plans/workbook-doc-retirement.md`**
+
+Bill, 10:27 PM PDT: _"i hope we are still ingesting the docs and workbooks - in the path to retiring
+them all together - where are we on all of that ? That is very critical work"_.
+
+**Measured 10:30–11:00 PM PDT**, from prod Postgres plus Microsoft Graph via the app's own
+application credential, which is a second identity independent of the sweep:
+
+- **Workbook sync (Woodland daily log): exact.**
+  - Live rev 1239, last edited 5:37 PM PDT by Janette Tomas; `workbook_sources.last_file_ctag`
+    is the same revision.
+  - The repo parser on the live bytes gives 19 September days, and all 19 match
+    `processed_units_daily` on every field.
+  - Runs on weekdays, 06:00–20:00 PT, with 0 failures in 5 days.
+  - 0–2 rows upserted a day is correct: one close row per business day.
+  - Nit: 09-22 carries `M- 191035` (a space) because it is typed that way in the workbook.
+- **Document ingestion: truthful, and watching copies.**
+  - Live cTag equals Vision's for all 11 sources.
+  - 9 of 11 are `root:/Attachments` rev-2 copies, and their originals live in Kelsey's drive.
+  - Only the Meeting Notes Log original changed after its copy (08-04, archive-only).
+  - The live `Woodland Stockton Transport Log & Trailer List.xlsx` (rev 981, 08-14, Morena
+    Gomez) is **not watched**.
+  - Janette's TEREX.xlsx, the one live watched file, is untouched since 08-18. The floor enters
+    Terex throughput in Vision now: 20 September rows, `source=manager`.
+- **Eugene:** no workbook or document source at all.
+
+**Shipped:** ADR-0139, the `snapshot_source` anomaly (the once-a-day check at 08:00–08:29 PT,
+`default`, weekly re-page). **Its first page is expected at the first 08:00 PT sweep after
+deploy, naming the 9 copies. That page is a real finding, not a regression.**
+
+**For Bill, one line each** (full rows in the plan doc):
+
+- **CB-1 Custody (critical).**
+  - Every Woodland daily log lives in Kelsey's personal OneDrive, and each month's file is
+    created under her identity (Sept file: 2026-08-31 19:06 PDT).
+  - Her availability ended 08-08 (§ 0.AN). Disabling that account, or its retention clock,
+    takes the daily log and the October file with it.
+  - Decide with SVdP IT where the `DR3/Woodland/Woodland Operations/2026 Daily Logs` folder
+    moves (a SharePoint site is recommended), then update `workbook_sources` at
+    `/admin/workbook-sync`.
+  - **Check on 2026-10-01 that `OCT 2026 DAILY LOG WOODLAND.xlsm` exists.**
+- **CB-2** Disable the 5 archive-only copies (Data Tracking, JOURNAL, Meeting Notes Log, Task
+  Lists, Machine List (2)) at `/admin/doc-ingest`. They are retired in fact.
+- **CB-3** Trailer list: retire the frozen copy, or have the live Transport Log shared with
+  `docs-dr3@svdp.us`.
+- **CB-4** Staged batches, still unconfirmed: outbound 831 (`/admin/doc-ingest/outbound`),
+  expenses 332 (`/admin/doc-ingest/expenses`), Terex maintenance 480 (`/admin/doc-ingest/terex`).
+- **CB-5** Commodity tracker: 252 rows cannot leave `staged` because no decide path exists
+  (P-46). Retire it, or name an owner.
+- **CB-6** Daily-log cutover sequence: flip `eod_review` live (O-3), then Rick's parity
+  signoff, then `cutoverWorkbookSync`. `workbook_sync/woodland` has been `pilot` since
+  2026-07-08.
+- **CB-7** Eugene: where is its spreadsheet? (BT-3)
+- **CB-8** AK-5 `sharedWithMe` sunset (2026-11-01). The direction decision was due 2026-10-01.
+
 ## 0.CA — 2026-09-25 "sync errors with MyMRC" = a manual backfill's floor gate — **FIXED (gate made exact, own alert kind, hourly inbound + processed bridge windows 10 → 45 d); nothing was blocked**
 
 Bill, 8:41 PM PDT: _"now i am seeing sync errors with MyMRC"_, then _"fix all this please - this is critical"_.

@@ -369,3 +369,55 @@ describe('a delta page may SUPPLY a content marker, never REMOVE one', () => {
     expect(prisma._stores.sources[0]?.['ctag']).toBe('ctag-new');
   });
 });
+
+// ADR-0139 — the snapshot check is WIRED into the sweep, on the right cadence.
+describe('snapshot-source check wiring (ADR-0139)', () => {
+  const attachmentCopy = item({
+    id: 'copy-1',
+    name: 'Woodland Invoices tracking.xlsx',
+    parentPath: '/drives/drive-A/root:/Attachments',
+    lastModifiedAt: '2026-07-29T20:11:01Z',
+  });
+  const graph = () =>
+    makeGraph({
+      listSharedWithMe: async () => [attachmentCopy],
+      getItem: async () => attachmentCopy,
+    });
+  const snapshotRows = () =>
+    prisma._stores.anomalies.filter(
+      (a) => a['kind'] === 'snapshot_source' && a['status'] === 'open',
+    );
+
+  it('runs at 08:05 PT on a scheduled sweep and raises ONE anomaly', async () => {
+    await runDocIngestSweep(p(), {
+      now: new Date('2026-09-26T15:05:00Z'),
+      trigger: 'scheduled',
+      graph: graph(),
+      search: null,
+      classifyDeps: { fallbackEnabled: () => false },
+    });
+    expect(snapshotRows()).toHaveLength(1);
+  });
+
+  it('does NOT run on a 01:05 PT scheduled sweep (no overnight page)', async () => {
+    await runDocIngestSweep(p(), {
+      now: new Date('2026-09-26T08:05:00Z'),
+      trigger: 'scheduled',
+      graph: graph(),
+      search: null,
+      classifyDeps: { fallbackEnabled: () => false },
+    });
+    expect(snapshotRows()).toHaveLength(0);
+  });
+
+  it('always runs on a manual sweep', async () => {
+    await runDocIngestSweep(p(), {
+      now: new Date('2026-09-26T08:05:00Z'),
+      trigger: 'manual',
+      graph: graph(),
+      search: null,
+      classifyDeps: { fallbackEnabled: () => false },
+    });
+    expect(snapshotRows()).toHaveLength(1);
+  });
+});

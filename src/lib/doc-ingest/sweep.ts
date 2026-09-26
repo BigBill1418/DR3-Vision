@@ -34,6 +34,7 @@ import { DocIngestHaltedError, DocIngestNotConnectedError } from './access-token
 import { runDiscovery, sourceKey, type SharedItemSource } from './discovery';
 import { ensureSubscriptions } from './subscriptions';
 import { ingestSource } from './ingest';
+import { runSnapshotSourceCheck, shouldRunSnapshotCheck } from './snapshot-sources';
 import { classifySourceIfNeeded } from './classification';
 import { raiseAnomaly, resolveAnomaly } from './anomalies';
 import { runAbsorptionPass } from './absorb';
@@ -170,6 +171,23 @@ export async function runDocIngestSweep(
       } catch (e) {
         // Left as NULL, never 0 — see `reachabilityGap`.
         log('warn', `reachability scan failed: ${describe(e)} — capture is unaffected`);
+      }
+    }
+
+    // ── 1c. Is what we watch the LIVE file? (ADR-0139) ────────────────────
+    // Once a day (and on every manual sweep). Non-fatal for the same reason as
+    // 1b: an observation, never a capture step.
+    if (!options.driveId && shouldRunSnapshotCheck(now, trigger)) {
+      try {
+        const snap = await runSnapshotSourceCheck(prisma, graph, { now });
+        if (snap.raised) result.anomaliesRaised += 1;
+        log(
+          snap.snapshots.length > 0 ? 'warn' : 'info',
+          `snapshot check: ${snap.snapshots.length} of ${snap.checked} watched documents are frozen ` +
+            `attachment copies${snap.unreadable ? ` (${snap.unreadable} could not be read)` : ''}`,
+        );
+      } catch (e) {
+        log('warn', `snapshot check failed: ${describe(e)} — capture is unaffected`);
       }
     }
 

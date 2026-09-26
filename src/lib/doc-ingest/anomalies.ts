@@ -206,6 +206,21 @@ const ANOMALY_POLICY: Record<DocIngestAnomalyKind, AnomalyPolicy> = {
     priority: 'default',
     page: HEALTH_PAGE_PATH,
   },
+  // ADR-0139 — a watched document is a frozen Outlook attachment copy of a file
+  // that lives elsewhere. ADR-0037: Q1 actionable (share the original, or disable
+  // a retired copy — both on the SOURCES page); Q2 not customer-visible → never
+  // `urgent`; Q3 cannot self-heal; Q4 ONE subject for the whole condition, not one
+  // page per document; Q5 routes to where the fix is clicked. `default` because a
+  // snapshot costs freshness, not correctness of anything already captured, and
+  // the answer is a same-day conversation with the document's owner. Re-pages
+  // WEEKLY, not daily: the fix waits on a person outside Vision, and a daily nag
+  // about a conversation that has not happened yet is noise.
+  snapshot_source: {
+    severity: 'warning',
+    priority: 'default',
+    page: SOURCES_PAGE_PATH,
+    repageIntervalMs: 7 * 24 * 60 * 60 * 1000,
+  },
 
   // ── D7 guardrail. Real money and real inventory counts. These STAGE a change
   // rather than let it flow, so a human must act before the numbers move.

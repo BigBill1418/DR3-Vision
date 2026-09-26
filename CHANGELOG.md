@@ -9,6 +9,38 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-09-25 — Document ingestion was watching frozen copies; it now says so (ADR-0139, OPEN-ITEMS 0.CB)
+
+At 10:27 PM PDT Bill asked: _"i hope we are still ingesting the docs and workbooks - in the path to
+retiring them all together - where are we on all of that ?"_ Answered from production and from
+Microsoft Graph, using a second identity (the app's application credential), not the sweep's own
+figures.
+
+- **Workbook sync is exact.** `SEPT 2026 DAILY LOG WOODLAND.xlsm` is at rev 1239, last edited by
+  Janette Tomas at 5:37 PM PDT, and that is the revision Vision last synced. The repo's parser on
+  tonight's live bytes gives 19 days, and all 19 match `processed_units_daily` field for field.
+- **Document ingestion is running and truthful, but mostly watching the wrong files.** All 11
+  watched documents have a live cTag equal to Vision's. But 9 of the 11 are Outlook attachment
+  copies (`root:/Attachments`, rev 2, made 07-28/29), and their originals live elsewhere. Only one
+  original changed after its copy: the archive-only Meeting Notes Log, on 08-04. Nothing any Vision
+  figure uses was missed.
+
+### Added
+
+- `snapshot_source` doc-ingest anomaly (ADR-0139, migration
+  `20260866_adr0139_snapshot_source_anomaly`) in `src/lib/doc-ingest/snapshot-sources.ts`.
+  - A watched file is flagged when a **direct Graph item GET** puts it in the drive-root
+    `Attachments` folder and it has not changed in 14 days. `path_hint` was measured wrong for 2
+    of the 9 copies, so it is not trusted.
+  - One subject for the whole condition. Graded `default`, re-paged weekly.
+  - Runs once a day on sweeps starting 08:00–08:29 PT, and on every manual sweep.
+  - Never resolves when any item could not be read.
+  - Wired as sweep step 1c.
+  - Tests: 8 unit + 3 sweep-wiring, built from the real 2026-09-25 measurement. Six mutations
+    were each killed.
+- `docs/plans/workbook-doc-retirement.md`: the single, measured status table for every
+  workbook/document flow, with its system of record, retirement status, and each owner or blocker.
+
 ## 2026-09-25 — "MyMRC sync error" was a manual backfill's gate, not the sync; the gate is now exact and the hourly bridge reaches every correction (OPEN-ITEMS 0.CA)
 
 At 8:41 PM PDT Bill wrote: _"now i am seeing sync errors with MyMRC … fix all this please - this is critical"._
@@ -50,6 +82,7 @@ were empty, and the invariants read 9 ok / 0 violated.
 - The failed gate left no persistent state. The only trace is a 6 h `alert_cooldowns` row
   (`inbound-bridge-floor-drift`, expires 1:47 AM PDT 09-26). The gate has no cursor, flag or
   queue.
+
 ## 2026-09-25 — The processed and outbound MyMRC mirrors pick up MRC's corrections too (OPEN-ITEMS 0.BZ)
 
 Bill, 8:26 PM PDT: _"fix the processed and outbound feeds too"._

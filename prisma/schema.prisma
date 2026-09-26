@@ -1439,6 +1439,14 @@ enum DocIngestAnomalyKind {
   /// is the probe having stopped being able to answer at all. Recorded loudly
   /// because the alternative — the `gap 0` branch — reads as an all-clear.
   discovery_probe_contradiction
+  // ── Snapshot sources (ADR-0139) ───────────────────────────────────────────
+  /// A watched document is an Outlook ATTACHMENT COPY (`root:/Attachments`) that
+  /// has not changed in weeks — a frozen snapshot of a workbook that lives
+  /// somewhere else. ADR-0067 D1's premise is "Vision reads the live file"; a
+  /// copy satisfies every freshness check (its ctag never moves, so every sweep
+  /// is truthfully `ok` with 0 new versions) while the original's edits never
+  /// arrive. Measured 2026-09-25: 9 of the 11 watched documents.
+  snapshot_source
 }
 
 enum DocIngestAnomalySeverity {
