@@ -267,6 +267,14 @@ export default async function ProcessorQuotaReportPage({
                         flagged
                       </span>
                     )}
+                    {p.graceUntilISO && (
+                      <span
+                        className="ml-2 rounded-full bg-sky-500/15 px-2 py-0.5 text-xs text-sky-300 ring-1 ring-sky-500/30"
+                        title="New processor — exempt from the quota for their first 6 weeks (ADR-0071 Amendment 3). Days before this date are never counted as misses."
+                      >
+                        new — held to quota from {p.graceUntilISO}
+                      </span>
+                    )}
                     {!p.onRoster && (
                       <span
                         className="ml-2 rounded-full bg-dr3-steel/40 px-2 py-0.5 text-xs text-dr3-mist-dim"
@@ -288,7 +296,7 @@ export default async function ProcessorQuotaReportPage({
                         </td>
                       );
                     }
-                    const missed = day.units < Number(config.quota_units);
+                    const missed = p.misses.some((m) => m.dayISO === d);
                     return (
                       <td
                         key={d}
@@ -301,7 +309,7 @@ export default async function ProcessorQuotaReportPage({
                     );
                   })}
                   <td className="px-3 py-2 text-center tabular-nums">
-                    {p.misses.length} / {p.days.length}
+                    {p.misses.length} / {p.days.length - p.excused.length}
                   </td>
                 </tr>
               ))}

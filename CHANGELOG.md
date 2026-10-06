@@ -9,6 +9,22 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-06 — New processors are exempt from the quota report for 6 weeks (ADR-0071 Amendment 3)
+
+Bill, 12:16 PM PDT: _"if there is a new processor that is first entered in the system as a brand new
+staff - they should be exempt from that report for 6 weeks before they are held to the quota."_
+
+### Changed
+
+- `computeProcessorQuotaWeek` excuses every day inside a processor's first 42 days (Pacific day of
+  `bonus_employees.created_at` + 42). Excused days are shown but are never a miss, so they cannot flag
+  anyone or count toward the 3-miss threshold; a grace that ends mid-week counts only the days after it.
+  Rehires keep their old `created_at` and get no second grace. Quota (75), strictly-less-than and
+  no-entry-is-not-a-miss are unchanged.
+- `/admin/processor-quota`: "new — held to quota from <date>" badge; excused days no longer red; the
+  misses figure counts countable days only. Digest "N of M" likewise.
+- No migration, no schema change. Tests added in `processor-quota.test.ts`.
+
 ## 2026-09-25 — Document ingestion was watching frozen copies; it now says so (ADR-0139, OPEN-ITEMS 0.CB)
 
 At 10:27 PM PDT Bill asked: _"i hope we are still ingesting the docs and workbooks - in the path to

@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 import {
   addDaysISO,
   computeProcessorQuotaWeek,
+  NEW_PROCESSOR_GRACE_DAYS,
+  quotaCountsFromISO,
   pacificWeekBounds,
   previousCompleteWeek,
 } from './processor-quota';
@@ -23,6 +25,8 @@ interface SeedEntry {
   units: number;
   isActive?: boolean;
   deletedAt?: Date | null;
+  /** When the processor was first entered. Defaults to long before any test week. */
+  createdAt?: Date;
 }
 
 /** Minimal fake honouring the ONE where-clause this module builds. */
@@ -52,6 +56,7 @@ function fakeDb(entries: SeedEntry[]) {
               full_name: e.name,
               is_active: e.isActive ?? true,
               deleted_at: e.deletedAt ?? null,
+              created_at: e.createdAt ?? new Date('2026-01-01T00:00:00.000Z'),
             },
           }));
       },
@@ -236,21 +241,39 @@ describe('latestDueMonFriWeek (Am.2 send-window selector)', () => {
   const thu = new Date('2026-08-13T20:00:00Z'); // Thu 13:00 PT
 
   it('Thu and Fri 19:59 target the PREVIOUS Mon–Fri week', () => {
-    expect(latestDueMonFriWeek(thu)).toEqual({ weekStartISO: '2026-08-03', weekEndISO: '2026-08-07' });
-    expect(latestDueMonFriWeek(fri1959)).toEqual({ weekStartISO: '2026-08-03', weekEndISO: '2026-08-07' });
+    expect(latestDueMonFriWeek(thu)).toEqual({
+      weekStartISO: '2026-08-03',
+      weekEndISO: '2026-08-07',
+    });
+    expect(latestDueMonFriWeek(fri1959)).toEqual({
+      weekStartISO: '2026-08-03',
+      weekEndISO: '2026-08-07',
+    });
   });
 
   it('Fri 20:00 PT flips to the CURRENT Mon–Fri week — the send moment', () => {
-    expect(latestDueMonFriWeek(fri2000)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+    expect(latestDueMonFriWeek(fri2000)).toEqual({
+      weekStartISO: '2026-08-10',
+      weekEndISO: '2026-08-14',
+    });
   });
 
   it('Sat/Sun catch-up still targets that Friday week (self-heal window)', () => {
-    expect(latestDueMonFriWeek(sat)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
-    expect(latestDueMonFriWeek(sun)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+    expect(latestDueMonFriWeek(sat)).toEqual({
+      weekStartISO: '2026-08-10',
+      weekEndISO: '2026-08-14',
+    });
+    expect(latestDueMonFriWeek(sun)).toEqual({
+      weekStartISO: '2026-08-10',
+      weekEndISO: '2026-08-14',
+    });
   });
 
   it('Monday next week targets the just-finished week (late catch-up, then idempotent no-op)', () => {
-    expect(latestDueMonFriWeek(monNext)).toEqual({ weekStartISO: '2026-08-10', weekEndISO: '2026-08-14' });
+    expect(latestDueMonFriWeek(monNext)).toEqual({
+      weekStartISO: '2026-08-10',
+      weekEndISO: '2026-08-14',
+    });
   });
 
   it('window is Mon–Fri, never Mon–Sun', () => {
@@ -267,5 +290,86 @@ describe('latestDueMonFriWeek (Am.2 send-window selector)', () => {
 describe('Am.2 default threshold', () => {
   it('DEFAULT_MIN_MISSES is 3 — two bad days no longer flag by default', () => {
     expect(DEFAULT_MIN_MISSES).toBe(3);
+  });
+});
+
+// ADR-0071 Amendment 3 — a processor first entered in the system is exempt from
+// the quota for their first 6 weeks.
+describe('new-processor grace', () => {
+  // WEEK is Mon 2026-07-20. Three sub-quota days Mon–Wed, minMisses 2 in compute().
+  const three = (empId: string, createdAt: Date): SeedEntry[] =>
+    ['2026-07-20', '2026-07-21', '2026-07-22'].map((dayISO) => ({
+      empId,
+      name: empId,
+      siteId: WOODLAND,
+      dayISO,
+      units: 40,
+      createdAt,
+    }));
+
+  it('is 6 weeks', () => {
+    expect(NEW_PROCESSOR_GRACE_DAYS).toBe(42);
+  });
+
+  it('a processor entered the week before is never flagged, however many days they miss', async () => {
+    const w = await compute(three('new', new Date('2026-07-15T17:00:00.000Z')));
+    const r = w.rows[0]!;
+    expect(r.misses).toHaveLength(0);
+    expect(r.excused).toHaveLength(3);
+    expect(r.flagged).toBe(false);
+    expect(w.flagged).toHaveLength(0);
+    // Still on the report as a row — production is shown, just not held to the bar.
+    expect(r.days).toHaveLength(3);
+    expect(r.graceUntilISO).toBe('2026-08-26');
+  });
+
+  it('the same misses ARE flagged once the processor is past 6 weeks', async () => {
+    // Entered 2026-06-01 → held to quota from 2026-07-13, before this week.
+    const w = await compute(three('old', new Date('2026-06-01T17:00:00.000Z')));
+    expect(w.rows[0]!.misses).toHaveLength(3);
+    expect(w.rows[0]!.excused).toHaveLength(0);
+    expect(w.rows[0]!.graceUntilISO).toBeNull();
+    expect(w.flagged).toHaveLength(1);
+  });
+
+  it('day 42 is the first day held to the quota; day 41 is still excused', () => {
+    // Entered Mon 2026-06-08 (noon PT) → day 42 is Mon 2026-07-20.
+    const created = new Date('2026-06-08T19:00:00.000Z');
+    expect(quotaCountsFromISO(created)).toBe('2026-07-20');
+  });
+
+  it('crossing the boundary mid-week: only days from the 42nd on can be misses', async () => {
+    // Held to quota from Wed 2026-07-22 → Mon/Tue excused, Wed counts.
+    const w = await compute(three('cross', new Date('2026-06-10T19:00:00.000Z')));
+    const r = w.rows[0]!;
+    expect(r.excused.map((d) => d.dayISO)).toEqual(['2026-07-20', '2026-07-21']);
+    expect(r.misses.map((d) => d.dayISO)).toEqual(['2026-07-22']);
+    expect(r.flagged).toBe(false); // 1 counted miss < minMisses 2
+  });
+
+  it('reads the PACIFIC day of entry — a 6pm PT creation is not tomorrow', async () => {
+    // 2026-06-08T01:00Z is Sunday 2026-06-07 6pm PDT → counts from 2026-07-19, not 07-20.
+    expect(quotaCountsFromISO(new Date('2026-06-08T01:00:00.000Z'))).toBe('2026-07-19');
+  });
+
+  it('a rehire (old created_at) gets no second grace', async () => {
+    // Reactivated this month but the row was created in January.
+    const w = await compute(three('rehire', new Date('2026-01-05T17:00:00.000Z')));
+    expect(w.flagged).toHaveLength(1);
+  });
+
+  it('excused days never reach the quota check even when a day is exactly under', async () => {
+    const entries: SeedEntry[] = [
+      {
+        empId: 'n',
+        name: 'n',
+        siteId: WOODLAND,
+        dayISO: '2026-07-20',
+        units: 0,
+        createdAt: new Date('2026-07-01T17:00:00.000Z'),
+      },
+    ];
+    const w = await compute(entries);
+    expect(w.rows[0]!.misses).toHaveLength(0);
   });
 });

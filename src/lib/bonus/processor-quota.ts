@@ -24,6 +24,14 @@
 // Days are evaluated only where a row exists.
 //
 // Comparison is strictly-less-than: exactly 75 is MET, not missed.
+//
+// ── New-processor grace (ADR-0071 Amendment 3) ──────────────────────────────
+// A processor is exempt from the quota for their first 6 weeks (42 days). The
+// clock starts the Pacific day they were FIRST ENTERED in the system
+// (`bonus_employees.created_at`) — a rehire reactivates the same row (ADR-0019
+// §9a), so a returning processor is NOT a new one and gets no second grace.
+// Excused days are still recorded and shown; they just can never be a miss, so
+// they can neither flag someone nor count toward the threshold.
 
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { PACIFIC_TZ } from '@/lib/time';
@@ -34,6 +42,18 @@ type Db = PrismaClient | Prisma.TransactionClient;
 export const DEFAULT_QUOTA_UNITS = 75;
 /** Fallback only — misses needed in one week before a processor is flagged. */
 export const DEFAULT_MIN_MISSES = 3;
+/** ADR-0071 Amendment 3 — a new processor is held to the quota after 6 weeks. */
+export const NEW_PROCESSOR_GRACE_DAYS = 42;
+
+/**
+ * First Pacific day a processor first entered at `createdAt` is held to the
+ * quota: their entry day + 42. Days BEFORE this are excused. Derived in Pacific
+ * for the same reason the weeks are — a processor added at 6pm PT is already
+ * "tomorrow" in UTC, which would hand them an extra day.
+ */
+export function quotaCountsFromISO(createdAt: Date): string {
+  return addDaysISO(pacificISO(createdAt), NEW_PROCESSOR_GRACE_DAYS);
+}
 
 export interface QuotaDay {
   dayISO: string;
@@ -53,6 +73,13 @@ export interface ProcessorWeek {
   /** Days with RECORDED production only. A missing day is absent here. */
   days: QuotaDay[];
   misses: QuotaDay[];
+  /**
+   * Recorded days inside the new-processor grace window. Never a miss, whatever
+   * the count. Empty for anyone past their first 6 weeks.
+   */
+  excused: QuotaDay[];
+  /** Pacific day the processor starts being held to the quota, if still ahead of the week's start; else null. */
+  graceUntilISO: string | null;
   flagged: boolean;
 }
 
@@ -145,8 +172,7 @@ export function latestDueMonFriWeek(at: Date): { weekStartISO: string; weekEndIS
   const { weekStartISO } = pacificWeekBounds(at);
   const fridayISO = addDaysISO(weekStartISO, SEND_DOW_FRIDAY_OFFSET);
   const todayISO = pacificISO(at);
-  const due =
-    todayISO > fridayISO || (todayISO === fridayISO && pacificHour(at) >= SEND_HOUR_PT);
+  const due = todayISO > fridayISO || (todayISO === fridayISO && pacificHour(at) >= SEND_HOUR_PT);
   const start = due ? weekStartISO : addDaysISO(weekStartISO, -7);
   return { weekStartISO: start, weekEndISO: addDaysISO(start, SEND_DOW_FRIDAY_OFFSET) };
 }
@@ -191,7 +217,7 @@ export async function computeProcessorQuotaWeek(db: Db, args: ComputeArgs): Prom
       entry_date: true,
       mattress_count: true,
       bonus_employee: {
-        select: { id: true, full_name: true, is_active: true, deleted_at: true },
+        select: { id: true, full_name: true, is_active: true, deleted_at: true, created_at: true },
       },
     },
     orderBy: { entry_date: 'asc' },
@@ -202,6 +228,7 @@ export async function computeProcessorQuotaWeek(db: Db, args: ComputeArgs): Prom
   for (const e of entries) {
     const emp = e.bonus_employee;
     let row = byEmployee.get(emp.id);
+    const countsFrom = quotaCountsFromISO(emp.created_at);
     if (!row) {
       row = {
         employeeId: emp.id,
@@ -209,6 +236,8 @@ export async function computeProcessorQuotaWeek(db: Db, args: ComputeArgs): Prom
         onRoster: emp.is_active && emp.deleted_at === null,
         days: [],
         misses: [],
+        excused: [],
+        graceUntilISO: countsFrom > weekStartISO ? countsFrom : null,
         flagged: false,
       };
       byEmployee.set(emp.id, row);
@@ -225,6 +254,11 @@ export async function computeProcessorQuotaWeek(db: Db, args: ComputeArgs): Prom
       units: Number(e.mattress_count),
     };
     row.days.push(day);
+    // ADR-0071 Amendment 3 — inside the first 6 weeks nothing is a miss.
+    if (day.dayISO < countsFrom) {
+      row.excused.push(day);
+      continue;
+    }
     // Strictly less than: exactly the quota is MET.
     if (day.units < quota) row.misses.push(day);
   }

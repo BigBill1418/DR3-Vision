@@ -63,7 +63,7 @@ export function renderQuotaDigestHtml(week: QuotaWeek, siteName: string): string
           <strong>${escapeHtml(p.name)}</strong>
         </td>
         <td style="padding:10px 12px;border-bottom:1px solid #e3e6e8;vertical-align:top;text-align:center">
-          ${p.misses.length} of ${p.days.length}
+          ${p.misses.length} of ${p.days.length - p.excused.length}
         </td>
         <td style="padding:10px 12px;border-bottom:1px solid #e3e6e8;vertical-align:top">
           ${misses.join('<br>')}
