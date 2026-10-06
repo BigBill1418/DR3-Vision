@@ -107,6 +107,8 @@ function fakeDb(entries: Entry[], opts: { enabled?: boolean; existingLog?: boole
               full_name: e.name,
               is_active: true,
               deleted_at: null,
+              // ADR-0071 Amendment 3 — an established processor, long past the 6-week grace.
+              created_at: new Date('2026-01-01T00:00:00.000Z'),
             },
           }));
       },
