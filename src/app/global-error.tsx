@@ -37,6 +37,24 @@ export default function GlobalError({
         <p style={{ marginTop: '0.5rem', opacity: 0.8 }}>
           The error has been reported. Please refresh, or contact your administrator if it persists.
         </p>
+        {/* Installed to the home screen there is no browser refresh control, so this
+            screen was a dead end on the iPad. A plain reload is the way out. */}
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          style={{
+            marginTop: '1.5rem',
+            padding: '0.9rem 2rem',
+            fontSize: '1.1rem',
+            fontWeight: 600,
+            borderRadius: '0.5rem',
+            border: 'none',
+            backgroundColor: '#DCEFEC',
+            color: '#070C12',
+          }}
+        >
+          Reload
+        </button>
       </body>
     </html>
   );

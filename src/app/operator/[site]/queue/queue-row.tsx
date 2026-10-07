@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { isNextRedirectSignal } from '@/lib/next-redirect';
 import { startLoadAction } from '../actions';
@@ -73,7 +74,7 @@ export function QueueRow({
   children: React.ReactNode;
 }) {
   const t = useT();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   const [confirming, setConfirming] = useState(false);
   const [refused, setRefused] = useState(false);
 

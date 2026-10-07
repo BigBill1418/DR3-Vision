@@ -548,5 +548,9 @@
     "log_out": "Log Out",
     "log_out_aria": "Log out and return to the name picker",
     "floor_chrome_aria": "Screen navigation"
+  },
+  "stall": {
+    "message": "This is taking too long — the connection may have dropped. Your work is saved.",
+    "reload": "Reload"
   }
 }

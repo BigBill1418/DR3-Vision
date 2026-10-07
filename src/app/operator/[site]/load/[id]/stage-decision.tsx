@@ -1,6 +1,7 @@
 'use client';
 
-import { useTransition } from 'react';
+import {} from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { beginUnloadAction } from '../../actions';
 import { useLiveControl } from './stage-liveness';
@@ -17,7 +18,7 @@ export function StageDecision({
   onReject: () => void;
 }) {
   const t = useT();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
 
   // ADR-0122 — Reject carries no `disabled` at all, so this stage can only ever
   // be all-dark while a transition is in flight. Registered anyway: the value of

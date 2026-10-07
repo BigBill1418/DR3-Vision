@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { bolCapturedAction } from '../../actions';
 import { PhotoInput } from './photo-input';
@@ -25,7 +26,7 @@ export function StageBol({
 }) {
   const t = useT();
   const [hasFile, setHasFile] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
 
   // ADR-0122 — ONE expression, read by both the button and the detector. Written
   // as a reason chain rather than a boolean so a screen that is merely BUSY

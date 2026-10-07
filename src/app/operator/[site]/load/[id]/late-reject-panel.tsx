@@ -1,7 +1,8 @@
 'use client';
 
 import type { RejectionCategory } from '@prisma/client';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useI18n } from '@/i18n/provider';
 import { pendingActionsForLoad } from '@/lib/offline-queue';
 import { rejectLoadAction } from '../../actions';
@@ -76,7 +77,7 @@ export function LateRejectPanel({ siteCode, loadId, stacks, photoCount }: Props)
   const [category, setCategory] = useState<RejectionCategory | ''>('');
   const [note, setNote] = useState('');
   const [hasPhoto, setHasPhoto] = useState(photoCount > 0);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   const [error, setError] = useState<string | null>(null);
   // ADR-0082 — a refusal may be a takeover, and a Server Action's message is
   // redacted in production, so the client cannot read why. Asked, not guessed.

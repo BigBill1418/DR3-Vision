@@ -555,5 +555,9 @@
       "body": "Este enlace no lleva a ninguna parte en este iPad. No se perdió nada de lo que ingresaste.",
       "go_sites": "Elige tu sitio"
     }
+  },
+  "stall": {
+    "message": "Esto está tardando demasiado — la conexión puede haberse caído. Tu trabajo está guardado.",
+    "reload": "Recargar"
   }
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import type { CountMode, LoadStatus, PhotoKind } from '@prisma/client';
-import { useCallback, useEffect, useState, useTransition } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useI18n } from '@/i18n/provider';
 import { pendingActionsForLoad } from '@/lib/offline-queue';
 import { correctWeightAction, reopenLoadAction, voidStackAction } from '../../actions';
@@ -89,7 +90,7 @@ type Props = {
 
 export function ReviewPanel({ siteCode, load, onClose }: Props) {
   const { t, locale } = useI18n();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   // ADR-0082 — a refusal may be a takeover, and a Server Action's message is
   // redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, load.id);
@@ -140,7 +141,7 @@ export function ReviewPanel({ siteCode, load, onClose }: Props) {
         }
       });
     },
-    [claimLost, t],
+    [claimLost, startTransition, t],
   );
 
   const live = load.stacks.filter((s) => s.voided_at === null);

@@ -33,7 +33,8 @@
 // and the operator retaps forever, so the catch here renders a sentence and
 // leaves the control usable.
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { isNextRedirectSignal } from '@/lib/next-redirect';
 import { startLoadReconciledAction } from '../actions';
@@ -58,7 +59,7 @@ export function ReconcileRow({
   const t = useT();
   const [confirming, setConfirming] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
 
   return (
     <div className="rounded-lg bg-dr3-green-dark/40 p-4">

@@ -20,6 +20,7 @@
 import { usePathname } from 'next/navigation';
 import { DrainEngineMount } from './drain-engine-mount';
 import { FloorChrome } from './floor-chrome';
+import { StallBanner } from './stall-banner';
 import { resolveFloorNav } from './floor-nav';
 
 export function FloorShell({ children }: { children: React.ReactNode }) {
@@ -35,6 +36,7 @@ export function FloorShell({ children }: { children: React.ReactNode }) {
           operator's queued count gets pushed must not depend on which screen
           they happen to be looking at. Renders nothing. */}
       <DrainEngineMount />
+      <StallBanner />
       <FloorChrome nav={nav} />
       {children}
     </div>

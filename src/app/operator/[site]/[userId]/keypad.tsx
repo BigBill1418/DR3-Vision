@@ -3,6 +3,13 @@
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { withDeadline } from '@/lib/fetch-timeout';
+
+// A sign-in that has not answered in this long is not going to: re-enable the keys.
+const SIGN_IN_TIMEOUT_MS = 20_000;
+// After a successful sign-in the navigation should unmount this screen almost at
+// once. If it is still mounted this long after, the navigation stalled.
+const NAVIGATE_STALL_MS = 10_000;
 import { useT } from '@/i18n/provider';
 import { resolveFloorReturnPath } from '@/lib/floor-return-path';
 
@@ -31,6 +38,14 @@ export function Keypad({ userId, siteCode, next }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submittedRef = useRef(false);
+  const stallTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (stallTimer.current) clearTimeout(stallTimer.current);
+    },
+    [],
+  );
 
   const append = (d: string) => {
     if (busy || pin.length >= PIN_LEN) return;
@@ -48,11 +63,15 @@ export function Keypad({ userId, siteCode, next }: Props) {
     if (pin.length !== PIN_LEN || submittedRef.current) return;
     submittedRef.current = true;
     setBusy(true);
-    void signIn('pin', {
-      user_id: userId,
-      pin,
-      redirect: false,
-    })
+    void withDeadline(
+      signIn('pin', {
+        user_id: userId,
+        pin,
+        redirect: false,
+      }),
+      SIGN_IN_TIMEOUT_MS,
+      'signIn',
+    )
       .then((res) => {
         if (res?.error) {
           setError(t('keypad.error_incorrect'));
@@ -70,6 +89,15 @@ export function Keypad({ userId, siteCode, next }: Props) {
         // an open redirect.
         router.push(resolveFloorReturnPath(next, siteCode));
         router.refresh();
+        // The session exists now, so the PIN need not be re-entered: if the push
+        // never lands, give the operator their keys back instead of a screen that
+        // is busy forever. Cleared on unmount, which is what a working push does.
+        stallTimer.current = setTimeout(() => {
+          setError(t('keypad.error_failed'));
+          setPin('');
+          setBusy(false);
+          submittedRef.current = false;
+        }, NAVIGATE_STALL_MS);
       })
       .catch(() => {
         setError(t('keypad.error_failed'));

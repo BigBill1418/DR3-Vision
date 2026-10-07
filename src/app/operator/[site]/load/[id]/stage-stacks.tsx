@@ -1,7 +1,8 @@
 'use client';
 
 import type { CountMode } from '@prisma/client';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
 import { addStackAction, finishUnloadAction } from '../../actions';
@@ -36,7 +37,7 @@ export function StageStacks({ siteCode, loadId, unloadStartedAt, existingStacks 
   const t = useT();
   const [stacks, setStacks] = useState<Stack[]>(existingStacks);
   const [mode, setMode] = useState<CountMode | null>(existingStacks[0]?.count_mode ?? null);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
   // is redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, loadId);

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { doorOpenCapturedAction } from '../../actions';
 import { PhotoInput } from './photo-input';
@@ -23,7 +24,7 @@ export function StageDoor({
 }) {
   const t = useT();
   const [hasFile, setHasFile] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
 
   // ADR-0122 — see `stage-bol.tsx`. Truth-equivalent to the `(!hasFile &&
   // photoCount === 0) || isPending` that shipped in #286.
