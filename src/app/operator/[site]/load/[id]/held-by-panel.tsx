@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import type { LoadStatus } from '@prisma/client';
 import { useI18n } from '@/i18n/provider';
 import type { Locale } from '@/i18n/config';
@@ -91,7 +92,7 @@ export function HeldByPanel({
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<TakeoverActionResult | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
 
   const holder = holderName ?? t('takeover.unknown_holder');
   const heldSinceAt = heldSince ? new Date(heldSince) : null;

@@ -2,6 +2,7 @@
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { newQueueId } from '@/lib/ulid';
+import { FetchTimeoutError, UPLOAD_TIMEOUT_MS, fetchWithTimeout } from '@/lib/fetch-timeout';
 
 // IndexedDB-backed offline queue for the operator iPad. Per CLAUDE.md
 // hard rule #9 IndexedDB + Service Worker cache are the only persistence
@@ -1059,7 +1060,7 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
       : {};
 
     if (!storage_key || stale) {
-      const mint = await fetch('/api/photos/upload-url', {
+      const mint = await fetchWithTimeout('/api/photos/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...grantHeaders },
         // `manual` so a redirect surfaces AS a redirect. Following it lands on
@@ -1114,14 +1115,22 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
       // Bare `fetch` rejection is all a blocked preflight ever produces —
       // the browser will not tell JavaScript that a preflight was refused.
       try {
-        const put = await fetch(upload_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': row.content_type },
-          body: row.blob,
-        });
+        const put = await fetchWithTimeout(
+          upload_url,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': row.content_type },
+            body: row.blob,
+          },
+          UPLOAD_TIMEOUT_MS,
+        );
         if (!put.ok) return { ok: false, error: `R2 PUT ${put.status}` };
       } catch (e) {
-        if (appReachable) return { ok: false, error: BLOCKED_UPLOAD };
+        // A slow link is not a CORS refusal: a timeout stays an ordinary retryable
+        // failure and must never park the row as `blocked`.
+        if (appReachable && !(e instanceof FetchTimeoutError)) {
+          return { ok: false, error: BLOCKED_UPLOAD };
+        }
         throw e;
       }
     }
@@ -1136,7 +1145,7 @@ async function replayUpload(row: PendingUpload): Promise<{ ok: boolean; error?: 
     };
     if (row.idempotency_key) headers['Idempotency-Key'] = row.idempotency_key;
 
-    const confirm = await fetch('/api/photos/confirm', {
+    const confirm = await fetchWithTimeout('/api/photos/confirm', {
       method: 'POST',
       headers,
       redirect: 'manual',
@@ -1201,7 +1210,7 @@ async function replayDropoff(row: PendingUpload): Promise<{ ok: boolean; error?:
     const stale = !upload_url || Date.now() - row.queued_at > PRESIGN_TTL_MS;
 
     if (!storage_key || stale) {
-      const mint = await fetch(`/api/operator/${d.site_code}/dropoff/upload-url`, {
+      const mint = await fetchWithTimeout(`/api/operator/${d.site_code}/dropoff/upload-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `manual` so a redirect surfaces AS a redirect. Following it lands on
@@ -1234,14 +1243,22 @@ async function replayDropoff(row: PendingUpload): Promise<{ ok: boolean; error?:
       // mint round-tripped, so the app is demonstrably reachable and storage is
       // not — that is `blocked:`, not `offline`.
       try {
-        const put = await fetch(upload_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': row.content_type },
-          body: row.blob,
-        });
+        const put = await fetchWithTimeout(
+          upload_url,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': row.content_type },
+            body: row.blob,
+          },
+          UPLOAD_TIMEOUT_MS,
+        );
         if (!put.ok) return { ok: false, error: `R2 PUT ${put.status}` };
       } catch (e) {
-        if (appReachable) return { ok: false, error: BLOCKED_UPLOAD };
+        // A slow link is not a CORS refusal: a timeout stays an ordinary retryable
+        // failure and must never park the row as `blocked`.
+        if (appReachable && !(e instanceof FetchTimeoutError)) {
+          return { ok: false, error: BLOCKED_UPLOAD };
+        }
         throw e;
       }
     }
@@ -1253,7 +1270,7 @@ async function replayDropoff(row: PendingUpload): Promise<{ ok: boolean; error?:
       return { ok: false, error: `${CONFLICT_PREFIX}dropoff_no_storage_key` };
     }
 
-    const res = await fetch('/api/queue/replay', {
+    const res = await fetchWithTimeout('/api/queue/replay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       redirect: 'manual',
@@ -1295,7 +1312,7 @@ async function replayDropoff(row: PendingUpload): Promise<{ ok: boolean; error?:
 
 async function replayAction(row: PendingAction): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/queue/replay', {
+    const res = await fetchWithTimeout('/api/queue/replay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       redirect: 'manual',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useTransition } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useRouter } from 'next/navigation';
 import { useLocale } from '@/i18n/provider';
 import { LOCALES, LOCALE_LABELS, type Locale } from '@/i18n/config';
@@ -34,7 +34,7 @@ import { setFloorLocaleAction } from '@/i18n/actions';
 export function FloorLocaleSwitcher() {
   const router = useRouter();
   const current = useLocale();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
 
   const pick = (loc: Locale) => {
     if (isPending || loc === current) return;

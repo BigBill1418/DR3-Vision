@@ -1,7 +1,8 @@
 'use client';
 
 import type { LoadVoidReason } from '@prisma/client';
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useI18n } from '@/i18n/provider';
 import { voidLoadAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
@@ -28,7 +29,7 @@ export function VoidLoadPanel({ siteCode, loadId }: { siteCode: string; loadId: 
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<LoadVoidReason | ''>('');
   const [note, setNote] = useState('');
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   // ADR-0082 — a refusal may be a takeover, and a Server Action's message is
   // redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, loadId);

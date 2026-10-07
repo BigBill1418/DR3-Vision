@@ -26,6 +26,16 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 
+// Shorten every queue deadline to 50ms so a hung request is abandoned within the
+// test's own timeout. Only the deadline changes; abort/timeout behaviour is real.
+vi.mock('@/lib/fetch-timeout', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/fetch-timeout')>();
+  return {
+    ...orig,
+    fetchWithTimeout: (url: string, init?: RequestInit) => orig.fetchWithTimeout(url, init, 50),
+  };
+});
+
 const DB_NAME = 'dr3-vision-queue';
 
 /**
@@ -650,5 +660,47 @@ describe('ADR-0078 — replay ordering and per-load halting', () => {
     expect(seen).toEqual([1, 2]);
     const { actions } = await q.listPending();
     expect(actions.map((a) => JSON.parse(a.args_json).stackIndex).sort()).toEqual([2, 3]);
+  });
+});
+
+// ── iPad freeze fix: no network call in the drain may hang the sweep ──────────
+describe('replay network deadlines', () => {
+  // FALSIFIED BY HAND: with the bare `fetch` back in `replayAction`, this sweep
+  // never resolves and the test times out.
+  it('a replay request that never answers is abandoned, recorded, and retryable', async () => {
+    // Real timers: fake-indexeddb schedules on them. The deadline is shortened by
+    // the `fetch-timeout` mock at the top of this describe's file scope instead.
+    {
+      const q = await loadQueue();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_url: string, init?: RequestInit) =>
+            new Promise<Response>((_res, rej) => {
+              init?.signal?.addEventListener('abort', () =>
+                rej(new DOMException('aborted', 'AbortError')),
+              );
+            }),
+        ),
+      );
+      await q.enqueueAction({
+        scope: 'operator.count.create',
+        site_code: 'eugene',
+        target_day: '2026-08-07',
+        idempotency_key: q.newIdempotencyKey(),
+        payload: { countDate: '2026-08-07', unitsTotal: 10 },
+        endpoint: '/api/operator/eugene/count',
+      });
+
+      const result = await q.replayAll();
+
+      expect(result.actions_failed).toBe(1);
+      const { actions } = await q.listPending();
+      expect(actions, 'the entry is kept, not dropped').toHaveLength(1);
+      expect(actions[0]!.last_error).toMatch(/timeout/);
+      // Retryable: not parked as a conflict, blocked, or auth row.
+      expect(q.isConflict(actions[0]!)).toBe(false);
+      expect(q.stateFor(actions[0]!.last_error)).toBe('active');
+    }
   });
 });

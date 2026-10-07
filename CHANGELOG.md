@@ -9,6 +9,24 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-06 — The iPad no longer waits forever on a request (ADR-0140)
+
+Woodland, ~9:25 AM PDT: _"login screen stuck - load buttons stuck ipad browser appears frozen"_. The server was
+healthy throughout (healthz 200, DB clean, no 5xx in 26 h, nothing deployed that week, PINs logging in at
+9:27/9:31). The client-side trigger was **not reproduced**; this removes the "hangs forever" failure from every
+path the symptoms name.
+
+### Fixed
+
+- **Offline-queue calls have deadlines.** All seven replay `fetch`es (photo mint/confirm, drop-off mint, queue
+  replay, R2 PUT) use `fetchWithTimeout` — 20 s, 90 s for photo PUTs. A timeout is a retryable failure, never a
+  `blocked:` row, and cannot hold the drain sweep open.
+- **PIN keypad cannot stay busy.** `signIn` is bounded at 20 s; a sign-in that succeeds but whose navigation never
+  lands returns the keys after 10 s.
+- **Stall watchdog.** Every floor action that has not settled in 25 s raises a banner with Reload
+  (`useWatchedTransition` + `StallBanner`; en/es/ur). `global-error.tsx` gains a Reload button.
+- Tests: `fetch-timeout`, `offline-queue` (hung replay), `keypad`, `stall-banner`.
+
 ## 2026-10-06 — New processors are exempt from the quota report for 6 weeks (ADR-0071 Amendment 3)
 
 Bill, 12:16 PM PDT: _"if there is a new processor that is first entered in the system as a brand new

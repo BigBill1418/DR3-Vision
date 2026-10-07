@@ -12,7 +12,7 @@
 // what `buildHaulsListHref` produces from the same state.
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { useTransition } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 
 type Props = {
@@ -24,7 +24,7 @@ export function HaulsPagination({ page, totalPages }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   const t = useT();
 
   const goTo = (next: number) => {

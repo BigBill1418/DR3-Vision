@@ -1,7 +1,8 @@
 'use client';
 
 import type { RejectionCategory } from '@prisma/client';
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
+import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useI18n } from '@/i18n/provider';
 import { rejectLoadAction } from '../../actions';
 import { useClaimLossGuard } from './use-claim-loss-guard';
@@ -35,7 +36,7 @@ export function StageReject({
   const [category, setCategory] = useState<RejectionCategory | ''>('');
   const [hasPhoto, setHasPhoto] = useState(photoCount > 0);
   const [note, setNote] = useState('');
-  const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useWatchedTransition();
   // ADR-0082 — a stage refusal may be a takeover, and a Server Action's message
   // is redacted in production, so the client cannot read why. Asked, not guessed.
   const claimLost = useClaimLossGuard(siteCode, loadId);
