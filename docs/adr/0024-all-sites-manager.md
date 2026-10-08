@@ -55,6 +55,21 @@ Operators are never all-sites (the PIN flow hard-codes `all_sites: false`); for 
 - `primary_site_id` still matters for an all-sites manager only as a _default landing site_; it no longer bounds their reach.
 - Only Kelsey is `all_sites=true` at acceptance. The mechanism is general.
 
+## Amendment 1 — 2026-10-08: a record fetched by id must be at the resolved site (CF-5)
+
+Site reach is decided once, from the session, against the site in the URL. That decision is worth nothing if the
+route then acts on a record looked up **by id alone**: the id carries its own `site_id`, and a caller with reach at
+one site could act on another site's record by naming it. The held-count routes did exactly this
+(`POST`/`DELETE /api/operator/[site]/count/holds/[holdId]` and `/api/manager/[site]/count-holds/[holdId]`): any
+operator or manager could discard another site's held count given its id.
+
+**Rule.** A route that resolves a site and then loads a record by id passes that site to the code that loads it,
+and a record at any other site is reported exactly as a record that does not exist (same status, same body), checked
+before anything else about the record is evaluated. This is the shape `void-count.ts` (`SnapshotNotFoundError`),
+`or-counts.ts` and the hold status `GET` already used; `releaseHold` and `discardHold` now take a required `siteId`
+and follow it. Admin and `all_sites` reach are unchanged: they choose the site in the URL, and the record must be at
+that site. Recorded in `docs/OPEN-ITEMS.md` 0.CF (CF-5); the audit half of the same fix is ADR-0118 Amendment 1.
+
 ## Related ADRs
 
 - ADR-0016 — Entra ID SSO for managers + admins (the sign-in gate `all_sites` flows through)

@@ -25,6 +25,7 @@ import { verifyPin } from '@/lib/pin-service';
 import { reconcilePhysicalCount } from '@/lib/inventory/running-balance';
 import {
   BadPinError,
+  HoldNotFoundError,
   HoldNotPendingError,
   NotAManagerError,
   SelfReleaseRefusedError,
@@ -129,6 +130,7 @@ describe('releaseHold', () => {
     const db = fakeDb();
     const out = await releaseHold(db as never, {
       holdId: 'hold-1',
+      siteId: SITE,
       approverUserId: MANAGER,
       path: 'pin',
       pin: 'good',
@@ -142,7 +144,12 @@ describe('releaseHold', () => {
 
   it('ADR-0138 — the release writes the HELD counter, not the approver', async () => {
     const db = fakeDb({ counted_by: 'Chris R', confirmed_by: 'Patrick D' });
-    await releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' });
+    await releaseHold(db as never, {
+      holdId: 'hold-1',
+      siteId: SITE,
+      approverUserId: MANAGER,
+      path: 'remote',
+    });
     const args = vi.mocked(reconcilePhysicalCount).mock.calls[0]![0];
     expect(args.countedBy).toBe('Chris R');
     expect(args.confirmedBy).toBe('Patrick D');
@@ -154,6 +161,7 @@ describe('releaseHold', () => {
     await expect(
       releaseHold(db as never, {
         holdId: 'hold-1',
+        siteId: SITE,
         approverUserId: OPERATOR,
         path: 'pin',
         pin: 'good',
@@ -167,6 +175,7 @@ describe('releaseHold', () => {
     await expect(
       releaseHold(db as never, {
         holdId: 'hold-1',
+        siteId: SITE,
         approverUserId: OPERATOR,
         path: 'pin',
         pin: 'wrong',
@@ -182,6 +191,7 @@ describe('releaseHold', () => {
     await expect(
       releaseHold(db as never, {
         holdId: 'hold-1',
+        siteId: SITE,
         approverUserId: OUTSIDER,
         path: 'pin',
         pin: 'good',
@@ -195,6 +205,7 @@ describe('releaseHold', () => {
     await expect(
       releaseHold(db as never, {
         holdId: 'hold-1',
+        siteId: SITE,
         approverUserId: MANAGER,
         path: 'pin',
         pin: 'wrong',
@@ -207,6 +218,7 @@ describe('releaseHold', () => {
     const db = fakeDb();
     const out = await releaseHold(db as never, {
       holdId: 'hold-1',
+      siteId: SITE,
       approverUserId: MANAGER,
       path: 'remote',
     });
@@ -220,14 +232,24 @@ describe('releaseHold', () => {
     // desk either — the rule is about the person, not the surface.
     const db = fakeDb({ created_by: MANAGER });
     await expect(
-      releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' }),
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        siteId: SITE,
+        approverUserId: MANAGER,
+        path: 'remote',
+      }),
     ).rejects.toBeInstanceOf(SelfReleaseRefusedError);
   });
 
   it('will not release a hold twice', async () => {
     const db = fakeDb({ status: 'approved' });
     await expect(
-      releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' }),
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        siteId: SITE,
+        approverUserId: MANAGER,
+        path: 'remote',
+      }),
     ).rejects.toBeInstanceOf(HoldNotPendingError);
     expect(reconcilePhysicalCount).not.toHaveBeenCalled();
   });
@@ -235,7 +257,12 @@ describe('releaseHold', () => {
   it('will not release a discarded hold', async () => {
     const db = fakeDb({ status: 'discarded' });
     await expect(
-      releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' }),
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        siteId: SITE,
+        approverUserId: MANAGER,
+        path: 'remote',
+      }),
     ).rejects.toBeInstanceOf(HoldNotPendingError);
   });
 
@@ -243,6 +270,7 @@ describe('releaseHold', () => {
     const db = fakeDb();
     await releaseHold(db as never, {
       holdId: 'hold-1',
+      siteId: SITE,
       approverUserId: MANAGER,
       path: 'pin',
       pin: 'good',
@@ -265,6 +293,7 @@ describe('releaseHold', () => {
     const db = fakeDb({ swing_pct: 1, prior_total: 9999 });
     const out = await releaseHold(db as never, {
       holdId: 'hold-1',
+      siteId: SITE,
       approverUserId: MANAGER,
       path: 'remote',
     });
@@ -278,6 +307,7 @@ describe('discardHold', () => {
     const db = fakeDb();
     await discardHold(db as never, {
       holdId: 'hold-1',
+      siteId: SITE,
       userId: OPERATOR,
       reason: 'mistyped a digit',
     });
@@ -289,7 +319,87 @@ describe('discardHold', () => {
   it('will not discard a hold that has already been released', async () => {
     const db = fakeDb({ status: 'approved' });
     await expect(
-      discardHold(db as never, { holdId: 'hold-1', userId: OPERATOR, reason: 'x' }),
+      discardHold(db as never, { holdId: 'hold-1', siteId: SITE, userId: OPERATOR, reason: 'x' }),
     ).rejects.toBeInstanceOf(HoldNotPendingError);
+  });
+});
+
+// ── CF-5 (ADR-0024 Amendment / ADR-0118) ─────────────────────────────────────
+// Site isolation: a hold at another site is the SAME `HoldNotFoundError` (the
+// routes' 404 `hold_not_found`) as a hold that does not exist, and is checked
+// before anything else — before the self-release rule and before the PIN, so
+// a foreign hold id cannot be used to learn anything about that hold.
+describe('CF-5 — a hold at another site does not exist for this caller', () => {
+  it('release of another site’s hold is HoldNotFound, and nothing is checked or written', async () => {
+    const db = fakeDb({ site_id: 'site-eugene' });
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        siteId: SITE,
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'good',
+      }),
+    ).rejects.toBeInstanceOf(HoldNotFoundError);
+    expect(verifyPin).not.toHaveBeenCalled();
+    expect(reconcilePhysicalCount).not.toHaveBeenCalled();
+    expect(db.updates).toHaveLength(0);
+    expect(db.audits).toHaveLength(0);
+  });
+
+  it('the cross-site refusal is not a self-release oracle either', async () => {
+    const db = fakeDb({ site_id: 'site-eugene' });
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        siteId: SITE,
+        approverUserId: OPERATOR,
+        path: 'remote',
+      }),
+    ).rejects.toBeInstanceOf(HoldNotFoundError);
+  });
+
+  it('discard of another site’s hold is HoldNotFound and changes nothing', async () => {
+    const db = fakeDb({ site_id: 'site-eugene' });
+    await expect(
+      discardHold(db as never, { holdId: 'hold-1', siteId: SITE, userId: OPERATOR, reason: 'x' }),
+    ).rejects.toBeInstanceOf(HoldNotFoundError);
+    expect(db.hold.status).toBe('pending');
+    expect(db.updates).toHaveLength(0);
+    expect(db.audits).toHaveLength(0);
+  });
+});
+
+describe('CF-5 — discard is one guarded transaction (ADR-0118)', () => {
+  it('discards through the pending CAS and writes exactly one audit row', async () => {
+    const db = fakeDb();
+    const tx = vi.spyOn(db, '$transaction');
+    await discardHold(db as never, {
+      holdId: 'hold-1',
+      siteId: SITE,
+      userId: OPERATOR,
+      reason: 'mistyped a digit',
+    });
+    expect(tx).toHaveBeenCalledTimes(1);
+    expect(db.hold.status).toBe('discarded');
+    expect(db.audits).toHaveLength(1);
+    expect(db.audits[0]!['after']).toEqual({ discarded: true, reason: 'mistyped a digit' });
+  });
+
+  it('a discard that loses the race to another decision writes nothing and says which state won', async () => {
+    const db = fakeDb();
+    // The pre-transaction read sees `pending`; by the time the CAS runs,
+    // somebody else has released it.
+    db.inventoryCountHold.findUnique = async () => {
+      const seen = { ...db.hold };
+      (db.hold as Record<string, unknown>)['status'] = 'approved';
+      return seen;
+    };
+    await expect(
+      discardHold(db as never, { holdId: 'hold-1', siteId: SITE, userId: OPERATOR, reason: 'x' }),
+    ).rejects.toThrow('hold_approved');
+    expect(db.hold.status).toBe('approved');
+    expect(db.updates).toHaveLength(0);
+    expect(db.audits).toHaveLength(0);
   });
 });

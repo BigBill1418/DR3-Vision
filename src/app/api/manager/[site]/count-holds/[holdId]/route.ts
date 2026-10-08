@@ -10,6 +10,11 @@
 // eligible approver, and never the operator who entered it. A manager who also
 // happens to have entered the count on the floor cannot release it from their
 // desk either — the rule is about the person, not the surface.
+//
+// CF-5 (ADR-0024 Amendment 1): the gate proves reach at the URL's site, and the
+// hold must be AT that site. A hold at another site is the same `hold_not_found`
+// 404 as a missing one — pre-fix a manager could discard another site's hold by
+// id through their own site's URL.
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -60,6 +65,7 @@ export async function POST(_req: Request, { params }: Params) {
   try {
     const out = await releaseHold(prisma, {
       holdId,
+      siteId: gate.ctx.siteId,
       approverUserId: gate.ctx.userId,
       path: 'remote',
     });
@@ -90,6 +96,7 @@ export async function DELETE(req: Request, { params }: Params) {
   try {
     await discardHold(prisma, {
       holdId,
+      siteId: gate.ctx.siteId,
       userId: gate.ctx.userId,
       reason: parsed.data.reason,
     });
