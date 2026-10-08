@@ -9,6 +9,19 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-08 — Planned: AP invoices the team receives directly (ADR-0141, proposed)
+
+Docs only, no code. Bill asked for a second way into AP approvals: a site manager who
+receives an invoice directly submits it in Vision and selects which accounting staff
+member gets the approval/rejection, with accounting's existing email flow left as is.
+ADR-0141 (proposed) and `docs/plans/2026-10-08-ap-team-submit.md` map today's flow, make
+the case for using the same `ap_requests` record and approver path, exclude the
+submitter from every decision on their own invoice (DB CHECK + server + UI), add an
+admin-managed accounting-staff list, and lay out five build phases behind born-pilot
+rollout surfaces. Eight design questions are open for Bill (plan §2).
+Finding recorded there: today nothing stops the person who forwarded an invoice from
+approving it (1 of 227 prod requests).
+
 ## 2026-10-08 — Negative on-hand names its cause instead of always blaming intake (ADR-0110 Am.1)
 
 Woodland's 2026-10-07 report read "⚠ On-hand is computing negative (−147). Intake data is incomplete — most recent
