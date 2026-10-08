@@ -16,6 +16,7 @@ import {
   buildSvdpRow,
   loadColumnsForSvdp,
   monthRange,
+  singleSourcePerDay,
   toCsv,
   INVOICE_STATUSES,
   type LoadRowInput,
@@ -65,6 +66,7 @@ export async function GET(req: Request) {
     },
     select: {
       id: true,
+      load_source_type: true,
       external_mymrc_haul_id: true,
       bol_number: true,
       arrived_at: true,
@@ -81,7 +83,11 @@ export async function GET(req: Request) {
   });
 
   const site = { code: ctx.siteCode, name: ctx.siteName };
-  const rows = (loads as LoadRowInput[]).map((l) => buildSvdpRow(l, site));
+  // ADR-0142 — one source per Pacific site-day: a day the verified aggregate
+  // (MyMRC / paper / floor) counts is billed from that row alone; its per-load
+  // dock rows are tracking only and are dropped here.
+  const billable = await singleSourcePerDay(ctx.siteId, loads);
+  const rows = (billable as LoadRowInput[]).map((l) => buildSvdpRow(l, site));
   const csv = toCsv(rows, loadColumnsForSvdp());
 
   const filename = `dr3-svdp-internal-${ctx.siteCode}-${parsed.data.month}.csv`;

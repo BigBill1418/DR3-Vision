@@ -23,6 +23,9 @@
 import { type LoadStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
+import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
+import { isAggregateSourceType, pacificDaysWithVerifiedAggregate } from '@/lib/loads/floor-inbound';
+import { pacificDayISO } from '@/lib/time';
 import {
   issueDocumentNumber,
   siteGetsVisionDr3Number,
@@ -49,7 +52,12 @@ export class VerifyGateError extends Error {
       // number) between the read at the top of `verifyLoad` and the guarded
       // write inside its transaction. Distinct from `wrong_state`, which is the
       // same refusal made against a load that was already wrong when we looked.
-      | 'concurrent_verify',
+      | 'concurrent_verify'
+      // ADR-0142 (ADR-0060 D5, per-load direction) — the load's Pacific day at
+      // this site already holds a VERIFIED aggregate inbound row (MyMRC / paper /
+      // floor). That aggregate IS the day's inventory + billing count; verifying
+      // a per-load dock row onto it would count the same mattresses twice.
+      | 'aggregate_day_exists',
     message: string,
     status: 409 | 422 = 422,
   ) {
@@ -134,6 +142,8 @@ export async function verifyLoad(args: {
       status: true,
       total_units: true,
       dr3_number: true,
+      load_source_type: true,
+      arrived_at: true,
       source: { select: { is_non_program: true, state: true, is_trans_charge: true } },
       site: { select: { jurisdiction: true } },
     },
@@ -272,7 +282,41 @@ export async function verifyLoad(args: {
   // (`setInboundTransportCharged`).
   const transportCharged = load.source ? load.source.is_trans_charge : null;
 
+  // ── ADR-0142 — the ADR-0060 D5 guard, from the per-load side ──────────────
+  //
+  // `onHand` sums every verified inbound row for a day whatever its source type.
+  // `confirmFloorInboundDay` and the MyMRC bridge refuse to ADD an aggregate to
+  // a day that holds verified per-load rows; this is the other direction —
+  // refuse to verify a per-load row onto a day an aggregate already counts.
+  // Bill, 2026-10-08: the per-day aggregate is the inventory and billing source;
+  // dock (`b2b_haul`) loads are floor/haul tracking only.
+  //
+  // Race-safety: the site promotion lock is taken FIRST in the transaction. Every
+  // aggregate writer (bridge, floor confirm, paper bulk) takes the same lock as
+  // its first statement, so the aggregate check below — run after the lock, at
+  // READ COMMITTED — sees any aggregate one of them committed, and none of them
+  // can commit one between this check and our write. A load with no
+  // `arrived_at` has no Pacific day and is invisible to `onHand`'s window, so it
+  // cannot double-count and is not checked. Aggregate rows are never verified
+  // through this gate (their writers insert them `verified`), so the check only
+  // applies to per-load provenances.
+  const dayKey =
+    load.arrived_at != null && !isAggregateSourceType(load.load_source_type)
+      ? pacificDayISO(load.arrived_at)
+      : null;
+
   await prisma.$transaction(async (tx) => {
+    await lockSiteAgainstPromotion(tx, load.site_id);
+    if (dayKey != null) {
+      const owned = await pacificDaysWithVerifiedAggregate(tx, load.site_id, [dayKey]);
+      if (owned.has(dayKey)) {
+        throw new VerifyGateError(
+          'aggregate_day_exists',
+          `${dayKey} at this site is already counted by its daily aggregate (MyMRC / paper / floor); a dock load on that day is tracking only and cannot be verified`,
+          409,
+        );
+      }
+    }
     const dr3Number = issuesDr3
       ? String(await issueDocumentNumber(load.site_id, DR3_NUMBER_SEQUENCE, tx))
       : null;

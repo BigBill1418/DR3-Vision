@@ -2980,6 +2980,14 @@ executed ~7:20 PM PT, audited under Bill's user id:
   `verified|submitted_to_mymrc|processed` feed onHand), so this is a floor-record
   /attribution issue, not an inventory one — but investigate before any
   haul-count-driven figure is published. Build, this week.
+  **UPDATE 2026-10-08 (ADR-0142):** "never reach inventory" now holds by rule, not by
+  accident. Bill: dock loads are floor/haul tracking only; the per-day aggregate is the
+  inventory and billing source; dock loads are never bulk-verified or voided. All 374
+  Woodland dock loads at `submitted` sit on `mymrc_haul` aggregate days, so `verifyLoad`
+  now refuses each with 409 `aggregate_day_exists`. They also **did** reach a billing
+  surface: the MRC/SVdP exports emitted them on top of the aggregate (September 172 dock
+  rows / 19,545 units over 25 aggregate rows / 21,804). Fixed in the same PR
+  (`singleSourcePerDay`).
 - **WATCH — `19bfc591` (H-136796 HWMA, late truck)** started 5:13 PM PT on the
   freed slot, `in_progress` — genuinely being worked. If still open at start of
   shift Tue, chase it (the void now exists for exactly this).
@@ -4498,6 +4506,19 @@ are broken out below because they are not all about corrections.
   those two loads double-counts 106 units into `onHand`.** Nine `b2b_haul` loads sit
   unverified; none has ever reached `verified`. Decide the day's owner before anyone works
   the verify queue.
+  **CLOSED 2026-10-08 (ADR-0142):** Bill decided the owner: the aggregate. `verifyLoad`
+  refuses a per-load verify on any Pacific day holding a verified aggregate (typed 409
+  `aggregate_day_exists`, checked under the site promotion lock). Open residuals:
+  - **Bridge D5 check is pre-transaction.** `inbound-bridge.ts` preloads verified per-load
+    days before its per-day transactions; a verify committing inside that window, on a
+    day with no aggregate yet, would still double-count. Dock verify has no UI today. Fix
+    = re-check inside the bridge's locked per-day transaction.
+  - **Export month window is UTC** (`monthRange`): a dock-only day's evening loads can land
+    in the next month's file.
+  - **Freight vs unit source (Bill's call, ADR-0142 D3):** once `transport_charged` is
+    populated, freight bills from `submitted` dock rows that are now tracking-only for units.
+  - **Three dock loads match no delivered haul**, for Bill to decide (not touched):
+    `fce4fbc5` and `2b60d7ba` (no haul ID), `3b9e6968` (points at an MRC-Rejected haul).
 - **L-5 — DEFECT (data): H-135881's header and its evidence disagree.** `total_units = 95`
   but `load_stacks` still sum to **40** (four multiplier stacks of 10, 17:46:29–17:46:39Z).
   Every other `b2b_haul` row in prod satisfies `total_units == Σ stacks`. Also

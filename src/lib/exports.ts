@@ -55,6 +55,10 @@
 //   DR3 ever exports box-springs-only or another commodity, this needs
 //   to come from data.
 
+import { prisma } from '@/lib/prisma';
+import { isAggregateSourceType, pacificDaysWithVerifiedAggregate } from '@/lib/loads/floor-inbound';
+import { pacificDayISO } from '@/lib/time';
+
 const CRLF = '\r\n';
 const COMMODITY_DEFAULT = 'Whole Mattresses and Foundations';
 
@@ -247,6 +251,42 @@ export function buildSvdpRow(load: LoadRowInput, site: SiteRowInput): Record<str
     'Unload Duration (s)': load.unload_duration_seconds ?? '',
     Operator: load.assigned_operator?.name ?? '',
   };
+}
+
+// --- One source per Pacific site-day (ADR-0142) -----------------------
+
+/**
+ * Keep exactly ONE source for each Pacific site-day, by the inventory's ADR-0060 D5
+ * precedence: a day that holds a VERIFIED aggregate inbound row (`mymrc_haul` /
+ * `paper_bulk` / `ipad_floor`) is billed from that row alone, and its per-load dock
+ * rows (`b2b_haul` …) are dropped; a day with no aggregate keeps its per-load rows.
+ *
+ * Why: `INVOICE_STATUSES` admits `submitted`, so before this a Woodland month
+ * carried the iPad dock captures AND the MyMRC daily aggregate for the same hauls
+ * (September 2026: 172 dock rows / 19,545 units on top of 25 aggregate rows /
+ * 21,804). Bill, 2026-10-08: the aggregate is the billing source; dock loads are
+ * floor/haul tracking only.
+ *
+ * The aggregate lookup is keyed on each per-load row's PACIFIC day
+ * (`pacificDaysWithVerifiedAggregate`, the verify gate's predicate too), not on the
+ * export's month window — a dock load at 19:00 PDT on the last of the month has a
+ * UTC date in the next month but belongs to the aggregate day it was counted in.
+ */
+export async function singleSourcePerDay<
+  T extends { arrived_at: Date | null; load_source_type: string },
+>(siteId: string, loads: readonly T[]): Promise<T[]> {
+  const perLoadDays = loads.flatMap((l) =>
+    l.arrived_at != null && !isAggregateSourceType(l.load_source_type)
+      ? [pacificDayISO(l.arrived_at)]
+      : [],
+  );
+  const owned = await pacificDaysWithVerifiedAggregate(prisma, siteId, perLoadDays);
+  return loads.filter(
+    (l) =>
+      l.arrived_at == null ||
+      isAggregateSourceType(l.load_source_type) ||
+      !owned.has(pacificDayISO(l.arrived_at)),
+  );
 }
 
 // --- Status whitelist -------------------------------------------------
