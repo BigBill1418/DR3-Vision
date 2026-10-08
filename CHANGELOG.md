@@ -9,6 +9,28 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-08 — Negative on-hand names its cause instead of always blaming intake (ADR-0110 Am.1)
+
+Woodland's 2026-10-07 report read "⚠ On-hand is computing negative (−147). Intake data is incomplete — most recent
+inbound is 0 days old." Intake was current: MyMRC inbound posted that day. The cause was the **pool split**. Since
+the Sep 14 anchor (program 128 / non-program 757): inbound 15,845 program / 1,179 non-program, drop-offs +114,
+stripped 16,234 program / 186 non-program. That is program −147, non-program ≈1,750, total ≈+1,600. On 17 of 18
+days `stripped_non_program` was 0, so non-program strips were keyed as program.
+
+- New `src/lib/inventory/negative-floor.ts` (pure): `classifyNegativeFloor` + `negativeFloorCopy`. Three causes:
+  (1) total ≥ 0, one pool negative → "Program on-hand is computing negative (−147) while the total is positive. The
+  program/non-program split looks mis-recorded — check how non-program units are entered in the daily close."
+  (2) total < 0, inbound stale → the existing intake-incomplete wording with its age. (3) total < 0, inbound
+  current or none → "More units have been processed than were recorded coming in since the last physical count."
+- Applied to the daily-report EOD panel, the dashboard floor tile, and the Operations overview "On the floor" card
+  (whose subtitle said "intake incomplete" for every negative). `FloorInventoryTileData` gains `negativeCause`.
+  Intake recency is read only when the total is negative, via the new shared `latestVerifiedInboundDay` (the query
+  `latestFlowDayKey` already ran).
+- Unchanged: the negative figure is never shown as a usable number (handoff #270 §4a / ADR-0110 D3). The email
+  keeps the magnitude in the sentence; the tile and card show none.
+- Tests: 15 new or adjusted cases across the report, tile loader, tile component and overview card. Each failed
+  against the pre-fix source, except the stale-intake cases, which pin wording that did not change.
+
 ## 2026-10-07 — Eugene signature chain: Patrick signs facility, Rick signs ops (ADR-0019.7)
 
 Bill, 18:31 PDT, option "a". Eugene facility = **Patrick Dills** (override Bill or Rick); ops = **Rick Albritton**
