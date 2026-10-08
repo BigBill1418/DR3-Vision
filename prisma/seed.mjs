@@ -1034,6 +1034,9 @@ async function seedRolloutSurfaces(siteIds) {
     // ADR-0092 — the stale-claim watchdog's end-of-shift nudge, born pilot.
     // Matches migration 20260843_adr0092_stale_claim_watchdog.
     'load_stale_claim',
+    // ADR-0141 — decision + hold mail for team-submitted invoices, born pilot.
+    // Matches migration 20260869_adr0141_ap_team_submit.
+    'ap_team_outcome',
   ];
   const NOTIFY_LIVE = ['bonus_signature_chain', 'survey_sends'];
   const UI_PILOT = [
@@ -1064,6 +1067,9 @@ async function seedRolloutSurfaces(siteIds) {
     // (ADR-0047 #3 / CLAUDE.md #12). Matches migration
     // 20260855_adr0125_eod_day_close.
     'eod_review',
+    // ADR-0141 — the manager "submit an invoice" screen + its API, born pilot.
+    // Matches migration 20260869_adr0141_ap_team_submit.
+    'ap_team_submit',
   ];
   // ADR-0065 — retrofitted gates over surfaces that are ALREADY live to operators.
   // Born-pilot protects new exposure; seeding these `pilot` would take working

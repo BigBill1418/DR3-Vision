@@ -281,7 +281,6 @@ exclude on-hold (`pending_review`) items, which are being actively worked.
    email, a hold notice reaches the forwarder, and a decision email + stamped PDF
    reach the forwarder (Mary CC'd).
 
-
 ## 2026-07-22 — Structured Approve + extraction + equipment + variance (ADR-0046 Amendment 5, D-M5-1/D-M5-2/D-M5-6)
 
 Kelsey's post-live feedback ("if all invoices are approved without thought, the
@@ -296,13 +295,13 @@ before the Approve button enables (the server re-validates all four — a
 hand-crafted API call missing any is refused):
 
 1. **Vendor** (freeform) — the approver types the vendor name. Helper prompt:
-   *"Enter the vendor name carefully — check spelling and capitalization. This
-   appears on the returned decision email and Mary's GP filing."* Vendors do not
+   _"Enter the vendor name carefully — check spelling and capitalization. This
+   appears on the returned decision email and Mary's GP filing."_ Vendors do not
    need to be pre-registered; Vision matches loosely to the baseline table but
    accepts any text. Writes `vendor_freeform` (the legacy `vendor` column is
    deprecated — kept, no longer written).
 2. **Explanation** (freeform) — replaces the single "note" on the Approve path
-   only. *"What was this transaction for?"* Writes `explanation`.
+   only. _"What was this transaction for?"_ Writes `explanation`.
 3. **Confirmed amount** — pre-filled from the intake auto-extraction (below) with
    a confidence badge; the approver can always override. Writes
    `confirmed_amount_cents` (the legacy `amount_cents` column is deprecated).
@@ -327,10 +326,10 @@ fallback fires **only** when the local pass is LOW/FAILED (and only when the
 Anthropic key is configured — see below). The confirmed-amount input shows a
 badge the approver reads before confirming:
 
-- **HIGH** → green ✓ *"Verified"*
-- **MEDIUM** → yellow ⚠ *"Please verify"*
-- **LOW** → red ⚠ *"Low confidence — verify against invoice"*
-- **FAILED** → no badge, blank input, *"Enter amount from invoice"*
+- **HIGH** → green ✓ _"Verified"_
+- **MEDIUM** → yellow ⚠ _"Please verify"_
+- **LOW** → red ⚠ _"Low confidence — verify against invoice"_
+- **FAILED** → no badge, blank input, _"Enter amount from invoice"_
 
 Extraction never blocks the poll; a failure just means the approver types the
 amount. **Operator handoff (§4):** the Claude fallback needs
@@ -408,8 +407,8 @@ request without the re-confirm flag, or before the 30 s elapses, is refused.
 ### Decision artifacts for ≥ $1,000
 
 The final decision email + stamped PDF carry **both** approvers + PT timestamps:
-*"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
-[T2 PT]"*. Sub-$1,000 decisions are unchanged (single approver on the stamp).
+_"Approved by [First] on [T1 PT] via DR3-Vision; second approval by [Second] on
+[T2 PT]"_. Sub-$1,000 decisions are unchanged (single approver on the stamp).
 
 ## 2026-07-22 — Vendor baselines + invoice history (ADR-0046 Amendment 5, D-M5-4/D-M5-5)
 
@@ -471,10 +470,31 @@ proxies attachment bytes):
   the filename extension for genuinely ambiguous types; it stays a positive allowlist
   (an octet-stream `.xlsx` still just downloads).
 - **Canonical content-type on the wire.** The presigned R2 URL now signs with — and
-  echoes — the *effective* inline content-type (`application/pdf`, `image/jpeg`, …)
+  echoes — the _effective_ inline content-type (`application/pdf`, `image/jpeg`, …)
   rather than the stored label, so an octet-stream `.pdf` frames inline instead of
   downloading.
 - **No more blank frame on a second look.** The presigned-URL TTL was raised 300 →
   900 s and the client now **re-mints** within 60 s of expiry instead of replaying an
   expired URL (which had returned an R2 403 → blank iframe on a collapse/re-expand or
   read-then-download after 5 min).
+
+## 2026-10-08 — Invoices the team receives directly (ADR-0141)
+
+- **Manager:** site dashboard → **Submit an invoice** (`/dashboard/<site>/ap-submit`).
+  Attach the invoice (PDF or photo), type vendor, invoice number, amount and what it is
+  for, and pick the accounting staff member who receives the decision. Managers submit
+  for their own site only; admins for any site.
+- **Approvers:** the invoice appears in the normal AP queue with a blue "Team
+  submission · submitter (site) → accountant" block. Decide it exactly like a mailbox
+  invoice. The submitter may decide it too (Bill, 2026-10-08).
+- **Mail:** every decision, hold, second signature and resend for a team submission goes
+  To the picked accountant, CC the submitter and the decision roster (Mary). Mailbox
+  invoices are unchanged.
+- **Wrong accountant picked:** an admin opens the request in the AP queue, picks the right
+  person under "Change accountant (admin)" and clicks **Correct and resend**. Audited; it
+  re-sends the decision (or hold notice) to the corrected person.
+- **The accountant list:** `/admin/ap/routing` → "Accounting staff (team-submitted
+  invoices)". Add, deactivate, reactivate. An empty active list blocks submissions with a
+  clear message.
+- **Rollout:** `ap_team_submit` (UI) and `ap_team_outcome` (mail), per site, both born
+  pilot. Flip both at `/admin/rollout` to go live at a site.

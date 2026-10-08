@@ -10,6 +10,7 @@ import { getLocale } from '@/i18n/get-locale';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
+import { teamSubmitAccess } from '@/lib/ap/team-submit';
 
 // Operations Dashboard — per-site surface (ADR-0020 tile re-enable, 2026-07-22).
 //
@@ -86,6 +87,14 @@ export default async function SiteDashboardPage({ params }: Props) {
   // site independently of the loads/inventory master switch. Admins always see
   // the link; unregistered/pilot ⇒ hidden for everyone else (fail-safe).
   const eodLive = isAdmin || (await isUiSurfaceLive(UI_SURFACE.EOD_REVIEW, site.id));
+  // ADR-0141 — "Submit an invoice". The SAME gate the page and the API use: a
+  // manager at their own primary site once `ap_team_submit` is live there; an
+  // admin always (pilot is admin-only).
+  const apSubmitOpen =
+    (await teamSubmitAccess(
+      { role, primarySiteId: session.user.primary_site_id ?? null },
+      site.id,
+    )) === 'ok';
   // ADR-0077 Am.1 — the nav names the machine where one exists (Woodland reads
   // "Terex"), and stays generic where it does not. Derived, never hardcoded.
   const machineLabel = await siteMachineLabel(site.id);
@@ -162,6 +171,13 @@ export default async function SiteDashboardPage({ params }: Props) {
                 href={`/dashboard/${site.code}/eod`}
                 label="End of day"
                 testId="dashboard-eod-link"
+              />
+            )}
+            {apSubmitOpen && (
+              <NavLink
+                href={`/dashboard/${site.code}/ap-submit`}
+                label={t('ap_submit.tile')}
+                testId="dashboard-ap-submit-link"
               />
             )}
             {reimbursementTileLive && (

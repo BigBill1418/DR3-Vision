@@ -176,6 +176,9 @@ interface Detail extends ListRow {
     isFirstApprover: boolean;
     selfWaitRemainingMs: number;
   } | null;
+  // ADR-0141 — present for a team-submitted invoice; the options only for an admin.
+  teamSubmission?: TeamSubmissionView | null;
+  accountantOptions?: Array<{ id: string; name: string; email: string }> | null;
   attachments: AttachmentView[];
   followups: Array<{
     id: string;
@@ -917,6 +920,15 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
         <StatusBadge status={detail.status} />
       </div>
 
+      {detail.teamSubmission && (
+        <TeamSubmissionBlock
+          requestId={detail.id}
+          team={detail.teamSubmission}
+          options={detail.accountantOptions ?? null}
+          onChanged={onDecided}
+        />
+      )}
+
       {detail.status === 'quarantined' && (
         <p className="mt-3 rounded bg-zinc-700/40 px-3 py-2 text-sm">
           Quarantined ({detail.quarantineReason ?? 'unprocessable'}) — admin review only, not
@@ -1356,6 +1368,116 @@ export function DetailPanel({ detail, onDecided }: { detail: Detail; onDecided: 
 // approver (self-fulfillment, decision (c)), a re-confirmation checkbox + a 30-second
 // countdown gate the buttons. All of this is advisory: the server re-checks
 // eligibility, the reconfirm flag, and the 30s wait before it will commit.
+interface TeamSubmissionView {
+  submitterName: string | null;
+  siteName: string | null;
+  submittedAt: string | null;
+  accountantId: string | null;
+  accountantName: string | null;
+  accountantEmail: string | null;
+  vendor: string | null;
+  invoiceNumber: string | null;
+  amountCents: number | null;
+}
+
+/**
+ * ADR-0141 — "Team submission · <submitter> (<site>) → <accountant>", the
+ * submitter's typed values for reference (the approver still confirms them), and
+ * for an admin the audited correction of the accountant, which re-sends any mail
+ * already due to them.
+ */
+function TeamSubmissionBlock({
+  requestId,
+  team,
+  options,
+  onChanged,
+}: {
+  requestId: string;
+  team: TeamSubmissionView;
+  options: Array<{ id: string; name: string; email: string }> | null;
+  onChanged: () => void;
+}) {
+  const [pick, setPick] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function correct() {
+    if (!pick) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/admin/ap/requests/${requestId}/accountant`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountant_id: pick }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        resent?: { kind: string; mail: string } | null;
+      };
+      if (!res.ok) {
+        setMsg(data.message ?? 'Could not change the accountant.');
+        return;
+      }
+      setMsg(
+        data.resent
+          ? `Accountant changed. The ${data.resent.kind} mail was re-sent (${data.resent.mail}).`
+          : 'Accountant changed. They will receive the decision.',
+      );
+      setPick('');
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="mt-3 rounded border border-sky-400/50 bg-sky-400/10 px-3 py-2 text-sm"
+      data-testid="ap-team-submission"
+    >
+      <div>
+        <span className="font-semibold text-sky-200">Team submission</span> ·{' '}
+        {team.submitterName ?? 'unknown'} ({team.siteName ?? 'unknown site'}) →{' '}
+        {team.accountantName ?? team.accountantEmail ?? 'no accountant'}
+      </div>
+      <div className="mt-1 text-xs opacity-80">
+        Submitter typed: invoice {team.invoiceNumber ?? '—'} · {team.vendor ?? '—'} ·{' '}
+        {dollars(team.amountCents)}
+        {team.submittedAt ? ` · ${fmt(team.submittedAt)}` : ''}
+      </div>
+      {options && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <select
+            aria-label="Correct the accountant"
+            value={pick}
+            onChange={(e) => setPick(e.target.value)}
+            className="rounded border border-white/20 bg-black/30 px-2 py-1"
+          >
+            <option value="">Change accountant (admin)…</option>
+            {options
+              .filter((o) => o.id !== team.accountantId)
+              .map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} ({o.email})
+                </option>
+              ))}
+          </select>
+          <button
+            type="button"
+            disabled={busy || !pick}
+            onClick={correct}
+            className="rounded border border-white/30 px-2 py-1 disabled:opacity-50"
+          >
+            Correct and resend
+          </button>
+          {msg && <span role="status">{msg}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SecondApprovalPanel({ detail, onDecided }: { detail: Detail; onDecided: () => void }) {
   const sa = detail.secondApproval;
   const [note, setNote] = useState('');
