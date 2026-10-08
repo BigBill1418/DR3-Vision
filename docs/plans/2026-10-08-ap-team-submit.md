@@ -1,8 +1,12 @@
 # Plan — AP team submission with a chosen accounting recipient (ADR-0141)
 
-- **Status:** PLANNING, waiting on Bill's answers in §2. Nothing below is built.
-- **Branch:** `plan/ap-team-submit` (docs only). Implementation goes on a fresh branch
-  cut from `origin/main` after Bill answers.
+- **Status:** **SHIPPED, born pilot** (2026-10-08). Bill answered every question on
+  2026-10-08 at 08:56 PDT (third accountant added 09:05 PDT); the answers are recorded
+  below each question in §2 and in ADR-0141 (now Accepted). Phases 0–4 shipped in one PR
+  (#298); Phase 3's SoD half was dropped by Bill's Q6 answer. Phase 5 (Bill's pilot run
+  and the flip of `ap_team_submit` + `ap_team_outcome` per site at `/admin/rollout`) is
+  his call and has NOT happened.
+- **Branch:** `plan/ap-team-submit` (PR #298), squash-merged to `main`.
 - **Implementer:** Aegis (or svdp-apps-engineer). Ryan verifies (READ-ONLY) at the
   end of Phase 5.
 - **Collision check (2026-10-08):** the only other AP branch,
@@ -28,7 +32,7 @@ The partial overlap is the mailbox itself. Under the default `tenant_wide` sende
 a manager can already email `approvals-dr3@svdp.us`, but the outcome comes back to the
 manager and they cannot pick an accountant.
 
-## 2. Open questions for Bill (each changes the build)
+## 2. Questions for Bill, with his answers (2026-10-08)
 
 **Q1. What does "the approval/rejection goes to [the selected accountant]" mean?**
 
@@ -45,6 +49,8 @@ manager and they cannot pick an accountant.
 Recommendation: **A**. It is the only reading that keeps the existing approval setup
 unchanged.
 
+> **Bill (08:56 PDT): A.** The picked accountant is the decision RECIPIENT, not an approver. The normal approver path decides: same request record, ADR-0136 duplicate check, $1,000+ second signer through the shared resolver.
+
 **Q2. Who may submit?**
 
 - **A (recommended).** Managers at their own site, plus admins. This is the
@@ -52,6 +58,8 @@ unchanged.
 - **B.** Managers and admins only if they are also on the approver roster.
 - **C.** Any Vision user with an email address, including office staff with no site.
 - **D.** An explicit admin-managed allow-list.
+
+> **Bill: A.** Managers for their own site only, plus admins for any site. Built so the `all_sites` reach flag does not widen a manager's submit scope.
 
 **Q3. Where does the "accounting staff" list come from?**
 
@@ -66,11 +74,15 @@ unchanged.
 
 Bill also needs to supply the names and emails to seed, whichever option he picks.
 
+> **Bill: A.** A new admin-managed list (name, @svdp.us email, active) in `/admin`, seeded with Gloria Salpino <gloria.salpino@svdp.us>, Mary Scott <mary.scott@svdp.us> and (09:05 PDT) Yvonne Stephens <yvonne.stephens@svdp.us>. Seeded by an idempotent, audited data migration (the repo's named-person seed precedent). Managed on `/admin/ap/routing`.
+
 **Q4. One accountant or several?**
 
 - **A (recommended).** Exactly one, required.
 - **B.** One primary, plus optional additional CCs.
 - **C.** Multi-select, all equal.
+
+> **Bill: A.** Exactly one, required.
 
 **Q5. Who else gets the decision mail for a team invoice?**
 
@@ -79,12 +91,16 @@ Bill also needs to supply the names and emails to seed, whichever option he pick
 - **B.** The selected accountant only.
 - **C.** The accountant and the submitter, but not the roster.
 
+> **Bill: A, for every mail `resolveForwarderRecipients` served** (approve, reject, NOT-DR3, hold, second signature, resend): To the picked accountant, CC the submitter plus the `ap_decision_recipients` roster, de-duplicated. Team rows only; the mailbox path is byte-identical. Note this also routes the HOLD notice To the accountant (the plan's D4 table had sent it To the submitter).
+
 **Q6. What may the submitter do on their own invoice?**
 
 - **A (recommended).** Nothing: no approve, reject, hold or NOT-DR3, and no
   first or second signature. Another approver decides.
 - **B.** No approve, but they may withdraw it (reject with a note).
 - **C.** No approve, but they may hold it.
+
+> **Bill: none of the above — CHANGED FROM THE RECOMMENDATION.** The submitter MAY approve or hold their own invoice, the same as any other invoice. No submitter guard was built; every existing rule stays. ADR-0141 D5 records the decision and its accepted risk.
 
 **Q7. What must the submitter fill in?**
 
@@ -96,12 +112,16 @@ Bill also needs to supply the names and emails to seed, whichever option he pick
 - **C.** A plus an optional equipment pick, which pre-fills the approver's equipment
   field.
 
+> **Bill: A.** Required: invoice file (PDF/image, same R2 storage as ingested attachments), vendor, invoice number, amount, purpose; plus the accountant (Q4). The site is auto-filled from the manager's site; admins pick one.
+
 **Q8. Can the chosen accountant be changed after submission?**
 
 - **A (recommended).** No. It is fixed at submit. An admin can correct it and use the
   existing Resend.
 - **B.** The submitter may change it while the invoice is undecided (audited).
 - **C.** An approver may change it in the decide panel.
+
+> **Bill: A.** Fixed at submit. An admin can correct it and resend (audited): the AP queue detail's "Correct and resend" control, `POST /api/admin/ap/requests/<id>/accountant`.
 
 ## 3. Phased build (sized for Aegis)
 

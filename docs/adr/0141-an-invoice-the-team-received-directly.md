@@ -1,21 +1,22 @@
 # ADR-0141 — An invoice the team received directly: in-app submission, and the submitter names the accountant
 
-- **Status:** **Proposed** (2026-10-08). Planning only. No code yet. Eight open
-  questions for Bill are listed in the plan (`docs/plans/2026-10-08-ap-team-submit.md` §2).
-  The Decision section below is written for the **recommended** answers and must
-  be amended before build if Bill picks differently.
+- **Status:** **Accepted** (2026-10-08). Bill answered every open question on
+  2026-10-08 at 08:56 PDT and added a third accountant at 09:05 PDT. Built and shipped
+  in the same PR as this acceptance, born `pilot` (D8). Go-live is Bill's flip.
 - **Request:** Bill, 2026-10-08, verbatim: _"currently only accounting submits invoices
   for approval - we need a new method for invoices that come in to the team directly -
   we need to be able to submit - then SELECT which accounting staff the
   approval/rejection goes to after we submit the invoice - this keeps the existing
   setup the same but ADDS this functionality."_
 - **Extends:** ADR-0046 (AP approval mailbox, all amendments), ADR-0066 (person routing
-  and the shared second-approval resolver), ADR-0068 (the in-app submission and
-  submitter-exclusion precedent), ADR-0136 (duplicate-invoice guard), ADR-0047
-  (rollout gate), ADR-0035 (additive, clean-replay migrations).
+  and the shared second-approval resolver), ADR-0068 (the in-app submission
+  precedent), ADR-0136 (duplicate-invoice guard), ADR-0047 (rollout gate), ADR-0035
+  (additive, clean-replay migrations).
 - **Changes nothing in:** the mailbox intake, the approver roster, the Approve panel,
   the $1,000 second signature, the decision mail for mailbox-originated invoices, the
   morning digest's rules, approver expiry, the baseline rebuild, or desktop-only review.
+- **Plan:** `docs/plans/2026-10-08-ap-team-submit.md` (§2 records each question and
+  Bill's answer).
 
 ## Context — what exists today (verified 2026-10-08 against `origin/main` f3867db and prod)
 
@@ -59,179 +60,179 @@ resolver plus UI exclusion of the submitter, and a per-site UI rollout surface
 and ADR-0134 were both outages caused by two code paths answering "who may sign"
 differently.
 
-## Decision (as recommended — pending Bill, see plan §2)
+## Decision (Bill, 2026-10-08)
+
+| #   | Question                         | Bill's answer                                                                                                                                                                                                               |
+| --- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | What is the picked accountant?   | The **recipient** of the decision, not an approver. The normal approver path decides: the same `ap_requests` record, the ADR-0136 duplicate check, the $1,000 second signer through the shared resolver.                    |
+| Q2  | Who may submit?                  | Managers for **their own site only**, and admins for any site.                                                                                                                                                              |
+| Q3  | Where does the list come from?   | A **new admin-managed list** (name, `@svdp.us` email, active) in `/admin`. Seeded with Gloria Salpino, Mary Scott and (09:05 PDT) Yvonne Stephens.                                                                          |
+| Q4  | How many accountants?            | **Exactly one**, required.                                                                                                                                                                                                  |
+| Q5  | Who gets the mail?               | **To** the picked accountant, **CC** the submitter plus the existing `ap_decision_recipients` roster, de-duplicated, for every mail `resolveForwarderRecipients` served. Team rows only; mailbox mail stays byte-identical. |
+| Q6  | May the submitter decide?        | **Yes.** The submitter may approve or hold their own invoice like any other. No submitter guard. Every existing rule stays.                                                                                                 |
+| Q7  | Required fields                  | Invoice file (PDF/image, same storage as ingested attachments), vendor, invoice number, amount, purpose. Site auto-filled from the manager's site; admins pick one.                                                         |
+| Q8  | Can the accountant change later? | Fixed at submit. An **admin** can correct it and resend (audited).                                                                                                                                                          |
 
 ### D1 — Same record, second intake channel
 
-A team submission creates an **`ap_requests` row**, not a new table. Every approver
-control then applies unchanged and with no copy: the structured Approve (ADR-0046
-Am.5), extraction, the variance gate, the $1,000 second signature through the ADR-0066
-resolver, the duplicate guard (ADR-0136), the stamped PDF, the AP queue, history,
-escalation and the morning digest. A team submission shows in the shared queue with a
-**"Team submission"** chip naming the submitter, their site and the chosen accountant.
+A team submission creates an **`ap_requests` row** with `intake_channel = team_submit`,
+not a new table. Every approver control applies unchanged: the structured Approve
+(ADR-0046 Am.5), extraction, the variance gate, the $1,000 second signature through the
+ADR-0066 resolver, the duplicate guard (ADR-0136), the stamped PDF, the AP queue,
+history, escalation and the morning digest. The approver sees a **"Team submission ·
+<submitter> (<site>) → <accountant>"** block in the queue detail with the submitter's
+typed vendor, invoice number and amount for reference.
 
-Rejected alternative: a separate table and queue, like reimbursements. That forks
-the approver path, which is the failure class behind ADR-0066 and ADR-0134. A vendor
-invoice is the same kind of document whoever receives it. Only how it arrived differs.
+Rejected: a separate table and queue (the reimbursement shape). That forks the approver
+path, which is the failure class behind ADR-0066 and ADR-0134.
 
 ### D2 — Who may submit
 
-A **manager, at their own site, or an admin** (`requireManagerForSite`, the
-reimbursement guard). The site comes from the session, never from the request body.
-Operators (PIN floor accounts) may not. Being on the approver roster is **not**
-required, and being on it does not stop someone submitting (see D5).
+`teamSubmitAccess` (`src/lib/ap/team-submit.ts`) is the one gate for the dashboard
+tile, the page and the API:
+
+- **admin:** any site, always (pilot included);
+- **manager:** only when the URL site is their `primary_site_id`. The `all_sites` reach
+  flag does **not** widen this (Bill: "for their own site only");
+- **operator:** never;
+- while `ui/ap_team_submit` is `pilot` for the site, a manager is refused (`pilot`).
+
+The site comes from the URL and is checked against the session; the submitter is the
+session user. Body fields named `site_id` or `submitted_by` are ignored (tested).
 
 ### D3 — Where it lives
 
-- **Submit:** a tile on the site dashboard opens `/dashboard/[site]/ap-submit`. It works
-  on a phone, because the typical case is a paper invoice handed over on the floor, so
-  a camera photo is a valid file. The tile is gated by a new per-site UI surface
-  `ap_team_submit`, **born pilot** (ADR-0047: admin-only until Bill flips it live per
-  site).
-- **Form:** invoice file(s) (PDF/JPEG/PNG/HEIC, required, at least 1 and at most 5,
-  15 MB each); vendor; invoice number; amount; "what is this for"; **accounting staff
-  member** (required, single select).
-- **My submissions:** the same page lists the manager's own submissions and their
-  status (pending / on hold / awaiting 2nd signature / approved / rejected / NOT DR3).
+- **Submit:** "Submit an invoice" on the site dashboard opens
+  `/dashboard/<site>/ap-submit`. Phone-width layout; a camera photo is a valid file.
+  The manager's site is shown fixed; an admin gets a site picker. English, Spanish and
+  Urdu (`ap_submit.*` in the manager dictionary; the parity test covers it).
+- **Form:** invoice file(s) (PDF, JPEG, PNG, HEIC/HEIF, WebP; 1 to 5 files, 15 MB each),
+  vendor, invoice number, amount, "what is this invoice for", and the accounting staff
+  member (required, single select).
+- **My submissions:** the same page lists the user's own team submissions with status
+  and who the decision goes to.
 - **Review is unchanged:** approvers decide in `/dashboard/ops/ap` on desktop
-  (ADR-0046 Am.6). Nothing about review moves to mobile.
+  (ADR-0046 Am.6).
+- **The list:** managed on the AP configuration page, `/admin/ap/routing` (also
+  `/admin/ap/notifications`), section "Accounting staff (team-submitted invoices)".
+  Add, deactivate and reactivate; never delete (a routed request keeps its foreign key).
 
-### D4 — "The approval/rejection goes to": the selected accountant is the RECIPIENT of the outcome, not the approver
+### D4 — Outcome routing: the accountant is the RECIPIENT
 
-Recommended reading (Interpretation A in the plan): the invoice goes through the
-**normal approvers**. The selected accountant is who the **decision mail** goes to, in
-place of the "original forwarder" an emailed invoice has. This is the only reading
-that keeps "the existing setup the same":
+One resolver, `resolveOutcomeRecipients(prisma, request)` in `approvals.ts`, replaces the
+two direct calls of `resolveForwarderRecipients` (hold notice and `sendDecisionEmail`).
+`sendDecisionEmail` is the single sender for the first decision, the second signature
+and resend, so the resolver covers every mail type.
 
-- the approver roster, Approve panel and $1,000 rule are untouched;
-- 2 of the 3 accounting staff have no Vision account, so they cannot approve inside
-  Vision without new accounts, new roster rows and a new authority;
-- letting the submitter choose their own approver would weaken the control
-  ADR-0068 exists to enforce.
+| Row channel   | Mail                                                                         | To                                          | CC                                                                        | Surface                                |
+| ------------- | ---------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------- |
+| `mailbox`     | all (unchanged)                                                              | the forwarder (roster if no forwarder)      | the roster                                                                | `ap_notify`, org-wide                  |
+| `team_submit` | approve, reject, NOT-DR3, hold, second signature (approve or reject), resend | the picked accountant (snapshot on the row) | the submitter + the roster, de-duplicated, never repeating the To address | `ap_team_outcome`, the submission site |
 
-Interpretation B (the chosen accountant **is** the approver) is set out in the plan
-and is **not** built unless Bill picks it.
+The existing extras are kept: a second-signer override reject still adds the first
+approver to CC. The "no recipient → refuse and page" path is unchanged.
 
-**Decision-mail routing for `intake_channel = team_submit`** (mailbox rows untouched):
+The accountant's address is **snapshotted** on the request at submit
+(`outcome_recipient_email`), so a later edit to the list cannot redirect a routed
+decision. Only the admin correction changes it.
 
-| Mail                                                                              | To                                                | CC                                                                                 |
-| --------------------------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Decision (approved / rejected / NOT DR3), incl. after 2nd signature and on resend | the selected accountant                           | the submitter + the existing `ap_decision_recipients` roster (unchanged GP filing) |
-| Hold notice                                                                       | the submitter (they hold the vendor relationship) | the selected accountant                                                            |
+### D5 — The submitter may decide their own invoice (Bill's decision; accepted risk)
 
-This is implemented as **one** new resolver, `resolveOutcomeRecipients(request)`,
-that branches on `intake_channel`. For a `mailbox` row it returns exactly what
-`resolveForwarderRecipients` returns today, and a test pins that equality. The
-"no recipients → refuse and page" path in `sendDecisionEmail` is unchanged.
+The plan recommended a separation-of-duties guard (the submitter takes no decision on
+their own submission). **Bill rejected it on 2026-10-08:** the submitter may approve
+or hold their own invoice the same as any other invoice. Nothing was added to
+`decideRequest`, `holdRequest`, `updateHoldNote` or `decideSecondApproval`, and the
+new-invoice notification still goes to every approver, the submitter included.
 
-The accountant's address is **snapshotted** on the request at submit time
-(`outcome_recipient_email`). A later edit to the accounting list cannot redirect a
-decision that was already routed.
+Every existing rule stays exactly as it was, including the second-signature rules
+(the routed second signer, escalation, and the first approver's self-reconfirm wait
+under ADR-0066/Am.5). Nothing new was added and nothing was removed.
 
-### D5 — Separation of duties: the submitter takes no decision on their own submission
+**Accepted risk, recorded:** a manager who is also an approver can submit an invoice,
+pick the accountant and approve it themselves when it is under $1,000. Above $1,000 the
+second signature still applies under the existing rules. The mitigations are the ones
+that already exist: the submission, the accountant choice and every decision are
+audited with the actor; the "Team submission" block shows the approver who submitted
+it; and the accountant receives the decision with the submitter named. This matches
+today's mailbox behaviour, where a manager-approver who forwards an invoice can also
+approve it (1 of 227 prod requests on 2026-10-08).
 
-The submitter cannot **approve** (first or second signature), **reject**, **hold** or
-file **NOT DR3** on a request they submitted. Enforced at three layers, as in ADR-0068 D4:
-
-1. **DB CHECKs:** `submitted_by IS DISTINCT FROM first_approver_id`,
-   `… second_approver_id`, `… decided_by`, `… held_by`.
-2. **Server guard:** before any write in `decideRequest`, `decideSecondApproval` and
-   `holdRequest`, with a plain-English 403 and an audited refusal
-   (`outcome: refused_submitter_self_decision`).
-3. **UI:** the panel is not offered to the submitter and says why ("You submitted
-   this invoice. Another approver decides it.").
-
-There is **no admin short-circuit**. The exclusion is about the person, not the
-privilege (ADR-0068 D4).
-
-**Second signature.** The ADR-0066 resolver gets the submitter as an exclusion, the
-same thin-wrapper pattern as `src/lib/reimbursements/routing.ts`. If the routed peer
-**is** the submitter, it escalates to the fallback admin **immediately**, not after
-24 hours, because no local signer can act.
-
-**New-invoice notification** (`notifyNewRequest`) excludes the submitter from the
-approver list. They already know they submitted it.
-
-### D6 — Schema (additive only, ADR-0035; every pre-existing row backfills as a mailbox row)
+### D6 — Schema (additive only, ADR-0035; migration `20260869_adr0141_ap_team_submit`)
 
 ```
 enum ApIntakeChannel { mailbox, team_submit }
 
 ap_requests
-  + intake_channel          ApIntakeChannel @default(mailbox)
-  + submitted_by            String?   -- bare FK users.id
-  + submitted_site_id       String?   -- bare FK sites.id (from the session)
-  + submitted_at            DateTime?
-  + outcome_recipient_id    String?   -- bare FK ap_accounting_contacts.id
-  + outcome_recipient_email String?   -- snapshot at submit
-  + submitted_vendor        String?   -- the submitter's typed values; approvers still
-  + submitted_invoice_number String?  --   confirm every Am.5 field themselves
-  + submitted_amount_cents  Int?
-  CHECK (intake_channel <> 'team_submit'
-         OR (submitted_by, submitted_site_id, outcome_recipient_id,
-             outcome_recipient_email) all NOT NULL)
-  CHECKs from D5
+  + intake_channel           ApIntakeChannel NOT NULL DEFAULT 'mailbox'
+  + submitted_by             FK users.id
+  + submitted_site_id        FK sites.id
+  + submitted_at
+  + outcome_recipient_id     FK ap_accounting_contacts.id
+  + outcome_recipient_email  -- snapshot
+  + submitted_vendor, submitted_invoice_number, submitted_amount_cents
+  CHECK ap_requests_team_submit_shape_chk:
+    team_submit ⇒ submitter, site, submitted_at, recipient id + email all present;
+    mailbox     ⇒ no submitter, no recipient
 
-ap_accounting_contacts            -- the "accounting staff" list (source of truth)
-  id, email UNIQUE (must be @svdp.us), display_name, active,
-  created_by, created_at, updated_at, updated_by
+ap_accounting_contacts
+  id, display_name (non-blank), email UNIQUE (lower-case @svdp.us, CHECK), active,
+  created_by, updated_by, created_at, updated_at
 ```
 
-Team rows reuse the existing columns: `internet_message_id = 'team-submit:<uuid>'`
-(cannot collide with an RFC 5322 id), `sender_address` = the submitter's email
-(every reader that shows "requester" keeps working), `sender_validated = true`,
-`subject` composed as `Invoice #: <number> — <vendor> (team submission)` so ADR-0136's
-`extractInvoiceNumber` finds the number without change, and `body_text` = "what this is
-for". Attachments go into `ap_attachments` under R2 `ap/`, and extraction runs on them
-as it does at mailbox intake.
+Team rows reuse the existing columns: `internet_message_id = 'team-submit:<uuid>'`,
+`sender_address` = the submitter's email (lower-cased), `sender_validated = true`,
+`subject = "Invoice #: <number> — <vendor> (team submission)"` so ADR-0136's
+`extractInvoiceNumber` finds the number, and `body_text` = the purpose. Files are stored
+**before** the row exists, under the same R2 `ap/<request>/<attachment>/` layout as the
+mailbox intake (`putApAttachment`), each with its sha256; if R2 is unavailable the
+submission is refused (503) and no row is written. Extraction runs exactly as at
+mailbox intake.
 
-`ap_accounting_contacts` is managed at `/admin/ap/config`. It is deliberately
-**not** `ap_decision_recipients`: every row in that table is CC'd on **every**
-decision, so adding accountants there would change today's mail for everyone.
+**Seed:** an idempotent data migration (`INSERT … ON CONFLICT (email) DO NOTHING`, one
+`audit_log` row per row actually inserted), following the repo's named-person seed
+precedent (ADR-0066, ADR-0046 Am.9, ADR-0019.7). It lands with the code that reads it,
+so the picker is never born empty, and a re-run never overwrites an admin's later edit.
 
-### D7 — Audit
+### D7 — Audit (append-only `audit_log`)
 
-Append-only `writeAudit` rows for each step:
-
-- submission (`actor_user_id` = submitter; after = channel, site, outcome-recipient
-  id, attachment count and sha256s, with no amount or vendor in the audit payload);
-- every refused self-decision;
-- every accounting-contact create, edit and deactivate.
+- the submission and the accountant choice, one row: actor = submitter; after = channel,
+  site, recipient id and email, attachment count and sha256s (no vendor or amount);
+- every admin correction: actor = admin; before/after recipient; plus one row for the
+  re-send it triggered;
+- every accounting-list create, edit, deactivate and reactivate (before/after);
+- the three seeded contacts (`system:migration 20260869`).
 
 Decision audits are unchanged.
 
-### D8 — Rollout
+### D8 — Rollout (ADR-0047), born pilot
 
-- **UI surface** `ap_team_submit`, one row per site, born `pilot`. In pilot only an
-  admin sees the tile.
-- **Notification surface** `ap_team_outcome`, born `pilot`. The decision and hold mail
-  for team rows go through `notifyStaff('ap_team_outcome')`. In pilot they reroute to
-  admins with the would-have-sent header.
-- Bill runs an end-to-end submission as admin in pilot, then flips both surfaces live
-  per site from `/admin/rollout`. `ap_notify` (new-invoice mail to approvers) is already
-  live and is not touched.
+- **UI surface** `ap_team_submit` (`kind = ui`), one row per site, born `pilot`. Pilot =
+  only admins see the tile, open the page or can POST.
+- **Notification surface** `ap_team_outcome` (`kind = notification`), one row per site,
+  born `pilot`. Team decision and hold mail go through
+  `notifyStaff('ap_team_outcome', site)`. In pilot it reroutes to admins with the
+  would-have-sent header naming the accountant, so an admin test submission never
+  mails accounting. It is its own row (not `ap_notify`) because it is a new recipient
+  set, the ADR-0068 precedent.
+- **Go-live is Bill's call:** flip both rows `live` per site from `/admin/rollout`.
+  `ap_notify` (new-invoice mail to approvers) is already live and is not touched.
 
 ## Consequences
 
 - A manager who receives an invoice directly no longer has to route it through
   accounting by email. The accountant they pick gets the outcome. Accounting's own flow
-  is byte-identical.
-- The approver can now see who originated an invoice, which the mailbox channel never
-  recorded. The SoD gap for manager-originated invoices closes **for the new channel
-  only**. A manager who still emails the mailbox directly keeps today's behaviour
-  (decision back to them, no submitter exclusion). This residual is recorded, not
-  fixed, because fixing it would change the existing setup Bill asked to keep.
+  is byte-identical, pinned by a regression suite over every mail type.
+- The approver can now see who originated a team invoice.
 - Duplicate risk rises: a vendor that emails both the site and accounting can produce
-  one team submission and one mailbox request. ADR-0136's guard covers this only when
-  both carry the invoice number. The composed subject makes the team row carry it
-  every time.
-- The accounting list is a new thing someone has to maintain. If it is empty, the
-  submit form refuses with a clear message and pages `dr3-vision-system` once.
+  one team submission and one mailbox request. ADR-0136's guard catches it when both
+  carry the invoice number; the composed subject guarantees the team row does.
+- The accounting list is a new thing someone maintains. An empty active list shows the
+  manager "No accounting staff are set up yet" instead of a form.
 
 ## Residual risks
 
-- The mailbox SoD gap described above.
-- A submitter can pick the wrong accountant. The snapshot is fixed. An admin
-  correction followed by a resend is the remedy (plan Q8).
-- An invoice photographed badly gives extraction confidence `failed`. The approver
+- D5: a manager-approver can approve their own sub-$1,000 team invoice (Bill's decision).
+- A submitter can pick the wrong accountant. The admin correction plus re-send is the
+  remedy.
+- A badly photographed invoice gives extraction confidence `failed`; the approver
   enters the amount, as today.

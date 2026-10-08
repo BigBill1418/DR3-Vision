@@ -588,6 +588,34 @@ export const adminMessages = {
         'Decision-outcome notifications are not wired to any send path and cannot be enabled.',
     },
   },
+
+  // ADR-0141 D3 — the accounting-staff list a team-submitted invoice names as the
+  // recipient of its decision mail.
+  apAccounting: {
+    heading: 'Accounting staff (team-submitted invoices)',
+    intro:
+      'A manager who submits an invoice in Vision picks one person from this list. That person receives the approval, rejection or hold mail; the submitter and the decision-mail roster are copied. Invoices forwarded to the AP mailbox are not affected.',
+    colName: 'Name',
+    colEmail: 'Email',
+    colStatus: 'Status',
+    active: 'Active',
+    inactive: 'Inactive',
+    deactivate: 'Deactivate',
+    reactivate: 'Reactivate',
+    addHeading: 'Add a person',
+    namePlaceholder: 'Full name',
+    emailPlaceholder: 'name@svdp.us',
+    add: 'Add',
+    saving: 'Saving…',
+    empty: 'Nobody is on the list. Managers cannot submit invoices until someone is added.',
+    loadFailed: 'Could not load the accounting list.',
+    errors: {
+      name_required: "Enter the person's name.",
+      email_not_internal: 'Use a plain @svdp.us address.',
+      email_taken: 'That address is already on the list.',
+      not_found: 'That entry no longer exists.',
+    },
+  },
 } as const;
 
 export type AdminMessages = typeof adminMessages;
