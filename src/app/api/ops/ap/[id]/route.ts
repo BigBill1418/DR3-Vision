@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireApApprover } from '@/lib/ap/approvers';
 import { getApRequestDetail } from '@/lib/ap/queue';
+import { listAccountingContacts } from '@/lib/ap/accounting-contacts';
 import { SECOND_APPROVAL_SELF_MIN_WAIT_MS } from '@/lib/ap/second-approval';
 // ADR-0066 §1.4 — the SHARED resolver, the same one `decideSecondApproval` uses.
 // This panel's `eligible` flag MUST be answered by the identical function that
@@ -81,7 +82,18 @@ export async function GET(
       secondApproval = { eligible, isFirstApprover, selfWaitRemainingMs };
     }
 
-    return NextResponse.json({ request: { ...detail, secondApproval } });
+    // ADR-0141 — an admin may correct a team submission's accountant; give the
+    // panel the active list to pick from. Authorization is re-checked at the write.
+    const accountantOptions =
+      detail.teamSubmission && identity.viewer.role === 'admin'
+        ? (await listAccountingContacts({ activeOnly: true })).map((c) => ({
+            id: c.id,
+            name: c.displayName,
+            email: c.email,
+          }))
+        : null;
+
+    return NextResponse.json({ request: { ...detail, secondApproval, accountantOptions } });
   } catch (e) {
     if (e instanceof Response) return e;
     throw e;

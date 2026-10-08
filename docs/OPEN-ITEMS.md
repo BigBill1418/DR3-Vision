@@ -19,6 +19,16 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **SHIPPED born pilot; go-live is Bill's**
+
+- **CE-1 (Bill):** run a pilot submission as admin at `/dashboard/woodland/ap-submit`
+  (the decision mail reroutes to admins with the would-have-sent header naming the
+  accountant), then flip `ap_team_submit` **and** `ap_team_outcome` live per site at
+  `/admin/rollout`. Flipping only the UI row would let managers submit while the
+  accountant mail still reroutes to admins.
+- **CE-2 (accepted residual):** the submitter may approve their own sub-$1,000 team
+  invoice (Bill's Q6 decision, ADR-0141 D5).
+
 ## 0.CD — 2026-10-07 Eugene chain swap (ADR-0019.7) — **SHIPPED**
 
 Bill, 18:31 PDT, option "a": Patrick Dills signs Eugene facility (override Bill/Rick); Rick Albritton signs ops
