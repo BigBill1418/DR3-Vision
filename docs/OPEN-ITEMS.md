@@ -19,6 +19,61 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CG — 2026-10-06 Woodland iPads froze (ADR-0140, PR #294) — **SHIPPED + LIVE; root cause UNPROVEN** (row backfilled 2026-10-07)
+
+Woodland, about 9:25 AM PDT, 2026-10-06: _"login screen stuck - load buttons stuck ipad browser appears frozen"_.
+The server was healthy throughout. PR #294 (`5f0b4f3`, merged 2026-10-06 22:54 PDT) added deadlines to the drain
+and the keypad, plus the 25 s stall watchdog and the global-error Reload.
+
+- **Live (checked 2026-10-07, no SHA endpoint exists):** the public operator layout chunk served by
+  `dr3-vision.svdp.us` contains the `dr3:stall` watchdog event; `/healthz` returns 200 with `db_ok`.
+- **CG-1 — the freeze's trigger was never reproduced: OPEN.** If it recurs, capture the iPad's state _before_
+  reloading: service-worker version, queue rows and their `last_error`, and whether the stall banner appeared.
+- **CG-2 — gaps found by review:** see 0.CF.
+
+---
+
+## 0.CF — 2026-10-07 ADR-0140 review gaps: floor screens' own requests had no deadline — **FIX IN PR (not merged); ships on Bill's go**
+
+Ryan's independent review of PR #294 found three gaps. All three are fixed in branch `fix/adr0140-remaining-deadlines`
+(ADR-0140 Amendment 1):
+
+1. 13 bare `await fetch(` calls on the operator screens: count ×3, void, drop-off ×3, inbound, processed, load
+   photo ×3, queue-conflicts discard. All now go through `fetchWithTimeout`, and a timed-out keyed write queues
+   under its tap key, the same way an offline one does.
+2. The deadline stopped when the headers arrived, so a body stalled after the status line had none. The deadline
+   now covers the body read.
+3. A caller's `signal` was overwritten. It is now composed with the deadline.
+
+- **CF-1 — merge + deploy: Bill's call.** This is staff-facing behaviour on the dock iPads. After the merge, confirm
+  the new code is live before calling it done. There is no SHA endpoint, so check that the served `/operator` layout chunk
+  hash has changed from the 2026-10-07 one (`app/operator/layout-d3bfde7c33fbcf53.js`, which holds the stall
+  watchdog that `useStallWatch` shares), and that the deployer reports the merge SHA.
+- **CF-2 — real-iPad stall test (Ryan): OPEN.** Every test uses an abort-honouring fetch double. Nobody has stalled
+  a real iPad on Woodland Wi-Fi against this code. Suggested repro: Safari Web Inspector, network throttled to
+  "offline" after the headers arrive.
+- **CF-3 — queue-conflicts discard timeout still has no dedicated test: OPEN (narrowed 2026-10-08).** Hold
+  approve/discard timeouts are now covered by `count-client.hold-timeout.test.tsx` (CF-4). Conflicts discard uses the
+  same helper; the static scan guards its wrapping.
+- **CF-4 — review of PR #297, findings F1 + F2: FIXED IN PR (2026-10-08, Bill-approved before merge).** F1: void, hold
+  approve and hold discard no longer report a timed-out-but-landed action as "Couldn't save"; the void refreshes the
+  list, the hold actions read status via a new read-only, site-scoped `GET …/count/holds/[holdId]`, and nothing is
+  resent. F2: the stall banner's 25 s clock is per job (`useStallTracker`). ADR-0140 Amendment 1 › "Review of PR
+  #297".
+- **CF-6 — re-review of PR #297, notes N1–N5: FIXED IN PR (2026-10-08, Bill-approved before merge).**
+  Verified-open-because: `src/app/sw.ts` had no `/api/operator/` rule (N1, the status GET fell to the default `/api/`
+  NetworkFirst cache); `hold_timeout_pending` said "try again" outright (N2); `resolveUnanswered` used the 20 s
+  default (N3); the void comment named `snapshot_not_found` where `void-count.ts:323` returns `alreadyVoided` (N4);
+  no discard-pending, discard-resolved-elsewhere or dropped-connection tests (N5). All five fixed on the #297
+  branch; ADR-0140 Amendment 1 › "Re-review of PR #297". Es/Urdu wording of N2 not native-reviewed.
+- **CF-5 — found in passing, NOT fixed here (needs its own reviewed change): OPEN.** (a) `POST`/`DELETE
+…/count/holds/[holdId]` do not compare the hold's `site_id` with the operator's site; `releaseHold` checks the
+  approver's eligibility at the hold's site, but `discardHold` would discard another site's hold given its id
+  (ADR-0024 site isolation). (b) `discardHold` writes the status and its audit row outside one transaction and
+  without a `status = 'pending'` CAS (ADR-0118 pattern). The new GET does compare site.
+
+---
+
 ## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **SHIPPED born pilot; go-live is Bill's**
 
 - **CE-1 (Bill):** run a pilot submission as admin at `/dashboard/woodland/ap-submit`

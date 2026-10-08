@@ -458,6 +458,9 @@
       "void_err_prior_day": "That count was taken on {{day}}, not today. Ask the office to change it.",
       "void_err_gone": "That count is not there any more.",
       "hold_gone": "A manager already dealt with this one. Enter the count again if you still need to.",
+      "hold_timeout_pending": "No answer from the server. The server still shows this count waiting for approval, but your tap may still be going through. Wait a moment and check the screen before trying again.",
+      "hold_timeout_unknown": "No answer from the server. It may have gone through — the screen has been refreshed. Check the floor total before trying again.",
+      "void_timeout": "No answer from the server. The list has been refreshed — if that count is no longer on it, it was removed.",
       "void_done_again": "Back to the counts"
     },
     "processed": {

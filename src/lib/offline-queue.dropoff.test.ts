@@ -21,6 +21,17 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 
+// ADR-0140 Am.1 — shorten every drain deadline (JSON and the 90 s R2 PUT alike)
+// to 50 ms so a hung request is abandoned inside the test's own timeout. Only the
+// deadline changes; the abort/timeout mechanics are the real ones.
+vi.mock('@/lib/fetch-timeout', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/fetch-timeout')>();
+  return {
+    ...orig,
+    fetchWithTimeout: (url: string, init?: RequestInit) => orig.fetchWithTimeout(url, init, 50),
+  };
+});
+
 const DB_NAME = 'dr3-vision-queue';
 
 async function loadQueue() {
@@ -156,9 +167,9 @@ describe('ADR-0085 — offline drop-off replay', () => {
     // the PUT declares — a mismatch there is what parks an object R2 will later
     // serve with the wrong active type.
     expect(calls[1]?.init?.body, 'the R2 PUT carried no body').toBeDefined();
-    expect(
-      (calls[1]?.init?.headers as Record<string, string> | undefined)?.['Content-Type'],
-    ).toBe('image/jpeg');
+    expect((calls[1]?.init?.headers as Record<string, string> | undefined)?.['Content-Type']).toBe(
+      'image/jpeg',
+    );
 
     // The submit carries the whole drop-off through the ALLOWLISTED scope, so it
     // is subject to the identical auth / rollout / day-pin gates a live submit
@@ -196,7 +207,10 @@ describe('ADR-0085 — offline drop-off replay', () => {
         // A FRESH key each mint — presigns expire in ten minutes and a queued
         // entry may be days old. This is exactly why the server excludes the
         // photo key from the idempotency request hash.
-        return json({ storage_key: `dropoffs/site-eugene/mint-${submits}.jpg`, upload_url: 'https://r2/put' });
+        return json({
+          storage_key: `dropoffs/site-eugene/mint-${submits}.jpg`,
+          upload_url: 'https://r2/put',
+        });
       }
       if (url.startsWith('https://r2/')) return new Response(null, { status: 200 });
       submits += 1;
@@ -401,5 +415,75 @@ describe('ADR-0085 — offline drop-off replay', () => {
     expect(uploads[0]?.subject, 'the ADR-0085 subject backfill did not run').toBe('load');
     expect(uploads[0]?.state).toBe('active');
     expect(uploads[0]?.byte_size, 'the legacy row was rebuilt, not preserved').toBe(3);
+  });
+});
+
+// ADR-0140 Am.1 — the drop-off PUT's two failure classes must stay distinct. A
+// network-layer throw AFTER a successful mint is the CORS/preflight class and is
+// parked `blocked:` (a person must fix storage); a PUT that merely ran past its
+// deadline is a slow link and must stay an ordinary, retryable row. Collapsing
+// the two either parks every slow Woodland upload as "storage blocked" or hides a
+// real CORS refusal behind endless retries.
+describe('ADR-0140 Am.1 — drop-off R2 PUT deadline vs the blocked-upload rule', () => {
+  const mintThen = (put: (init?: RequestInit) => Promise<Response>) =>
+    vi.fn((input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/dropoff/upload-url')) {
+        return Promise.resolve(
+          json({ storage_key: 'dropoffs/site-eugene/k.jpg', upload_url: 'https://r2/put' }),
+        );
+      }
+      if (url.startsWith('https://r2/')) return put(init);
+      return Promise.resolve(json({ id: 'row-1' }, 201));
+    });
+
+  async function queueOne(q: Awaited<ReturnType<typeof loadQueue>>): Promise<void> {
+    await q.enqueueDropoff({
+      ...DROPOFF,
+      blob: new Blob(['photo-bytes'], { type: 'image/jpeg' }),
+      content_type: 'image/jpeg',
+      idempotency_key: 'key-put',
+    });
+  }
+
+  // FALSIFIED BY HAND: drop the `!(e instanceof FetchTimeoutError)` guard in
+  // `replayDropoff` and this row is parked `blocked:r2_unreachable`.
+  it('a PUT that never answers is abandoned, kept, and stays retryable — never blocked', async () => {
+    const q = await loadQueue();
+    const fetchFn = mintThen(
+      (init) =>
+        new Promise<Response>((_res, rej) => {
+          init?.signal?.addEventListener('abort', () =>
+            rej(new DOMException('aborted', 'AbortError')),
+          );
+        }),
+    );
+    vi.stubGlobal('fetch', fetchFn);
+    await queueOne(q);
+
+    const result = await q.replayAll();
+    expect(result.uploads_failed).toBe(1);
+    const { uploads } = await q.listPending();
+    expect(uploads, 'the drop-off and its only photo were dropped').toHaveLength(1);
+    expect(uploads[0]!.last_error).toMatch(/timeout/);
+    expect(q.stateFor(uploads[0]!.last_error), 'a slow link was parked as blocked').toBe('active');
+    expect(q.isConflict(uploads[0]!)).toBe(false);
+    // The submit must not run on a photo the bucket never received.
+    expect(fetchFn.mock.calls.some((c) => String(c[0]) === '/api/queue/replay')).toBe(false);
+  });
+
+  it('guard-the-guard: a network-layer refusal after a good mint IS still blocked', async () => {
+    const q = await loadQueue();
+    vi.stubGlobal(
+      'fetch',
+      mintThen(() => Promise.reject(new TypeError('Load failed'))),
+    );
+    await queueOne(q);
+
+    await q.replayAll();
+    const { uploads } = await q.listPending();
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]!.last_error).toBe(q.BLOCKED_UPLOAD);
+    expect(q.stateFor(uploads[0]!.last_error)).toBe('blocked');
   });
 });

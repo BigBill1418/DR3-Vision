@@ -20,8 +20,7 @@
 //     Pacific day and the physical/computed kind on every request. This chooses
 //     what to OFFER; a bypassed confirm changes nothing (same contract as the
 //     ADR-0072 tier dialogs in count-client.tsx).
-//   - It does not queue. There is no `enqueueAction` here and no `isOfflineError`
-//     branch: a void is online-only (ADR-0084 D5, reasoned in void-count.ts). A
+//   - It does not queue. There is no `enqueueAction` here: a void is online-only (ADR-0084 D5, reasoned in void-count.ts). A
 //     failed attempt says so and the count stays exactly as it is — which is the
 //     safe direction, because the count is already SAVED. Nothing an operator
 //     typed is ever at risk here; only the withdrawal waits for a connection.
@@ -36,7 +35,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
-import { newIdempotencyKey } from '@/lib/offline-queue';
+import { isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 
 export type VoidableCount = {
   id: string;
@@ -62,17 +63,20 @@ export function CountVoidClient({
 }) {
   const t = useT();
   const router = useRouter();
+  // ADR-0140 Am.1 — a deadline-bounded request plus the stall watchdog.
+  const watch = useStallWatch();
+  const confirmVoid = (): Promise<void> => watch(confirmVoidUnwatched);
   const [phase, setPhase] = useState<Phase>('list');
   const [target, setTarget] = useState<VoidableCount | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function confirmVoid(): Promise<void> {
+  async function confirmVoidUnwatched(): Promise<void> {
     if (!target) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count/void`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/void`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -108,10 +112,26 @@ export function CountVoidClient({
       // just changed. Refresh so the operator sees the number they restored
       // rather than the one the void removed.
       router.refresh();
-    } catch {
-      // No offline branch on purpose — see the header. An unreachable server
-      // means the count stands, which is the state the operator can see.
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      // No offline branch on purpose — see the header.
+      //
+      // ADR-0140 Amendment 1 (review F1) — but "no answer" is not "not saved". A
+      // void that hit its deadline (or lost its connection mid-flight) may have
+      // LANDED, and saying "Couldn't save" left the removed count on the list and
+      // the old on-hand number on the page. Re-read the server-rendered page: if
+      // the void landed, the row is gone from the refreshed list and the total is
+      // the restored one. Nothing is resent, and a second void cannot happen: a
+      // retap of a row that is already voided is answered with the no-op success
+      // `alreadyVoided` (void-count.ts, the `snapshot.voided_at !== null` branch —
+      // no second audit row). `snapshot_not_found` only appears if the refreshed
+      // page has already dropped the row and a stale id is sent anyway.
+      if (e instanceof FetchTimeoutError || isOfflineError(e)) {
+        setError(t('floor.count.void_timeout'));
+        router.refresh();
+      } else {
+        setError(t('floor.common.save_failed'));
+      }
+      setTarget(null);
       setPhase('list');
     } finally {
       setBusy(false);

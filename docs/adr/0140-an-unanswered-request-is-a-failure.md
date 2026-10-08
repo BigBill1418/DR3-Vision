@@ -53,3 +53,148 @@ request**:
 `fetch-timeout.test.ts`; `offline-queue.test.ts` › "replay network deadlines" (hung replay is abandoned, kept,
 retryable — falsified by restoring the bare `fetch`); `[userId]/keypad.test.tsx` (never-answering `signIn`, stalled
 navigation, no stall reset after a working navigation); `_components/stall-banner.test.tsx`.
+
+## Amendment 1 — the floor screens' own requests, and the body read (2026-10-07)
+
+**Status:** Proposed 2026-10-07 (PR `fix/adr0140-remaining-deadlines`, not merged). Staff-facing behaviour on the
+dock iPads: ships only on Bill's go.
+
+### Context
+
+An independent review of PR #294 (Ryan, 2026-10-07) found three gaps in what the Decision above claims:
+
+1. The deadline reached the offline-queue drain and the keypad, but **not the floor screens' own live requests**.
+   Eleven bare `await fetch(` calls remained in count, void, drop-off, inbound and load photo; two more turned up
+   in processed and queue conflicts while closing it. Each could hold its screen's `busy` flag forever, and none of
+   those screens uses `useTransition`, so the stall watchdog never saw them.
+2. `fetchWithTimeout` cleared its timer **when the headers arrived**. A body that stalled after the status line
+   (`await res.json()`) had no deadline.
+3. `{ ...init, signal }` **overwrote** a caller's `signal`, so a caller abort was silently ignored.
+
+### Decision
+
+- **One deadline for the whole exchange.** The timer stays armed until a body read succeeds. Every body reader on
+  the returned `Response` (`json`, `text`, `arrayBuffer`, `blob`, `formData`, and the same on `clone()`) rejects
+  with `FetchTimeoutError` if the deadline passes first. Once any read succeeds, every byte has arrived, clone
+  included (a clone is a tee of the same stream), so the timer is cleared. If the body is never read, the timer
+  fires at the deadline and aborts the unread stream. Nothing waits on that stream, so the abort is harmless.
+  We chose this over buffering the body inside the helper because rebuilding a `Response` loses `type`
+  (`opaqueredirect` is what `isAuthResponse` keys on under `redirect: 'manual'`), `url` and `redirected`, and
+  throws for status 0 and the null-body statuses.
+- **A caller's signal is composed, not replaced.** Either signal aborts the request. A caller abort keeps the
+  caller's own `AbortError`; only the deadline yields `FetchTimeoutError`. The two are composed by hand, because
+  `AbortSignal.any` is newer than some floor iPads' Safari.
+- **Every awaited request on an operator screen goes through `fetchWithTimeout`.** That is 13 call sites: 20 s for
+  JSON and 90 s (`UPLOAD_TIMEOUT_MS`) for the two live R2 PUTs.
+
+  | Screen                                 | Requests                                           | On timeout                                                                                                                                                           |
+  | -------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `count/count-client.tsx`               | count POST; hold approve POST; hold discard DELETE | count is **queued** under the key minted at the tap. Approve and discard are not queued: they **read the hold's status** and land on what it says (review F1, below) |
+  | `count/void-client.tsx`                | void POST                                          | never queued, by design. **Refreshes the list** and says the void may have landed (review F1, below)                                                                 |
+  | `dropoff/dropoff-client.tsx`           | mint; R2 PUT (90 s); submit                        | **queued** with the blob, under the tap key. A PUT timeout queues with the minted key and is never `blocked:`                                                        |
+  | `inbound/inbound-client.tsx`           | inbound POST                                       | **queued** under the tap key                                                                                                                                         |
+  | `processed/processed-client.tsx`       | processed POST                                     | **queued** under the tap key                                                                                                                                         |
+  | `load/[id]/photo-input.tsx`            | mint; R2 PUT (90 s); confirm                       | **queued**, and the stage advances, exactly as when offline                                                                                                          |
+  | `queue/conflicts/conflicts-client.tsx` | discard POST                                       | "Discard failed". The local row is kept, because it is removed only on an acknowledged audit write                                                                   |
+
+  A request that times out may still have landed. That is the case the ADR-0078 idempotency key exists for, so
+  every keyed write queues the same way an offline one does (`isOfflineError(e) || e instanceof
+FetchTimeoutError`), and its replay returns the original row. `FetchTimeoutError` is still not a `TypeError`.
+  The drain's exception to the blocked-upload rule is unchanged, and it is now tested for drop-offs as well as
+  load photos.
+
+- **Stall watchdog for `useState`-busy screens.** `useStallWatch()`, in the same module as `useWatchedTransition`
+  and sharing its tracker, wraps the handlers on count, void, inbound, processed and queue conflicts. The 20 s
+  deadline already bounds the request itself, so the banner covers what a deadline cannot reach: an IndexedDB
+  enqueue that never resolves, or a refresh that never lands. The photo flows (drop-off, load photo) are
+  **deliberately not watched**. A legitimate PUT can take up to 90 s, and offering Reload mid-upload would discard a
+  photo that exists only in memory until it is queued. Their worst case is bounded by the deadlines instead: about
+  130 s (20 + 90 + 20), then queued.
+- **Left bare on purpose:** the three `void fetch(` dead-end telemetry beacons (`dead-end-beacon.tsx`,
+  `write-refusal.tsx`, `stage-liveness.tsx`). They are fire-and-forget, nothing awaits them, and they hold no busy
+  state. `floor-fetch-deadline.test.ts` fails the build on any other bare `fetch(` under `src/app/operator`.
+
+### Review of PR #297 (2026-10-08) — two low findings, fixed before merge
+
+Ryan's review of this amendment's PR found two defects; Bill approved fixing both before merge.
+
+- **F1 — "no answer" was reported as "not saved" on the three un-queued manager actions.** Void, hold approve and
+  hold discard showed "Couldn't save" on a timeout and skipped `router.refresh()`. When the write had landed and only
+  the answer was lost, the on-hand number stayed stale, and a retried approve re-asked for the manager's PIN and was
+  then told to "enter the count again" — an invitation to a duplicate count. **Decision:** on a timeout (or a
+  network-layer failure, which can also follow a delivered request) these actions re-read server state and never
+  resend. A void calls `router.refresh()`, so a void that landed drops off the server-rendered list, and says so. A
+  hold action calls a new read-only `GET /api/operator/[site]/count/holds/[holdId]`, which returns `{ status }` and
+  nothing else, requires the same activated operator session as the write routes, and answers 404 for a hold at
+  another site exactly as for a missing one. The screen lands on the saved/discarded result, the existing D-9
+  "already dealt with" landing, "still waiting, but your tap may still be going through — check before retrying"
+  (softened by re-review N2, below), or "it may have gone through — refreshed" when the
+  status cannot be read either. A read was chosen over re-sending the write because a re-sent approve needs the PIN
+  again and a re-sent discard is not a probe; the release CAS (ADR-0118) still makes any human retap harmless.
+  PIN verification, the self-release refusal and manager eligibility are unchanged.
+- **F2 — the stall clock was screen-wide, not per job.** One timer was started by the first job and cleared only at
+  zero in flight, so when job 1 settled while job 2 ran, job 1's clock raised Reload a few seconds into job 2.
+  **Decision:** each job carries its own 25 s clock; the banner is up while any unsettled job is past its deadline
+  and lowered when none is. Restarting one shared clock on every new job was rejected: a second tap would then hide
+  a genuinely stalled first job indefinitely. Unmount clears every timer.
+- **Residual:** a status read of `pending` immediately after a timeout cannot rule out the lost request landing a
+  moment later; the retap is then refused by the CAS and meets the D-9 landing. Accepted.
+- **Tests:** `count-client.hold-timeout.test.tsx` (landed, pending, gone, unreadable, discard landed; each asserts
+  the write was sent once), `holds/[holdId]/route.test.ts` (status only, cross-site 404, session required),
+  `void-client.deadline.test.tsx` (refresh + honest message; a 500 still reads "Couldn't save"),
+  `stall-banner.test.tsx` (overlapping jobs; a stalled first job is not hidden; unmount). Falsified against the
+  pre-fix code: 6 of the 7 F1 behavioural cases and the F2 overlap case failed there.
+
+### Re-review of PR #297 (2026-10-08) — PASS-WITH-NOTES, five notes fixed before merge
+
+Ryan re-reviewed the fixed PR (head `e94f766`) and passed it with five notes; Bill approved fixing them on the
+same branch. Each was verified open in the code first.
+
+- **N1 (medium) — the status read could be answered from the service worker's cache.** `src/app/sw.ts` had no
+  rule for `/api/operator/...`, so the new `GET …/count/holds/[holdId]` fell to `@serwist/next/worker`'s
+  production `defaultCache` `/api/` entry: NetworkFirst, 10 s network timeout, cache `apis` kept up to 24 h. On a
+  slow uplink a cached `pending` from an earlier read could be served after a timed-out Approve that had landed.
+  **Decision:** a `NetworkOnly` GET rule for exactly `^/api/operator/[^/]+/count/holds/[^/]+/?$`, placed directly
+  after the `/healthz` rule and ahead of `defaultCache`. Rule order was confirmed in Serwist's source, not assumed:
+  `registerRoute` pushes onto a per-method list in `runtimeCaching` order and `findMatchingRoute` returns the first
+  match. **Not widened** to all of `/api/operator/`: the writes there are POST/DELETE and no runtime route matches
+  those methods, so they already reach the network; the only other operator GET is the inbound day list, whose
+  offline fallback is a separate behaviour decision and is left as it is.
+- **N2 (low) — `hold_timeout_pending` overstated what a `pending` read proves.** The lost Approve can still be in
+  flight server-side. The en/es/ur text now says the server still shows the count waiting but the tap may still be
+  going through, and to check the screen before retrying. Control flow is unchanged. The Spanish and Urdu strings
+  are the implementer's own translations and have not been reviewed by a native speaker.
+- **N3 (low) — the status read used the default 20 s deadline**, so action (20 s) plus read (20 s) ran well past
+  the 25 s stall watchdog in the same watched job. It now uses `STATUS_READ_TIMEOUT_MS` = **4 s** (in
+  `src/lib/fetch-timeout.ts`). 4 s rather than the suggested ~5 s because 20 + 5 = 25 ties `STALL_AFTER_MS` and
+  the Reload banner could still win the race. Every other deadline is unchanged.
+- **N4 (low) — stale comment in `void-client.tsx`.** A retap of an already-voided row is the no-op success
+  `alreadyVoided` (`src/lib/inventory/void-count.ts`, the `snapshot.voided_at !== null` branch, no second audit
+  row), not `snapshot_not_found`; that 404 appears only if the refreshed list has already dropped the row and a
+  stale id is sent. Comment (and the test header) corrected; no behaviour change.
+- **N5 (low) — test gaps.** Added: discard with the hold still pending; discard of a hold resolved elsewhere (lands
+  on D-9, not "discarded"); a dropped connection (`TypeError: Load failed`, not a deadline) for approve, discard and
+  void; and the status read asks for `STATUS_READ_TIMEOUT_MS` with action + read under `STALL_AFTER_MS`.
+- **Tests:** `src/app/sw.routes.test.ts` imports the real `sw.ts` with the production `defaultCache` (outside
+  production `defaultCache` is a single catch-all NetworkOnly entry, which would make the test vacuous), replays
+  Serwist's first-match lookup, and asserts the hold-status read and `/healthz` resolve to NetworkOnly, the rule
+  does not sweep in `/inbound`, and without the custom entries the same URL resolves to the `apis` cache.
+  Falsified by hand: with `[...defaultCache, ...customCaching]` two cases fail; with the `isOfflineError` half
+  removed from the approve/discard catch, the two dropped-connection cases fail.
+
+### Not verified
+
+No real iPad has been stalled against this code; every test uses a fetch double that honours abort. The claim
+that body readers reject on abort in iOS Safari comes from the Fetch spec. The guard does not depend on it,
+because each reader is also raced against the timer.
+
+### Tests
+
+`fetch-timeout.test.ts`: body stall after headers, clone, caller-signal composition (3 cases), timer cleared only
+after a read. `stall-banner.test.tsx` › `useStallWatch`. Deadline cases on each screen:
+`count-client.refusal.test.tsx`, `inbound-client.refusal.test.tsx`, `processed-client.refusal.test.tsx`,
+`dropoff-client.refusal.test.tsx` (mint, PUT and submit), `photo-input.deadline.test.tsx` (mint, PUT and confirm),
+`void-client.deadline.test.tsx`. Drain side: `offline-queue.dropoff.test.ts` › a drop-off PUT timeout stays
+retryable and is never blocked, plus the guard-the-guard that a `TypeError` after a good mint still is blocked.
+Static: `floor-fetch-deadline.test.ts`. Each new behavioural test was falsified by running it against the shipped
+code from `origin/main`, where it failed.

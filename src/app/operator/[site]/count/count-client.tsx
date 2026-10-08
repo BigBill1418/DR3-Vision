@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, fetchWithTimeout, STATUS_READ_TIMEOUT_MS } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 import {
   classifyWriteRefusal,
   WriteRefusalNotice,
@@ -63,6 +65,12 @@ export function CountClient({
 }: Props) {
   const t = useT();
   const router = useRouter();
+  // ADR-0140 Am.1 — busy is bounded by the 20 s request deadline; the watchdog
+  // covers what a deadline cannot reach (a hung IndexedDB enqueue, a refresh).
+  const watch = useStallWatch();
+  const submit = (): Promise<void> => watch(submitUnwatched);
+  const approve = (): Promise<void> => watch(approveUnwatched);
+  const discard = (): Promise<void> => watch(discardUnwatched);
   const [primary, setPrimary] = useState(0); // units_indoor (CA) or units_total (OR)
   const [inProcessing, setInProcessing] = useState(0);
   const [splitOn, setSplitOn] = useState(false);
@@ -153,7 +161,7 @@ export function CountClient({
     return body;
   }
 
-  async function submit(): Promise<void> {
+  async function submitUnwatched(): Promise<void> {
     setBusy(true);
     setError(null);
     setRefusal(null);
@@ -165,7 +173,7 @@ export function CountClient({
     const idempotencyKey = newIdempotencyKey();
     const payload = bodyForSubmit();
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
         body: JSON.stringify(payload),
@@ -215,7 +223,9 @@ export function CountClient({
       // Note what is NOT set: `result`. Green means server-acked, always. A
       // queued count shows its own distinct state, because a confirmation the
       // server never gave is the lie that makes an operator stop checking.
-      if (isOfflineError(e)) {
+      // ADR-0140 Am.1 — a submit that hit its 20 s deadline may have landed; the
+      // same key makes the queued replay the same write, so it queues like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError) {
         await enqueueAction({
           scope: 'operator.count.create',
           site_code: siteCode,
@@ -234,13 +244,88 @@ export function CountClient({
     }
   }
 
-  async function approve(): Promise<void> {
+  /**
+   * ADR-0140 Amendment 1 (review F1) — an Approve or Discard that got no answer.
+   *
+   * Neither is queued (a manager's PIN must never sit in IndexedDB), so the
+   * deadline is where the screen used to say "Couldn't save. Try again." — even
+   * when the release had LANDED and only its answer was lost. The operator then
+   * saw a stale floor number, and a retry re-asked for the manager's PIN only to
+   * be told "a manager already dealt with this one, enter the count again" —
+   * an invitation to a duplicate count.
+   *
+   * So the screen ASKS the server what happened (read-only GET, site-scoped,
+   * returns only the status) and lands where the answer says. Nothing is resent:
+   * the release CAS (ADR-0118) already makes a second Approve harmless, and this
+   * path never issues one. If the status cannot be read either, it says plainly
+   * that the action may have gone through and refreshes the server-rendered page.
+   */
+  async function resolveUnanswered(h: Hold, action: 'approve' | 'discard'): Promise<void> {
+    let status: string | null = null;
+    try {
+      // Review N3 — a short deadline of its own. This read runs AFTER the
+      // action's 20 s deadline, inside the same watched job, so at the default
+      // 20 s it would run well past the 25 s Reload banner (STALL_AFTER_MS).
+      const res = await fetchWithTimeout(
+        `/api/operator/${siteCode}/count/holds/${h.holdId}`,
+        { method: 'GET', cache: 'no-store' },
+        STATUS_READ_TIMEOUT_MS,
+      );
+      if (res.status === 404) status = 'gone';
+      else if (res.ok) {
+        const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        status = typeof b['status'] === 'string' ? b['status'] : null;
+      }
+    } catch {
+      status = null;
+    }
+
+    if (status === 'approved' && action === 'approve') {
+      // Landed. Same terminal state as the acked path below.
+      setResult({
+        computedTotal: String(h.priorTotal ?? 0),
+        physicalTotal: h.newTotal,
+        reconciledDelta: h.newTotal - (h.priorTotal ?? 0),
+      });
+      setHold(null);
+      setPin('');
+      setApproverId('');
+      setPhase('entry');
+      router.refresh();
+      return;
+    }
+    if (status === 'discarded' && action === 'discard') {
+      setHold(null);
+      setPhase('discarded');
+      return;
+    }
+    if (status === 'approved' || status === 'discarded' || status === 'gone') {
+      // Resolved, but not by this tap — the existing D-9 landing.
+      setHold(null);
+      setPin('');
+      setApproverId('');
+      setError(t('floor.count.hold_gone'));
+      setPhase('entry');
+      router.refresh();
+      return;
+    }
+    if (status === 'pending') {
+      // The server says nothing has happened (yet). A retry is safe: if the lost
+      // request lands first, the CAS refuses the second and D-9 handles it.
+      setError(t('floor.count.hold_timeout_pending'));
+      return;
+    }
+    setError(t('floor.count.hold_timeout_unknown'));
+    router.refresh();
+  }
+
+  async function approveUnwatched(): Promise<void> {
     if (!hold) return;
     setBusy(true);
     setError(null);
     setRefusal(null);
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ approverUserId: approverId, pin }),
@@ -298,14 +383,16 @@ export function CountClient({
       setHold(null);
       setPhase('entry');
       router.refresh();
-    } catch {
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      if (e instanceof FetchTimeoutError || isOfflineError(e))
+        await resolveUnanswered(hold, 'approve');
+      else setError(t('floor.common.save_failed'));
     } finally {
       setBusy(false);
     }
   }
 
-  async function discard(): Promise<void> {
+  async function discardUnwatched(): Promise<void> {
     if (!hold) return;
     // Audit D-20 — cancelling the native prompt is its own feedback and stays
     // silent; an EMPTY reason typed into it is a refusal that changed nothing on
@@ -321,7 +408,7 @@ export function CountClient({
     setRefusal(null);
     setError(null);
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reason }),
@@ -351,8 +438,10 @@ export function CountClient({
           }
         }
       }
-    } catch {
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      if (e instanceof FetchTimeoutError || isOfflineError(e))
+        await resolveUnanswered(hold, 'discard');
+      else setError(t('floor.common.save_failed'));
     } finally {
       setBusy(false);
     }
@@ -454,12 +543,14 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice
-          refusal={refusal}
-          onRefresh={refreshToToday}
-          siteCode={siteCode}
-          surface="count"
-        />}
+        {refusal && (
+          <WriteRefusalNotice
+            refusal={refusal}
+            onRefresh={refreshToToday}
+            siteCode={siteCode}
+            surface="count"
+          />
+        )}
 
         <label className="flex flex-col gap-2 text-base font-semibold">
           {t('floor.count.hold_manager_label')}
@@ -533,12 +624,14 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice
-          refusal={refusal}
-          onRefresh={refreshToToday}
-          siteCode={siteCode}
-          surface="count"
-        />}
+        {refusal && (
+          <WriteRefusalNotice
+            refusal={refusal}
+            onRefresh={refreshToToday}
+            siteCode={siteCode}
+            surface="count"
+          />
+        )}
 
         <button
           type="button"
@@ -584,12 +677,14 @@ export function CountClient({
           {error}
         </p>
       )}
-      {refusal && <WriteRefusalNotice
+      {refusal && (
+        <WriteRefusalNotice
           refusal={refusal}
           onRefresh={refreshToToday}
           siteCode={siteCode}
           surface="count"
-        />}
+        />
+      )}
 
       <NumberStepper label={primaryLabel} value={primary} onChange={setPrimary} />
       <NumberStepper

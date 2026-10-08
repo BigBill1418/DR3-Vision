@@ -111,6 +111,73 @@ days `stripped_non_program` was 0, so non-program strips were keyed as program.
 - Tests: 15 new or adjusted cases across the report, tile loader, tile component and overview card. Each failed
   against the pre-fix source, except the stale-intake cases, which pin wording that did not change.
 
+## 2026-10-07 — Every floor-screen request now has a deadline, body read included (ADR-0140 Amendment 1)
+
+These are the gaps from the independent review of PR #294. **Unmerged, in PR; staff-facing; ships on Bill's go.**
+
+### Fixed
+
+- **13 floor-screen requests had no deadline:** count ×3 (submit, hold approve, hold discard), void, drop-off ×3
+  (mint, R2 PUT, submit), inbound, processed, load photo ×3 (mint, R2 PUT, confirm), and queue-conflicts discard.
+  They now use `fetchWithTimeout`: 20 s for JSON, 90 s for the R2 PUTs. A keyed write that times out is queued under
+  the idempotency key minted at the tap, the same way an offline one is; a write that actually landed replays to the
+  original row. A drop-off or photo PUT that times out is queued, never `blocked:`. Conflicts discard shows its
+  existing failure sentence and frees the button; void and hold release/discard re-read server state (below).
+- **`fetchWithTimeout` now covers the body read.** It used to stop the timer when the headers arrived. Every body
+  reader on the response, and on its `clone()`, now rejects with `FetchTimeoutError` past the deadline.
+- **A caller's `AbortSignal` is now composed with the deadline** instead of being silently overwritten.
+- **`useStallWatch()`** wraps the count, void, inbound, processed and conflicts handlers, so a hang a deadline
+  cannot reach (an IndexedDB enqueue, a refresh) still raises the Reload banner. The photo flows are deliberately
+  excluded: a Reload mid-upload would lose a photo that exists only in memory.
+
+### Fixed — independent review of PR #297 (two low findings, fixed before merge on Bill's approval)
+
+- **F1 — a manager action that landed but lost its answer no longer reads "Couldn't save".** Void, hold approve and
+  hold discard are not queued, so a 20 s timeout (or a connection lost mid-flight) used to show the generic failure and
+  skip `router.refresh()`: the on-hand number stayed stale, and a retried approve re-asked for the manager's PIN only
+  to be told to enter the count again. Now a timed-out **void** refreshes the server-rendered list and says "if that
+  count is no longer on it, it was removed". A timed-out **hold approve/discard** reads the hold's status through a
+  new read-only, site-scoped `GET /api/operator/[site]/count/holds/[holdId]` (returns `{ status }` only; another
+  site's hold is the same 404 as a missing one) and lands on the saved/discarded result, the existing "a manager
+  already dealt with this one" landing, "still waiting — but your tap may still be going through, check before
+  retrying", or, if the status cannot be read either, "it may have gone through — the screen has been refreshed".
+  Nothing is ever resent; the release CAS (ADR-0118) and the void's `alreadyVoided` no-op keep any retap harmless. PIN, self-release and manager-eligibility checks are untouched.
+  EN/ES/Urdu strings added.
+- **F2 — the stall banner's 25 s clock is now per job.** `useStallTracker` kept one screen-wide timer, started by the
+  first job and cleared only when nothing was in flight, so when job 1 settled while job 2 ran, job 1's clock raised
+  Reload a few seconds into job 2. Each job now has its own clock; the banner is up while any unsettled job is past
+  25 s, so a second tap also cannot hide a genuinely stalled first job. Unmount clears every timer.
+- Tests: `count-client.hold-timeout.test.tsx` (5), `holds/[holdId]/route.test.ts` (3), `void-client.deadline` (updated
+  - 1), `stall-banner` (+2). The new behavioural tests were run against the pre-fix code and failed there (6 of 7 F1,
+    the F2 overlap case).
+
+### Fixed — re-review of PR #297 (PASS-WITH-NOTES; five notes fixed before merge on Bill's approval)
+
+- **N1 — the hold-status read can no longer be answered from the service worker's cache.** It fell to Serwist's
+  default `/api/` rule (NetworkFirst, 10 s, cached up to 24 h), so a slow uplink could get an old `pending` after an
+  Approve that had landed. `src/app/sw.ts` now has a `NetworkOnly` rule for exactly
+  `/api/operator/<site>/count/holds/<id>`, ahead of the defaults, next to the `/healthz` rule. Writes under
+  `/api/operator/` were already uncached (no runtime route matches POST/DELETE); the inbound day list is unchanged.
+- **N2 — "still waiting" is now honest about timing.** EN/ES/Urdu `hold_timeout_pending` says the server still shows
+  the count waiting but the tap may still be going through, and to check before retrying. Same control flow. The
+  Spanish and Urdu wording is the implementer's own translation, not yet native-reviewed.
+- **N3 — the status read has a 4 s deadline** (`STATUS_READ_TIMEOUT_MS`), so a 20 s action plus its read stays under
+  the 25 s Reload banner. Other deadlines unchanged.
+- **N4 — corrected comment** in `void-client.tsx`: a retap of an already-voided row is the `alreadyVoided` no-op
+  success, not `snapshot_not_found`.
+- **N5 — tests:** discard with the hold still pending; discard of a hold resolved elsewhere; a dropped connection
+  (not a deadline) on approve, discard and void; the status read's deadline. New `sw.routes.test.ts` loads the real
+  service worker with production defaults and asserts which route each never-cache read resolves to. Falsified by
+  hand (rule order reversed; dropped-connection branch removed): the new cases fail.
+
+### Tests
+
+New tests in `fetch-timeout` (body stall, clone, signal composition) and `stall-banner` (`useStallWatch`). There are
+deadline cases on count, inbound, processed, drop-off (all 3 steps), load photo (all 3 steps) and void. The drain test
+`offline-queue.dropoff` now proves a drop-off PUT timeout stays retryable while a `TypeError` after a good mint is
+still blocked. A static `floor-fetch-deadline` scan fails on any new bare `fetch(` under `src/app/operator`. Each new
+behavioural test was run against the shipped code and failed there.
+
 ## 2026-10-07 — Eugene signature chain: Patrick signs facility, Rick signs ops (ADR-0019.7)
 
 Bill, 18:31 PDT, option "a". Eugene facility = **Patrick Dills** (override Bill or Rick); ops = **Rick Albritton**

@@ -30,6 +30,17 @@ const { enqueueDropoff, isOfflineError, newIdempotencyKey } = vi.hoisted(() => (
 }));
 vi.mock('@/lib/offline-queue', () => ({ enqueueDropoff, isOfflineError, newIdempotencyKey }));
 
+// ADR-0140 Am.1 — every request on this screen runs through `fetchWithTimeout`.
+// The deadline is shortened to 40 ms here so a request that never answers is
+// abandoned inside the test's own timeout; the abort/timeout mechanics are real.
+vi.mock('@/lib/fetch-timeout', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/fetch-timeout')>();
+  return {
+    ...orig,
+    fetchWithTimeout: (url: string, init?: RequestInit) => orig.fetchWithTimeout(url, init, 40),
+  };
+});
+
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
 
@@ -195,5 +206,82 @@ describe('what the new branch must NOT swallow', () => {
     await waitFor(() => expect(enqueueDropoff).toHaveBeenCalledTimes(1));
     expect(document.body.textContent).toContain(en.floor.common.queued);
     expect(screen.queryByTestId('write-refusal')).toBeNull();
+  });
+});
+
+/** A request that never answers, but honours abort the way a browser does. */
+function neverAnswers(init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_res, rej) => {
+    init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+  });
+}
+
+const json200 = (body: unknown): Response =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+// ADR-0140 Am.1 — the three requests of a live drop-off, each made to hang in
+// turn. FALSIFIED BY HAND: with the bare `fetch` back at any one of them, that
+// case never settles. The blob and units must queue together, under the key
+// minted at the tap, and never as `error`.
+describe('a drop-off request that never answers', () => {
+  it('a hung mint queues the whole drop-off (no key yet)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_u: string, init?: RequestInit) => neverAnswers(init)),
+    );
+    renderDropoff();
+    capture();
+    await waitFor(() => expect(enqueueDropoff).toHaveBeenCalledTimes(1));
+    expect(enqueueDropoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storage_key: null,
+        upload_url: null,
+        idempotency_key: '0000000000abc-0000000000000000key1',
+      }),
+    );
+  });
+
+  it('a hung R2 PUT is a slow link, not a refusal — it queues with the minted key', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes('/dropoff/upload-url')) {
+          return Promise.resolve(
+            json200({ storage_key: 'dropoffs/woodland/x.jpg', upload_url: 'https://r2/put' }),
+          );
+        }
+        return neverAnswers(init);
+      }),
+    );
+    renderDropoff();
+    capture();
+    await waitFor(() => expect(enqueueDropoff).toHaveBeenCalledTimes(1));
+    expect(enqueueDropoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storage_key: 'dropoffs/woodland/x.jpg',
+        upload_url: 'https://r2/put',
+        idempotency_key: '0000000000abc-0000000000000000key1',
+      }),
+    );
+    expect(document.body.textContent).not.toContain(en.floor.common.save_failed);
+  });
+
+  it('a hung submit queues under the SAME key, so a write that landed is not doubled', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes('/dropoff/upload-url')) return Promise.resolve(json200(MINT_OK));
+        return neverAnswers(init);
+      }),
+    );
+    renderDropoff();
+    capture();
+    await waitFor(() => expect(enqueueDropoff).toHaveBeenCalledTimes(1));
+    expect(enqueueDropoff).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotency_key: '0000000000abc-0000000000000000key1' }),
+    );
   });
 });

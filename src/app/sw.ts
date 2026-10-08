@@ -77,6 +77,28 @@ const customCaching: RuntimeCaching[] = [
     method: 'GET',
     handler: new NetworkOnly(),
   },
+  // ADR-0140 Amendment 1 (review N1) — the hold-status read is NEVER cached.
+  //
+  // After an Approve/Discard gets no answer, `resolveUnanswered` in
+  // `count-client.tsx` GETs /api/operator/<site>/count/holds/<id> to learn what
+  // actually happened. Without this rule that GET falls to `defaultCache`'s
+  // `/api/` entry (NetworkFirst, 10 s network timeout, cache kept up to 24 h),
+  // so on a slow uplink the SW could answer with an earlier cached `pending`
+  // and the screen would say "nothing happened" about a release that landed.
+  // A status read that may be stale is worse than no answer: no answer already
+  // has an honest branch (`hold_timeout_unknown`).
+  //
+  // Scoped to the hold-status path on purpose. Writes under /api/operator/ are
+  // POST/DELETE and no runtime route matches those methods, so they already go
+  // straight to the network; the only other operator GET (`/inbound`, the
+  // floor's day list) keeps its current offline behaviour until it is reviewed
+  // on its own. Same placement rule as /healthz: AHEAD of `defaultCache`.
+  {
+    matcher: ({ url, sameOrigin }) =>
+      sameOrigin && /^\/api\/operator\/[^/]+\/count\/holds\/[^/]+\/?$/.test(url.pathname),
+    method: 'GET',
+    handler: new NetworkOnly(),
+  },
   // R2 photo previews — CacheFirst, 200 entries, 7 days
   {
     matcher: ({ url }) =>
