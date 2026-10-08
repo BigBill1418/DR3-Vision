@@ -60,7 +60,7 @@ function baseInput(): PdfMonthInput {
       // Beto: one qualifying day.
       { bonus_employee_id: 'e2', entry_date: dayUTC(2026, 4, 1), mattress_count: 74, saves: 0 },
     ],
-    rule: WOODLAND,
+    ruleFor: () => WOODLAND,
   };
 }
 

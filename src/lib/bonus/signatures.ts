@@ -43,7 +43,7 @@
 import type { AuditAction } from '@prisma/client';
 import { periodBonusCentsFor, type DecimalLike } from '@/lib/bonus/paid-units';
 import { transitionMonth, type BonusPayPeriodState } from '@/lib/bonus/state-machine';
-import { entryDateUTC, NoActiveRuleError } from '@/lib/bonus/daily-entry';
+import { ruleLookup, toRuleBook, type BonusRuleRow } from '@/lib/bonus/rule-book';
 import { bonusPayPeriodsByState } from '@/lib/observability/metrics';
 import { getSignatureChain, type SignatureChainDb } from '@/lib/bonus/signature-chain';
 import { findSodConflict, type SodConflict } from '@/lib/bonus/sod-exclusion';
@@ -101,7 +101,7 @@ export interface SignatureDb {
     // the same truthful-typing discipline that `DecimalLike` itself exists for.
     findMany(args: {
       where: { bonus_pay_period_id: string };
-    }): Promise<{ mattress_count: DecimalLike; saves: DecimalLike }[]>;
+    }): Promise<{ entry_date: Date; mattress_count: DecimalLike; saves: DecimalLike }[]>;
     // ADR-0019.3 §2 — the separation-of-duties read. Declared REQUIRED for the
     // same reason `saves` is: a structural type that let a caller or a test
     // double omit it would let the guard be silently absent exactly where it is
@@ -119,20 +119,12 @@ export interface SignatureDb {
     }): Promise<{ bonus_employee_id: string; bonus_employee: { full_name: string } } | null>;
   };
   processorBonusRule: {
-    findFirst(args: {
-      where: {
-        site_id: string;
-        effective_date: { lte: Date };
-        OR: Array<{ end_date: null } | { end_date: { gte: Date } }>;
-      };
-      orderBy: { effective_date: 'desc' };
-    }): Promise<{
-      id: string;
-      threshold_low: number;
-      rate_low: { toString(): string };
-      threshold_high: number;
-      rate_high: { toString(): string };
-    } | null>;
+    // ADR-0019.6 — the whole site rule book; the lock prices each entry by the
+    // rule covering its own entry_date.
+    findMany(args: {
+      where: { site_id: string };
+      orderBy: { effective_date: 'asc' };
+    }): Promise<BonusRuleRow[]>;
   };
   auditLog: {
     create(args: { data: Record<string, unknown> }): Promise<unknown>;
@@ -457,27 +449,19 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
       const entries = await tx.bonusDailyEntry.findMany({
         where: { bonus_pay_period_id: monthId },
       });
-      const on = entryDateUTC(month.period_start);
-      const ruleRow = await tx.processorBonusRule.findFirst({
-        where: {
-          site_id: signer.siteId,
-          effective_date: { lte: on },
-          OR: [{ end_date: null }, { end_date: { gte: on } }],
-        },
-        orderBy: { effective_date: 'desc' },
-      });
-      if (!ruleRow) throw new NoActiveRuleError(signer.siteId);
+      const book = toRuleBook(
+        await tx.processorBonusRule.findMany({
+          where: { site_id: signer.siteId },
+          orderBy: { effective_date: 'asc' },
+        }),
+      );
       // ADR-0083 — the lock totals PAID units (processed + saves), tiered once
       // per day, through the single `paid-units` funnel the grid, the PDF and the
       // ADR-0033 reconcile all share. The signed total therefore cannot diverge
       // from the displayed total, which is the property the footer/signature
-      // requirement asks for.
-      const total = periodBonusCentsFor(entries, {
-        threshold_low: ruleRow.threshold_low,
-        rate_low: ruleRow.rate_low.toString(),
-        threshold_high: ruleRow.threshold_high,
-        rate_high: ruleRow.rate_high.toString(),
-      });
+      // requirement asks for. ADR-0019.6 — each day is priced by the rule covering
+      // its own entry_date (a missing/overlapping rule throws and the tx rolls back).
+      const total = periodBonusCentsFor(entries, ruleLookup(book, { siteId: signer.siteId }));
       await tx.bonusPayPeriod.update({
         where: { id: monthId },
         data: { total_payout_cents: total },

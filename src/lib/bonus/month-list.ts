@@ -18,7 +18,7 @@
 // rule #3 — bonus math is never hardcoded and never diverges from the PDF/CSV).
 
 import { prisma } from '@/lib/prisma';
-import { resolveActiveRule, NoActiveRuleError } from '@/lib/bonus/daily-entry';
+import { loadRuleLookup, NoActiveRuleError } from '@/lib/bonus/daily-entry';
 import { periodBonusCentsFor } from '@/lib/bonus/paid-units';
 import type { BonusPayPeriodState } from '@/lib/bonus/state-machine';
 import { appToday } from '@/lib/time';
@@ -164,18 +164,17 @@ async function payoutForMonth(
     // ADR-0083 — an UNLOCKED period's displayed payout is computed here; it must
     // include saves or the list would disagree with the month page and with the
     // total this period will lock at signature time.
-    select: { mattress_count: true, saves: true },
+    // ADR-0019.6 — entry_date selects the rule each day is priced by.
+    select: { entry_date: true, mattress_count: true, saves: true },
   });
   if (entries.length === 0) return { cents: 0, locked: false };
-  let rule;
   try {
-    rule = await resolveActiveRule(siteId, month.period_start);
+    const cents = periodBonusCentsFor(entries, await loadRuleLookup(siteId));
+    return { cents, locked: false };
   } catch (e) {
     if (e instanceof NoActiveRuleError) return { cents: 0, locked: false };
     throw e;
   }
-  const cents = periodBonusCentsFor(entries, rule);
-  return { cents, locked: false };
 }
 
 // ────────────────────────────────────────────────────────────────────

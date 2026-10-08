@@ -104,11 +104,11 @@ describe('periodBonusCentsFor', () => {
     // Three 30-unit days is three sub-threshold days = $0, NOT one 90-unit day.
     // If the period total were tiered once, this would wrongly pay $24.00.
     const rows = [
-      { mattress_count: dec(20), saves: dec(10) },
-      { mattress_count: dec(20), saves: dec(10) },
-      { mattress_count: dec(20), saves: dec(10) },
+      { entry_date: '2026-05-01', mattress_count: dec(20), saves: dec(10) },
+      { entry_date: '2026-05-01', mattress_count: dec(20), saves: dec(10) },
+      { entry_date: '2026-05-01', mattress_count: dec(20), saves: dec(10) },
     ];
-    expect(periodBonusCentsFor(rows, WOODLAND)).toBe(0);
+    expect(periodBonusCentsFor(rows, () => WOODLAND)).toBe(0);
     expect(calculateDailyBonusCents(90, WOODLAND)).toBe(2400);
   });
 
@@ -116,8 +116,12 @@ describe('periodBonusCentsFor', () => {
     // The historical-parity property the whole migration rests on. See
     // saves-historical-reconcile.test.ts for the reconcile-level version.
     const counts = [55, 76, 40, 120, 0, 74, 75];
-    const rows = counts.map((c) => ({ mattress_count: dec(c), saves: dec(0) }));
+    const rows = counts.map((c) => ({
+      entry_date: '2026-05-01',
+      mattress_count: dec(c),
+      saves: dec(0),
+    }));
     const legacy = counts.reduce((s, c) => s + calculateDailyBonusCents(c, WOODLAND), 0);
-    expect(periodBonusCentsFor(rows, WOODLAND)).toBe(legacy);
+    expect(periodBonusCentsFor(rows, () => WOODLAND)).toBe(legacy);
   });
 });

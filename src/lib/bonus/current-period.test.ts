@@ -58,6 +58,8 @@ interface MockEntry {
   id: string;
   bonus_employee_id: string;
   bonus_pay_period_id: string;
+  /** ADR-0019.6 — each entry is priced by the rule covering this day. */
+  entry_date: Date;
   mattress_count: Dec;
   /** ADR-0083 — the real column is NOT NULL DEFAULT 0, so the double carries it too. */
   saves: Dec;
@@ -109,6 +111,7 @@ function addEntry(periodId: string, empId: string, count: number): void {
     id: `entry-${++idc}`,
     bonus_employee_id: empId,
     bonus_pay_period_id: periodId,
+    entry_date: periodStore.get(periodId)?.period_start ?? new Date(Date.UTC(2026, 5, 2)),
     mattress_count: toDec(count),
     saves: toDec(0),
   };
@@ -191,6 +194,13 @@ vi.mock('@/lib/prisma', () => {
       };
     }),
   };
+  // ADR-0019.6 — the rule-book read returns the same single open-ended row.
+  Object.assign(processorBonusRule, {
+    findMany: vi.fn(async (args: { where: Record<string, unknown> }) => {
+      const r = await processorBonusRule.findFirst(args as never);
+      return r ? [r] : [];
+    }),
+  });
 
   return { prisma: { bonusPayPeriod, bonusEmployee, bonusDailyEntry, processorBonusRule } };
 });

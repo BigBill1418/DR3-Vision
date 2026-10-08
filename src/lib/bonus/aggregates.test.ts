@@ -237,6 +237,13 @@ vi.mock('@/lib/prisma', () => {
   };
 
   const processorBonusRule = {
+    // ADR-0019.6 — the rule-book read: every row for the site, oldest first.
+    findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
+      [...ruleStore.values()]
+        .filter((r) => r.site_id === where['site_id'])
+        .sort((a, b) => a.effective_date.getTime() - b.effective_date.getTime())
+        .map((r) => ({ ...r })),
+    ),
     // Honors the strict query (effective_date<=on, end_date null|>=on, newest
     // first) AND the historical fallback (site-only, oldest first) so the
     // resolveRuleForHistorical fallback path is actually exercised.

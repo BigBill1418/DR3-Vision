@@ -247,6 +247,10 @@ vi.mock('@/lib/prisma', () => {
       end_date: null,
     })),
   };
+  // ADR-0019.6 — the rule-book read returns the same single open-ended row.
+  Object.assign(processorBonusRule, {
+    findMany: vi.fn(async () => [await processorBonusRule.findFirst()]),
+  });
   const site = {
     findUnique: vi.fn(async ({ where }: { where: { id?: string; code?: string } }) => {
       if (where.id) return sitesStore.get(where.id) ?? null;

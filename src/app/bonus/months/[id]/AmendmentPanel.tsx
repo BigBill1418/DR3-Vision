@@ -43,11 +43,8 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  calculateDailyBonusCents,
-  formatCents,
-  type BonusRuleParams,
-} from '@/lib/bonus/calculator';
+import { calculateDailyBonusCents, formatCents } from '@/lib/bonus/calculator';
+import { ruleForDate, type DatedBonusRule } from '@/lib/bonus/rule-book';
 import { amendmentErrorMessage } from '@/lib/bonus/amendment-error-messages';
 
 export interface AmendEmployeeRow {
@@ -70,8 +67,11 @@ interface Props {
   monthId: string;
   /** 'signed' | 'paid' | 'amended' — the panel only renders for these. */
   state: 'signed' | 'paid' | 'amended';
-  /** Woodland rule params for live calculation (from the server, NEVER hardcoded). */
-  rule: BonusRuleParams;
+  /**
+   * The site's rule book (from the server, NEVER hardcoded). ADR-0019.6 — the
+   * selected day's bonus uses the rule covering THAT day.
+   */
+  rules: DatedBonusRule[];
   /** Days of this month (for the amended-state day picker). */
   days: AmendDayOption[];
   /** Active employees with the FIRST day's entries pre-loaded (amended state only). */
@@ -82,7 +82,7 @@ interface Props {
 
 const SOFT_WARN = 200;
 
-export function AmendmentPanel({ monthId, state, rule, days, employees, entriesByDay }: Props) {
+export function AmendmentPanel({ monthId, state, rules, days, employees, entriesByDay }: Props) {
   const router = useRouter();
 
   // ── Unlock modal (signed | paid) ──────────────────────────────────
@@ -205,7 +205,7 @@ export function AmendmentPanel({ monthId, state, rule, days, employees, entriesB
   return (
     <AmendedEditor
       monthId={monthId}
-      rule={rule}
+      rules={rules}
       days={days}
       employees={employees}
       entriesByDay={entriesByDay}
@@ -222,13 +222,13 @@ interface RowState {
 
 function AmendedEditor({
   monthId,
-  rule,
+  rules,
   days,
   employees,
   entriesByDay,
 }: {
   monthId: string;
-  rule: BonusRuleParams;
+  rules: DatedBonusRule[];
   days: AmendDayOption[];
   employees: AmendEmployeeRow[];
   entriesByDay: Record<string, { mattress_count: number; saves: number; note: string | null }>;
@@ -253,6 +253,10 @@ function AmendedEditor({
     setState(buildRowState(employees, entriesByDay, iso));
   }
 
+  // ADR-0019.6 — the rule covering the SELECTED day (the server has already
+  // proven every day of the period resolves to exactly one rule).
+  const rule = useMemo(() => (day ? ruleForDate(rules, day) : null), [rules, day]);
+
   const parsed = (raw: string): number | null => {
     if (raw.trim() === '') return null;
     const n = Number(raw);
@@ -270,7 +274,9 @@ function AmendedEditor({
       const rs = state[e.bonus_employee_id];
       const n = parsed(rs?.count ?? '');
       const sv = parsed(rs?.saves ?? '');
-      if (n != null || sv != null) sum += calculateDailyBonusCents((n ?? 0) + (sv ?? 0), rule);
+      if (rule && (n != null || sv != null)) {
+        sum += calculateDailyBonusCents((n ?? 0) + (sv ?? 0), rule);
+      }
     }
     return sum;
   }, [state, employees, rule]);
@@ -427,7 +433,9 @@ function AmendedEditor({
               const overWarn = n != null && n > SOFT_WARN;
               // ADR-0083 — tiered ONCE over the summed paid units, never twice.
               const bonus =
-                n != null || sv != null ? calculateDailyBonusCents((n ?? 0) + (sv ?? 0), rule) : 0;
+                rule && (n != null || sv != null)
+                  ? calculateDailyBonusCents((n ?? 0) + (sv ?? 0), rule)
+                  : 0;
               return (
                 <tr
                   key={e.bonus_employee_id}

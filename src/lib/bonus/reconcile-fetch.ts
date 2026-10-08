@@ -14,7 +14,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { periodBonusCentsFor } from '@/lib/bonus/paid-units';
-import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { loadRuleLookup } from '@/lib/bonus/daily-entry';
 import {
   reconcilePayout,
   isSuspectedWrongZero,
@@ -71,9 +71,10 @@ export async function recomputePeriodTotals(monthId: string): Promise<Recomputed
     // second computation the sign-time lock is checked against; if it totalled
     // processed-only while the lock totalled processed+saves, every period
     // containing a single save would page URGENT and refuse its own payroll PDF.
-    select: { mattress_count: true, saves: true },
+    // ADR-0019.6 — entry_date selects the rule each day is priced by.
+    select: { entry_date: true, mattress_count: true, saves: true },
   });
-  const rule = await resolveActiveRule(month.site_id, month.period_start);
+  const ruleFor = await loadRuleLookup(month.site_id);
   // The `.toNumber()` coercion is load-bearing (a raw Decimal silently zeros) and
   // now lives inside `periodBonusCentsFor`, which is the same funnel the lock
   // uses — the independence that matters is the SECOND READ of the rows, not a
@@ -85,12 +86,7 @@ export async function recomputePeriodTotals(monthId: string): Promise<Recomputed
   // `bonus(mattress_count + 0) === bonus(mattress_count)` and every
   // already-signed period reconciles at ZERO drift across this change. Pinned by
   // `__tests__/saves-historical-reconcile.test.ts`.
-  const recomputedTotalCents = periodBonusCentsFor(entries, {
-    threshold_low: rule.threshold_low,
-    rate_low: rule.rate_low,
-    threshold_high: rule.threshold_high,
-    rate_high: rule.rate_high,
-  });
+  const recomputedTotalCents = periodBonusCentsFor(entries, ruleFor);
 
   return {
     monthId,

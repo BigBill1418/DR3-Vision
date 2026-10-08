@@ -9,7 +9,7 @@
 // hardcoded; it always flows from a processor_bonus_rules row).
 
 import { randomUUID } from 'node:crypto';
-import { type BonusRuleParams } from '@/lib/bonus/calculator';
+import type { RuleLookup } from '@/lib/bonus/rule-book';
 import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
 
 export interface PdfMonthRow {
@@ -49,7 +49,8 @@ export interface PdfMonthInput {
   site: { code: string; name: string };
   employees: PdfEmployee[];
   entries: PdfEntry[];
-  rule: BonusRuleParams;
+  /** ADR-0019.6 — the rule pricing each entry, by its own entry_date. */
+  ruleFor: RuleLookup;
 }
 
 export interface PdfEmployeeRow {
@@ -98,8 +99,9 @@ function monthLabel(d: Date): string {
  * sorted by name for a stable, readable table.
  *
  * The grand total is the sum of every employee's per-day bonus and is therefore
- * identical to `calculateMonthlyBonusCents(allCounts, rule)` — both walk the same
- * calculator over the same per-day counts.
+ * identical to `periodBonusCentsFor(entries, ruleFor)` — the sign-time lock and
+ * the reconcile recompute — because all three walk the same calculator over the
+ * same per-day counts with the same per-entry-date rule (ADR-0019.6).
  */
 export function assemblePdfRows(input: PdfMonthInput): PdfData {
   const nameById = new Map(input.employees.map((e) => [e.id, e.full_name]));
@@ -122,7 +124,7 @@ export function assemblePdfRows(input: PdfMonthInput): PdfData {
     }
     // ADR-0083 — tiered ONCE over processed + saves, through the shared funnel
     // the sign-time lock and the on-screen grid also use.
-    const bonus = dailyBonusCentsFor(entry, input.rule);
+    const bonus = dailyBonusCentsFor(entry, input.ruleFor(entry.entry_date));
     const acc = byEmployee.get(entry.bonus_employee_id) ?? {
       daysQualified: 0,
       totalMattresses: 0,

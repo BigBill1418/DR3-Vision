@@ -61,6 +61,7 @@
 // store transfer). See ADR-0083 §"Inventory leg" and ADR-0037's amendment.
 
 import { calculateDailyBonusCents, type BonusRuleParams } from '@/lib/bonus/calculator';
+import type { RuleLookup } from '@/lib/bonus/rule-book';
 
 /**
  * `mattress_count` and `saves` are Prisma `Decimal`s at runtime (both
@@ -136,10 +137,19 @@ export function dailyBonusCentsFor(
  * Sum of daily bonuses across a list of entries, in integer cents. The
  * period-level equivalent used by the sign-time lock and the ADR-0033
  * reconcile recompute — the two computations of a payout that must agree.
+ *
+ * ADR-0019.6 — each row is priced by the rule covering ITS OWN `entry_date`
+ * (`ruleFor`, normally `ruleLookup(book)` from `rule-book.ts`). `entry_date` is
+ * therefore REQUIRED: a caller that forgets to select it is a compile error, not
+ * a period silently priced at one date's rate.
  */
 export function periodBonusCentsFor(
-  rows: Array<{ mattress_count: DecimalLike; saves?: DecimalLike | null }>,
-  rule: BonusRuleParams,
+  rows: Array<{
+    entry_date: Date | string;
+    mattress_count: DecimalLike;
+    saves?: DecimalLike | null;
+  }>,
+  ruleFor: RuleLookup,
 ): number {
-  return rows.reduce((sum, row) => sum + dailyBonusCentsFor(row, rule), 0);
+  return rows.reduce((sum, row) => sum + dailyBonusCentsFor(row, ruleFor(row.entry_date)), 0);
 }

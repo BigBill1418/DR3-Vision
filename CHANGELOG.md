@@ -9,6 +9,37 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-07 — Bonus rate change from 2026-10-13, both sites; pay priced by each entry's own date (ADR-0019.6)
+
+Approved by Bill at 5:12 PM PDT. From **Tue 2026-10-13** Woodland and Eugene pay
+`MAX(units − 60, 0) × $1.00 + MAX(units − 100, 0) × $0.25`: units 61–100 earn $1.00 and 101+ earn $1.25, so
+80 units pay $20.00 and 150 pay $102.50. Days through 2026-10-12 keep the old rules: Woodland 50/$0.50/74/$0.25,
+Eugene 50/$1.00/100/$0.25. Period 21 (Sep 29 – Oct 12, paid Oct 16) is all old-rate. Period 22 (Oct 13 – Oct 26,
+paid Oct 30) is the first new-rate period.
+
+### Changed
+
+- **Migration `20260867_adr0019_6_bonus_rate_change_20261013`.** Closes each site's open rule on 2026-10-12 and
+  opens the new rule on 2026-10-13. It is idempotent, leaves historical rates untouched, and aborts on any
+  overlapping window. The seed CSV carries the same 4 rows, and the seed count moves from 2 to 4.
+- **Pay is priced per entry date.** Before this change the lock, reconcile, PDF, period page, list, standings and
+  annual export all priced a whole period with the rule on its **start date**. That is right for 10/13, which is a
+  period start, but it would misprice any change that lands mid-period. New `rule-book.ts` picks the one rule
+  covering each `entry_date` and refuses an overlap. `periodBonusCentsFor` now requires `entry_date`. The
+  amendment editor prices the selected day by that day's rule.
+- `calculator.ts` header, `prisma/seed/README.md` and the charter's bonus section state the new rule.
+
+### Tests
+
+- `rate-change-20261013.test.ts` (32): the approved payout table; the seed book covers every day 2026–2027 exactly
+  once; 80 units = old on 10/12, $20.00 on 10/13 at both sites; Period 21 re-priced after 10/13 stays old; a
+  straddling period prices each day by its own date; lock = PDF for a Period 22 sample; overlap, end-date and
+  missing-date guards; migration SQL = CSV; static guard against period-start pricing (6 hits on origin/main, 0
+  now).
+- `processor-bonus-rate-change.db.test.ts` (3, real Postgres): migration ×2 on a production-shaped DB; real
+  resolver on 10/12, 10/13 and deploy day; an overlap aborts and rolls back.
+- Existing test doubles now load the rule book and carry `entry_date`.
+
 ## 2026-10-06 — The iPad no longer waits forever on a request (ADR-0140)
 
 Woodland, ~9:25 AM PDT: _"login screen stuck - load buttons stuck ipad browser appears frozen"_. The server was

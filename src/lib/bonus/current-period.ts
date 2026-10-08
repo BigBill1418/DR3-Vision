@@ -23,7 +23,7 @@
 import { prisma } from '@/lib/prisma';
 import { type BonusRuleParams } from '@/lib/bonus/calculator';
 import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
-import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { loadRuleLookup } from '@/lib/bonus/daily-entry';
 import { listEmployees } from '@/lib/bonus/employees';
 import type { PreviousName } from '@/lib/bonus/employees';
 import { periodLabel } from '@/lib/bonus/period-label';
@@ -128,6 +128,20 @@ function emptyTally(): Tally {
   return { units: 0, mattresses: 0, saves: 0, daysQualified: 0, daysShort: 0, bonusCents: 0 };
 }
 
+/**
+ * ADR-0019.6 — the day whose rule supplies the displayed `thresholdLow` ("min N
+ * units"): today, clamped into the open period. Money is always priced per entry
+ * date; this only chooses which rule's threshold the banner states, and today's
+ * rule is the one the next keyed mattress is measured against.
+ */
+function displayRuleDay(period: { period_start: Date; period_end: Date }, now: Date): Date {
+  const t = Math.min(
+    Math.max(now.getTime(), period.period_start.getTime()),
+    period.period_end.getTime(),
+  );
+  return new Date(t);
+}
+
 /** Fold one keyed day into a tally, classifying it qualified vs short. */
 function accumulate(acc: Tally, mattressCount: number, saves: number, rule: BonusRuleParams): void {
   const bonus = dailyBonusCentsFor({ mattress_count: mattressCount, saves }, rule);
@@ -175,19 +189,20 @@ export async function currentPeriodStandings(
     };
   }
 
-  const rule = await resolveActiveRule(siteId, period.period_start);
+  const ruleFor = await loadRuleLookup(siteId);
+  const rule = ruleFor(displayRuleDay(period, now));
 
   // Every keyed entry in the open period. Scoped to the period (which is itself
   // site-scoped via resolveOpenPayPeriod), so no cross-site leakage is possible.
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: period.id },
-    select: { bonus_employee_id: true, mattress_count: true, saves: true },
+    select: { bonus_employee_id: true, entry_date: true, mattress_count: true, saves: true },
   });
 
   const tallyByEmployee = new Map<string, Tally>();
   for (const e of entries) {
     const acc = tallyByEmployee.get(e.bonus_employee_id) ?? emptyTally();
-    accumulate(acc, e.mattress_count.toNumber(), e.saves.toNumber(), rule);
+    accumulate(acc, e.mattress_count.toNumber(), e.saves.toNumber(), ruleFor(e.entry_date));
     tallyByEmployee.set(e.bonus_employee_id, acc);
   }
 
@@ -254,7 +269,8 @@ export async function currentPeriodForEmployee(
   const period = await resolveOpenPeriodRow(siteId, now);
   if (!period) return { period: null, thresholdLow: null, standing: null };
 
-  const rule = await resolveActiveRule(siteId, period.period_start);
+  const ruleFor = await loadRuleLookup(siteId);
+  const rule = ruleFor(displayRuleDay(period, now));
   const meta: OpenPeriodMeta = {
     id: period.id,
     periodNumber: period.period_number,
@@ -268,14 +284,16 @@ export async function currentPeriodForEmployee(
 
   const entries = await prisma.bonusDailyEntry.findMany({
     where: { bonus_pay_period_id: period.id, bonus_employee_id: employeeId },
-    select: { mattress_count: true, saves: true },
+    select: { entry_date: true, mattress_count: true, saves: true },
   });
   if (entries.length === 0) {
     return { period: meta, thresholdLow: rule.threshold_low, standing: null };
   }
 
   const t = emptyTally();
-  for (const e of entries) accumulate(t, e.mattress_count.toNumber(), e.saves.toNumber(), rule);
+  for (const e of entries) {
+    accumulate(t, e.mattress_count.toNumber(), e.saves.toNumber(), ruleFor(e.entry_date));
+  }
   return {
     period: meta,
     thresholdLow: rule.threshold_low,

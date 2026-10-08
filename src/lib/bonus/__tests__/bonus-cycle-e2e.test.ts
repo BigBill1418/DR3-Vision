@@ -377,7 +377,12 @@ function makeStore(): Store {
     findMany: async ({ where }: { where: { bonus_pay_period_id: string } }) =>
       s.entries
         .filter((e) => e.bonus_pay_period_id === where.bonus_pay_period_id)
-        .map((e) => ({ mattress_count: e.mattress_count })),
+        // ADR-0019.6 — the lock prices each entry by its entry_date; every
+        // fixture entry sits inside the one open-ended rule window.
+        .map((e) => ({
+          entry_date: new Date(Date.UTC(2026, 5, 2)),
+          mattress_count: e.mattress_count,
+        })),
     // ADR-0019.3 §2 — the separation-of-duties read. `subject_user_id` mirrors
     // `bonus_employees.user_id`; none of the processors in this cycle fixture is
     // a system user (as in production, where 132 of 133 rows have a NULL
@@ -403,20 +408,25 @@ function makeStore(): Store {
     },
   };
   s.processorBonusRule = {
-    findFirst: async ({ where }: { where: { site_id: string } }) => {
-      // One active Woodland/Eugene rule: thresholds 50/74, rates $0.50/$0.25.
+    // ADR-0019.6 — the rule-book read. One open-ended Woodland/Eugene rule:
+    // thresholds 50/74, rates $0.50/$0.25.
+    findMany: async ({ where }: { where: { site_id: string } }) => {
       if (
         !s.chains.some((c) => c.site_id === where.site_id) &&
         !s.periods.some((p) => p.site_id === where.site_id)
       )
-        return null;
-      return {
-        id: `rule-${where.site_id}`,
-        threshold_low: 50,
-        rate_low: { toString: () => '0.50' },
-        threshold_high: 74,
-        rate_high: { toString: () => '0.25' },
-      };
+        return [];
+      return [
+        {
+          id: `rule-${where.site_id}`,
+          threshold_low: 50,
+          rate_low: { toString: () => '0.50' },
+          threshold_high: 74,
+          rate_high: { toString: () => '0.25' },
+          effective_date: new Date(Date.UTC(2000, 0, 1)),
+          end_date: null,
+        },
+      ];
     },
   };
   s.bonusSignatureChain = {
