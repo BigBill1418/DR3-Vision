@@ -139,14 +139,12 @@ describe.skipIf(!REAL_DB)('ADR-0118 — the held-count release is one transactio
     // an Argon2id verification that is not what this test is about; the rule
     // under test lives below both of them and does not branch on `path`.
     const settled = await Promise.allSettled([
-      releaseHold(db, { holdId, approverUserId: MANAGER, path: 'remote' }),
-      releaseHold(db, { holdId, approverUserId: MANAGER, path: 'remote' }),
+      releaseHold(db, { holdId, siteId: SITE, approverUserId: MANAGER, path: 'remote' }),
+      releaseHold(db, { holdId, siteId: SITE, approverUserId: MANAGER, path: 'remote' }),
     ]);
 
     const fulfilled = settled.filter((r) => r.status === 'fulfilled');
-    const rejected = settled.filter(
-      (r): r is PromiseRejectedResult => r.status === 'rejected',
-    );
+    const rejected = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
 
     expect(fulfilled, 'exactly one release may succeed').toHaveLength(1);
     expect(rejected).toHaveLength(1);
@@ -213,5 +211,87 @@ describe.skipIf(!REAL_DB)('ADR-0118 — the held-count release is one transactio
       await livePhysicalCount(db),
       'the snapshot must not survive the transaction that wrote it',
     ).toBe(0);
+  });
+
+  // ── CF-5 — discard is one guarded transaction too ──────────────────────────
+  //
+  // Pre-fix, `discardHold` read `pending`, then did an UNGUARDED `update` and a
+  // separate `auditLog.create` on the shared client. Two consequences, both
+  // proven here against real row locks and a real rollback:
+  //   - two discards racing both "won": two audit rows for one decision;
+  //   - an audit failure left the hold `discarded` with no audit row.
+  it('two discards of the SAME hold: one status change, one audit row', async () => {
+    const holdId = await seedPendingHold(db);
+    const { discardHold, HoldNotPendingError } = await import('./anchor-holds');
+
+    const settled = await Promise.allSettled([
+      discardHold(db, { holdId, siteId: SITE, userId: OPERATOR, reason: 'race a' }),
+      discardHold(db, { holdId, siteId: SITE, userId: MANAGER, reason: 'race b' }),
+    ]);
+    const rejected = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toBeInstanceOf(HoldNotPendingError);
+    expect((rejected[0]!.reason as Error).message).toBe('hold_discarded');
+
+    const rows = await db.auditLog.findMany({
+      where: { table_name: 'inventory_count_holds', row_id: holdId, action: 'update' },
+    });
+    expect(rows, 'one discard decision, one audit row').toHaveLength(1);
+    const hold = await db.inventoryCountHold.findUnique({ where: { id: holdId } });
+    expect(hold.status).toBe('discarded');
+    // The row's recorded discarder is the one the audit row names.
+    expect(hold.discarded_by).toBe(rows[0].actor_user_id);
+  });
+
+  it('a discard whose audit write fails leaves the hold pending and no audit row', async () => {
+    const holdId = await seedPendingHold(db);
+    const { discardHold } = await import('./anchor-holds');
+
+    // Every `auditLog.create` this call can reach — on the client or on a
+    // transaction — throws. Pre-fix the status `update` had already committed
+    // on the client by then: `expected 'discarded' to be 'pending'`.
+    const boom = async (): Promise<never> => {
+      throw new Error('audit row failed');
+    };
+    const withFailingAudit = (target: any): any =>
+      new Proxy(target, {
+        get(t, p) {
+          if (p === 'auditLog') return { create: boom };
+          if (p === '$transaction') {
+            return (fn: (tx: any) => Promise<unknown>) =>
+              t.$transaction((tx: any) => fn(withFailingAudit(tx)));
+          }
+          const v = t[p];
+          return typeof v === 'function' ? v.bind(t) : v;
+        },
+      });
+
+    await expect(
+      discardHold(withFailingAudit(db), { holdId, siteId: SITE, userId: OPERATOR, reason: 'x' }),
+    ).rejects.toThrow('audit row failed');
+
+    const hold = await db.inventoryCountHold.findUnique({ where: { id: holdId } });
+    expect(hold.status, 'the status change must roll back with its audit row').toBe('pending');
+    expect(hold.discarded_by).toBeNull();
+    const rows = await db.auditLog.findMany({
+      where: { table_name: 'inventory_count_holds', row_id: holdId, action: 'update' },
+    });
+    expect(rows).toHaveLength(0);
+  });
+
+  it('a hold at another site is not found, and is left untouched', async () => {
+    const holdId = await seedPendingHold(db);
+    const { discardHold, releaseHold, HoldNotFoundError } = await import('./anchor-holds');
+    const OTHER = `${NS}-other-site`;
+    await expect(
+      discardHold(db, { holdId, siteId: OTHER, userId: OPERATOR, reason: 'x' }),
+    ).rejects.toBeInstanceOf(HoldNotFoundError);
+    await expect(
+      releaseHold(db, { holdId, siteId: OTHER, approverUserId: MANAGER, path: 'remote' }),
+    ).rejects.toBeInstanceOf(HoldNotFoundError);
+    const hold = await db.inventoryCountHold.findUnique({ where: { id: holdId } });
+    expect(hold.status).toBe('pending');
+    expect(await livePhysicalCount(db)).toBe(0);
   });
 });

@@ -9,6 +9,36 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-08 — Held counts: site isolation on approve/discard, and discard commits with its audit row (CF-5)
+
+Found in passing while fixing PR #297 (OPEN-ITEMS 0.CF CF-5). **Unmerged, in a PR stacked on #297; merges after it.**
+ADR-0024 Amendment 1, ADR-0118 Amendment 1.
+
+### Fixed
+
+- **A hold at another site could be discarded by id.** `POST`/`DELETE /api/operator/[site]/count/holds/[holdId]`
+  and `POST`/`DELETE /api/manager/[site]/count-holds/[holdId]` never compared the hold's `site_id` with the caller's
+  site. Both routes now pass the site they resolved from the session and URL; `releaseHold` and `discardHold` take a
+  required `siteId` and answer a hold at another site with the same `hold_not_found` 404 as a missing hold. The site
+  is checked before status, the self-release rule and the PIN, so a foreign id reveals nothing. Release was already
+  blocked cross-site for site-bound managers by the eligibility check; it is now refused for everyone, uniformly.
+- **`discardHold` is one guarded transaction.** It used to read `pending`, then write the status with an unguarded
+  `update` and the audit row as a separate statement. Two discards could both succeed (two audit rows, the second
+  overwriting `discarded_by`), a discard could overwrite a just-approved hold, and an audit failure left the hold
+  `discarded` with no record of who did it. It now mirrors `releaseHold`: a site- and `pending`-guarded `updateMany`
+  first, then the audit row, in one `$transaction`. A lost race returns the existing `409 hold_<status>` answer and
+  writes no audit row.
+
+### Tests
+
+- `anchor-holds.test.ts` (+5): cross-site release/discard refused before PIN, self-release check or any write;
+  discard runs in one transaction; a lost discard race writes nothing.
+- `anchor-holds.db.test.ts` (+3, real Postgres lane): two concurrent discards give one status change and one audit
+  row; an audit failure inside the discard leaves the hold `pending` with no audit row; a cross-site id is not found
+  and left untouched.
+- Operator route test (+2) and a new manager route test (+3): every write method returns the missing-hold 404 body
+  for another site's hold and writes nothing.
+
 ## 2026-10-08 — AP: invoices the team receives directly (ADR-0141, Accepted, born pilot)
 
 Bill, 2026-10-08: a site manager who receives an invoice directly can now submit it in

@@ -66,11 +66,17 @@ Ryan's independent review of PR #294 found three gaps. All three are fixed in br
   default (N3); the void comment named `snapshot_not_found` where `void-count.ts:323` returns `alreadyVoided` (N4);
   no discard-pending, discard-resolved-elsewhere or dropped-connection tests (N5). All five fixed on the #297
   branch; ADR-0140 Amendment 1 › "Re-review of PR #297". Es/Urdu wording of N2 not native-reviewed.
-- **CF-5 — found in passing, NOT fixed here (needs its own reviewed change): OPEN.** (a) `POST`/`DELETE
-…/count/holds/[holdId]` do not compare the hold's `site_id` with the operator's site; `releaseHold` checks the
-  approver's eligibility at the hold's site, but `discardHold` would discard another site's hold given its id
-  (ADR-0024 site isolation). (b) `discardHold` writes the status and its audit row outside one transaction and
-  without a `status = 'pending'` CAS (ADR-0118 pattern). The new GET does compare site.
+- **CF-5 — FIXED IN PR (2026-10-08, branch `fix/cf5-hold-site-isolation-and-audit`, stacked on #297; not merged,
+  merges after #297).** Found in passing: (a) `POST`/`DELETE …/count/holds/[holdId]` did not compare the hold's
+  `site_id` with the operator's site, so `discardHold` would discard another site's hold given its id (ADR-0024
+  site isolation). (b) `discardHold` wrote the status and its audit row outside one transaction and without a
+  `status = 'pending'` CAS (ADR-0118 pattern). Verified-open-because the code read `discardHold(prisma, { holdId,
+userId, reason })` with no site and an unguarded `update`. The same site gap was in the manager route
+  `/api/manager/[site]/count-holds/[holdId]` (POST and DELETE) and is fixed there too. Fix: both functions take a
+  required `siteId`; a hold at another site is the missing-hold 404 on every method; discard is one transaction
+  led by a site- and `pending`-guarded `updateMany` (ADR-0024 Am.1, ADR-0118 Am.1). Sibling id routes checked and
+  already site-scoped: count void, OR counts, COR headcount. **CF-5a — merge after #297, then Bill's go to
+  deploy: OPEN.**
 
 ---
 

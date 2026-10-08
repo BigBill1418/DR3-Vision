@@ -114,7 +114,7 @@ choosing independence; they predated the parameter.
 - **A database trigger enforcing "no state change without an audit row".**
   Rejected. It would enforce the invariant everywhere at once, which is
   attractive — but it puts application semantics in a place no test in this repo
-  currently reaches, and it cannot express *which* audit row belongs to which
+  currently reaches, and it cannot express _which_ audit row belongs to which
   change. Worth revisiting as a backstop; not a substitute for the call sites
   being correct.
 - **Leaving the audit writes where they are and accepting the window.**
@@ -134,7 +134,7 @@ choosing independence; they predated the parameter.
   moved inside them. The rows are small and the transactions short; no call site
   in this set takes a lock it did not already effectively need.
 - **A pre-existing race is narrowed but not closed** in `releaseHold`: the
-  ADR-0072 swing classification is still recomputed *before* the transaction, so
+  ADR-0072 swing classification is still recomputed _before_ the transaction, so
   an anchor landing between that recompute and the release is still classified
   against the older baseline. `reconcilePhysicalCount`'s `onHand` read is
   outside the transaction for the same documented reason (ADR-0078,
@@ -142,3 +142,20 @@ choosing independence; they predated the parameter.
   ADR's subject, and pulling a six-table aggregate into every caller's
   transaction changes the lock footprint of every count — a separate change that
   deserves its own evidence. Recorded in `docs/OPEN-ITEMS.md` 0.BF.
+
+## Amendment 1 — 2026-10-08: `discardHold` was a twelfth instance (CF-5)
+
+The 2026-08-19 audit made `releaseHold` one transaction and left its sibling, `discardHold`
+(`src/lib/inventory/anchor-holds.ts`), as it was: a read of `status === 'pending'`, then an unguarded `update` to
+`discarded`, then the audit row as a separate statement on the shared client. Both failure shapes in § Context
+applied. Two discards (or a discard and a release) racing could both pass the read, so one decision produced two
+audit rows and the second overwrote `discarded_by` or an `approved` status; and an audit failure left a
+`discarded` hold with nothing recording who discarded it. It was found in passing during the review of PR #297
+and recorded as `docs/OPEN-ITEMS.md` 0.CF CF-5.
+
+**Applied.** `discardHold` now has the `releaseHold` shape: one `$transaction` whose first statement is an
+`updateMany` guarded on `id`, `site_id` and `status = 'pending'`; `count === 0` re-reads the winning status and
+throws the existing `HoldNotPendingError` (`409 hold_<status>`, already translated by both routes), writing nothing;
+the audit row is written on the same transaction. Proven in `anchor-holds.db.test.ts` against real Postgres: two
+concurrent discards give exactly one status change and one audit row, and an audit failure inside the discard leaves
+the hold `pending` with no audit row. The site guard in the same change is ADR-0024 Amendment 1.

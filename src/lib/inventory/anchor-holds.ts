@@ -158,6 +158,12 @@ export async function releaseHold(
   db: PrismaClient,
   args: {
     holdId: string;
+    /**
+     * CF-5 / ADR-0024 — the site the caller resolved from its OWN session and
+     * URL. A hold at any other site is `HoldNotFoundError`, exactly as if the id
+     * did not exist, so a foreign hold id reveals nothing.
+     */
+    siteId: string;
     approverUserId: string;
     path: 'pin' | 'remote';
     /** Required for the on-device path; verified against `approverUserId`. */
@@ -165,7 +171,9 @@ export async function releaseHold(
   },
 ): Promise<{ snapshotId: string; classification: AnchorClassification }> {
   const hold = await db.inventoryCountHold.findUnique({ where: { id: args.holdId } });
-  if (!hold) throw new HoldNotFoundError('hold_not_found');
+  // CF-5 — another site's hold is checked FIRST and is indistinguishable from a
+  // missing one: not its status, not the self-release rule, not the PIN.
+  if (!hold || hold.site_id !== args.siteId) throw new HoldNotFoundError('hold_not_found');
   if (hold.status !== 'pending') throw new HoldNotPendingError(`hold_${hold.status}`);
 
   // The rule the whole tier exists for. Checked BEFORE the PIN so a self-release
@@ -216,7 +224,7 @@ export async function releaseHold(
   const now = new Date();
   const snapshotId = await db.$transaction(async (tx) => {
     const { count } = await tx.inventoryCountHold.updateMany({
-      where: { id: hold.id, status: 'pending' },
+      where: { id: hold.id, site_id: args.siteId, status: 'pending' },
       data: {
         status: 'approved',
         approved_by: args.approverUserId,
@@ -295,31 +303,58 @@ export async function releaseHold(
   return { snapshotId, classification };
 }
 
-/** Explicitly abandon a held count. Nothing is written to inventory. */
+/**
+ * Explicitly abandon a held count. Nothing is written to inventory.
+ *
+ * CF-5 (ADR-0118 Amendment 1, ADR-0024 Amendment 1). Pre-fix this read
+ * `pending`, then wrote the status with an UNGUARDED `update` and the audit row
+ * as a second statement on the shared client: two discards racing both "won"
+ * (two audit rows for one decision, the second overwriting the first's
+ * `discarded_by`), a discard racing a release could overwrite `approved`, and an
+ * audit failure left the hold `discarded` with nothing recording who did it.
+ * It also took no site, so either route would discard another site's hold.
+ *
+ * Now it is the `releaseHold` shape: a site- and `pending`-guarded `updateMany`
+ * first, as the concurrency gate, then the audit row on the same transaction.
+ */
 export async function discardHold(
   db: PrismaClient,
-  args: { holdId: string; userId: string; reason: string },
+  args: { holdId: string; siteId: string; userId: string; reason: string },
 ): Promise<void> {
   const hold = await db.inventoryCountHold.findUnique({ where: { id: args.holdId } });
-  if (!hold) throw new HoldNotFoundError('hold_not_found');
+  if (!hold || hold.site_id !== args.siteId) throw new HoldNotFoundError('hold_not_found');
   if (hold.status !== 'pending') throw new HoldNotPendingError(`hold_${hold.status}`);
 
-  await db.inventoryCountHold.update({
-    where: { id: hold.id },
-    data: {
-      status: 'discarded',
-      discarded_by: args.userId,
-      discarded_at: new Date(),
-      discard_reason: args.reason,
-    },
-  });
-  await db.auditLog.create({
-    data: {
-      actor_user_id: args.userId,
-      action: 'update',
-      table_name: 'inventory_count_holds',
-      row_id: hold.id,
-      after: { discarded: true, reason: args.reason },
-    },
+  await db.$transaction(async (tx) => {
+    const { count } = await tx.inventoryCountHold.updateMany({
+      where: { id: hold.id, site_id: args.siteId, status: 'pending' },
+      data: {
+        status: 'discarded',
+        discarded_by: args.userId,
+        discarded_at: new Date(),
+        discard_reason: args.reason,
+      },
+    });
+    if (count === 0) {
+      // Lost the race: report the state that won, the same answer the
+      // pre-transaction check gives, and write no audit row.
+      const row = await tx.inventoryCountHold.findUniqueOrThrow({
+        where: { id: hold.id },
+        select: { status: true },
+      });
+      throw new HoldNotPendingError(`hold_${row.status}`);
+    }
+
+    // CLAUDE.md hard rule #6 — the audit row commits with the discard, or
+    // neither does.
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: args.userId,
+        action: 'update',
+        table_name: 'inventory_count_holds',
+        row_id: hold.id,
+        after: { discarded: true, reason: args.reason },
+      },
+    });
   });
 }

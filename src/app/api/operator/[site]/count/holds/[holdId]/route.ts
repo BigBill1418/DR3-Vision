@@ -17,6 +17,10 @@
 // returns `{ status }` and nothing else. Site-scoped: a hold at another site is
 // the same 404 as a hold that does not exist (no id probing across sites).
 //
+// CF-5 (ADR-0024 Amendment 1): EVERY method is site-scoped the same way. POST
+// and DELETE pass the operator's own site to the library, which answers a hold
+// at another site with the same `hold_not_found` 404 the GET gives.
+//
 // DELETE discards a hold. Discarding writes nothing to inventory, so an operator
 // may do it: abandoning your own mistyped count is not a privileged act. It is
 // recorded with a reason either way.
@@ -97,12 +101,13 @@ function mapError(e: unknown): Response | null {
 export async function POST(req: Request, { params }: Params) {
   const { site, holdId } = await params;
   try {
-    await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
     const parsed = Release.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
 
     const out = await releaseHold(prisma, {
       holdId,
+      siteId: ctx.siteId,
       approverUserId: parsed.data.approverUserId,
       path: 'pin',
       pin: parsed.data.pin,
@@ -138,6 +143,7 @@ export async function DELETE(req: Request, { params }: Params) {
 
     await discardHold(prisma, {
       holdId,
+      siteId: ctx.siteId,
       userId: ctx.userId,
       reason: parsed.data.reason,
     });
