@@ -254,10 +254,13 @@ export async function resolveTransportationInputs(args: {
   // Transport-charged, billing-ready inbound loads in the window. The two
   // Inbound-tab split is `transport_charged`; billing-readiness is the canonical
   // `INVOICE_STATUSES` set (submitted+verified+submitted_to_mymrc+processed),
-  // shared verbatim with the MRC Monthly Invoice export (`exports/mrc`) — same
-  // status contract, one source of truth, so a load that bills here is never
-  // silently dropped there. NOTE: only the STATUS set is shared, not the time
-  // window — generation bounds loads by Pacific-day instants (`instantBounds`)
+  // shared verbatim with the MRC Monthly Invoice export (`exports/mrc`) as the
+  // STATUS contract. It is NOT a row-for-row guarantee: since ADR-0142 the export
+  // also drops per-load (dock) rows on any Pacific day a verified aggregate row
+  // owns (`singleSourcePerDay`), while this freight leg deliberately does not
+  // (freight is per truck; aggregates carry no source/mileage). A load can bill
+  // freight here and be absent from the export. NOTE: the time window differs
+  // too — generation bounds loads by Pacific-day instants (`instantBounds`)
   // while `exports/mrc` uses a UTC calendar month, so a load arriving in the
   // ~07:00–08:00 UTC dead-zone on the 1st can land in different months on the
   // two surfaces. That month-edge boundary is pre-existing; do not read this as

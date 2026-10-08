@@ -13,11 +13,14 @@ interface MockLoad {
   // pre-0041 cases (no site/dr3) exercise the "no DR3# issued" path unchanged.
   site?: { jurisdiction: string } | null;
   dr3_number?: string | null;
+  load_source_type?: string;
+  arrived_at?: Date | null;
 }
 const store = {
   load: null as MockLoad | null,
   updates: [] as unknown[],
   audits: [] as unknown[],
+  aggregates: [] as Array<{ arrived_at: Date }>,
 };
 
 vi.mock('@/lib/prisma', () => ({
@@ -27,7 +30,13 @@ vi.mock('@/lib/prisma', () => ({
     },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
       const tx = {
+        // ADR-0142 — the site promotion lock is the first statement of the verify
+        // transaction; a mocked tx has nothing to serialise against.
+        $executeRaw: async () => 0,
         inboundLoad: {
+          // ADR-0142 — the aggregate-day lookup. Returns `store.aggregates`, so a
+          // test can put an aggregate on the load's Pacific day.
+          findMany: async () => store.aggregates,
           update: async ({ data }: { data: unknown }) => {
             store.updates.push(data);
             return {};
@@ -364,5 +373,41 @@ describe('verifyLoad — ADR-0041 DR3# issuance at the office verify step', () =
       nonProgramUnits: 0,
     });
     expect(issueMock).not.toHaveBeenCalled();
+  });
+});
+
+// ADR-0142 — the D5 guard wiring. The Postgres behaviour (lock + READ COMMITTED
+// visibility, the real day window) is proven in verify-gate.aggregate-day.db.test.ts;
+// this pins the decision: which loads are checked, and that a hit writes nothing.
+describe('verifyLoad — ADR-0142 aggregate-day guard', () => {
+  beforeEach(() => {
+    store.load = {
+      id: 'L1',
+      site_id: 'S1',
+      status: 'submitted',
+      total_units: 40,
+      source: { is_non_program: false },
+      load_source_type: 'b2b_haul',
+      // 2026-09-10 19:00 PDT — the UTC date is the 11th.
+      arrived_at: new Date('2026-09-11T02:00:00.000Z'),
+    };
+    store.updates.length = 0;
+    store.audits.length = 0;
+    store.aggregates = [];
+  });
+
+  it('refuses 409 aggregate_day_exists and writes nothing when the Pacific day has an aggregate', async () => {
+    store.aggregates = [{ arrived_at: new Date('2026-09-10T07:00:00.000Z') }];
+    await expect(
+      verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' }),
+    ).rejects.toMatchObject({ reason: 'aggregate_day_exists', status: 409 });
+    expect(store.updates).toHaveLength(0);
+    expect(store.audits).toHaveLength(0);
+  });
+
+  it('verifies when the only aggregate is on another Pacific day (the UTC date of the load)', async () => {
+    store.aggregates = [{ arrived_at: new Date('2026-09-11T07:00:00.000Z') }];
+    await verifyLoad({ loadId: 'L1', siteId: 'S1', verifierUserId: 'U1' });
+    expect(store.updates).toHaveLength(1);
   });
 });

@@ -34,6 +34,7 @@
 // definition) so a floor-confirmed `arrived_at` is byte-identical to what the office
 // paper path, the MyMRC bridge, and `onHand`'s inbound window all key on.
 
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { VERIFIED_INBOUND_STATUSES } from '@/lib/inventory/running-balance';
@@ -63,6 +64,51 @@ export const AGGREGATE_SOURCE_TYPES = [
   MYMRC_HAUL_SOURCE_TYPE,
   FLOOR_SOURCE_TYPE,
 ] as const;
+
+/** True for the three aggregate (per-day) provenances; false for every per-load one. */
+export function isAggregateSourceType(loadSourceType: string): boolean {
+  return (AGGREGATE_SOURCE_TYPES as readonly string[]).includes(loadSourceType);
+}
+
+/**
+ * ADR-0060 D5, read from the per-load side (ADR-0142): which of `dayKeys` (Pacific
+ * `YYYY-MM-DD`) at `siteId` already hold a VERIFIED aggregate inbound row
+ * (`paper_bulk` / `mymrc_haul` / `ipad_floor`). The mirror of the per-load predicate
+ * `confirmFloorInboundDay` checks below: the same status set, the same aggregate set,
+ * the same Pacific-day window. One bounded query over the min→max span; each hit is
+ * mapped back to its Pacific calendar day, so a `timestamp`-without-zone column holding
+ * UTC is bucketed on the Pacific day (`pacificDayISO`), never the UTC date.
+ *
+ * Takes an executor so a caller inside a transaction (the verify gate, after the site
+ * promotion lock) reads through its own transaction.
+ */
+export async function pacificDaysWithVerifiedAggregate(
+  db: Pick<Prisma.TransactionClient, 'inboundLoad'>,
+  siteId: string,
+  dayKeys: Iterable<string>,
+): Promise<Set<string>> {
+  const wanted = new Set(dayKeys);
+  const sorted = [...wanted].sort();
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  if (first === undefined || last === undefined) return new Set();
+  const rows = await db.inboundLoad.findMany({
+    where: {
+      site_id: siteId,
+      status: { in: [...VERIFIED_INBOUND_STATUSES] },
+      load_source_type: { in: [...AGGREGATE_SOURCE_TYPES] },
+      arrived_at: { gte: pacificMidnightInstantOfDayISO(first), lt: nextPacificMidnight(last) },
+    },
+    select: { arrived_at: true },
+  });
+  const hit = new Set<string>();
+  for (const r of rows) {
+    if (!r.arrived_at) continue;
+    const key = pacificDayISO(r.arrived_at);
+    if (wanted.has(key)) hit.add(key);
+  }
+  return hit;
+}
 
 /**
  * A floor confirm was refused for a money-safety reason. Typed 409 so the route maps it

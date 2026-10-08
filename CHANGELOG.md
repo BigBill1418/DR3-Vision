@@ -9,6 +9,40 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-08 — Dock loads stop double-counting: verify guard + one source per day in the invoice exports (ADR-0142)
+
+Bill approved both fixes at 09:20 AM PDT. His decision: dock (`b2b_haul`) loads are floor/haul tracking only. The
+per-day aggregate (MyMRC / paper / floor) is the inventory and billing source. Dock loads are never bulk-verified or
+voided.
+
+Evidence (read-only prod queries, 2026-10-08): Woodland has **374** `b2b_haul` dock loads at `submitted` (Pacific days
+2026-07-28 → 10-08). **372** carry an `external_mymrc_haul_id` matching `mymrc_hauls_mirror`, and **359** of those
+match MRC's `unit_count_at_unload` exactly. All 374 sit on days that already hold a verified `mymrc_haul` aggregate.
+They are the same mattresses. The September Woodland MRC export carried **172 dock rows / 19,545 units** (Pacific
+month; 171 / 19,414 in the route's UTC window) **plus 25 aggregate rows / 21,804** for the same hauls.
+
+- **Verify guard.** `verifyLoad` (`src/lib/loads/verify-gate.ts`) now refuses with a typed 409
+  `aggregate_day_exists` when a per-load load's Pacific day at its site already holds a verified aggregate row. Its
+  transaction now takes the site promotion lock first (ADR-0120), the lock every aggregate writer takes, and checks
+  inside it. Before, it checked state and site only, so verifying any of the 374 would have double-counted the truck
+  in `onHand` (ADR-0060 D5; OPEN-ITEMS L-4).
+- **Shared predicate.** `pacificDaysWithVerifiedAggregate` + `isAggregateSourceType` in
+  `src/lib/loads/floor-inbound.ts`: the D5 status set and aggregate set, keyed on the Pacific day
+  (`pacificDayISO`), never the UTC date. Used by the verify gate and the exports.
+- **Exports.** `GET /api/exports/mrc` and `GET /api/exports/svdp` apply `singleSourcePerDay` (`src/lib/exports.ts`).
+  A day with a verified aggregate is exported from that row alone; per-load rows only for days with no aggregate.
+  Woodland September MRC export: **before 196 rows / 41,218 units, after 25 rows / 21,804.**
+- **Invoice generation unchanged, reported.** `resolveTransportationInputs` shares `INVOICE_STATUSES` but bills
+  freight per truck from per-load rows; aggregates carry no source or mileage. The export predicate would delete
+  freight, not a double count. **But the freight leg goes silently empty on aggregate days:**
+  `transport_charged` is stamped only at verify (or by the EOD add-line / manual checkbox), and dock loads on
+  aggregate days can no longer be verified. Once `sources.is_trans_charge` is populated those trucks get no freight
+  leg and nothing errors. `transport_charged` is `false` everywhere today. Decision for Bill in ADR-0142 D3 (premise
+  corrected after Ryan's review).
+- No data rows were touched. Tests (real Postgres, run red against f32a067 first):
+  `verify-gate.aggregate-day.db.test.ts` (refusal per aggregate type, Pacific-not-UTC bucketing, allowed day,
+  voided aggregate, lock-holding writer race) and `exports.single-source.db.test.ts` (both route handlers).
+
 ## 2026-10-08 — AP: invoices the team receives directly (ADR-0141, Accepted, born pilot)
 
 Bill, 2026-10-08: a site manager who receives an invoice directly can now submit it in
