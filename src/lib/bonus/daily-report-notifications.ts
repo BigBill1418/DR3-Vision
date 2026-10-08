@@ -9,6 +9,7 @@ import { log } from '@/lib/observability/logger';
 import { formatCents } from '@/lib/bonus/calculator';
 import type { DailyReport, ComparisonTotal } from '@/lib/bonus/daily-report';
 import type { EodInventorySnapshot } from '@/lib/loads/eod-inventory';
+import { classifyNegativeFloor, negativeFloorCopy } from '@/lib/inventory/negative-floor';
 
 // ─────────────────────────────────────────────────────────────────────
 // Formatting
@@ -165,33 +166,45 @@ export function renderEodInventoryHtml(
 
   // ── handoff #270 §4a — a negative floor is a DIAGNOSTIC, never a figure ────
   // The building cannot hold a negative number of mattresses, so this state is
-  // proof that intake is under-fed: real processing has been subtracted from
-  // incomplete inbound. Woodland's −5,401 (July) and −2,439 (August) were both
-  // rendered as though they were measurements of something.
+  // proof that an INPUT is wrong. Woodland's −5,401 (July) and −2,439 (August)
+  // were both rendered as though they were measurements of something.
   //
   // The bare number is deliberately ABSENT from this branch. Printing "−2,439"
   // anywhere in the panel — even next to a warning — invites it into a spreadsheet
   // or a billing conversation, and the whole point is that it is not a quantity of
   // anything. What renders instead is the magnitude inside a sentence that says it
-  // is not reliable, plus the reason: how long intake has been silent.
+  // is not reliable, plus the reason.
+  //
+  // 2026-10-08 — the reason is no longer always "intake is incomplete". Woodland
+  // 2026-10-07 blamed intake that was 0 days old while the real fault was the pool
+  // split (program −147 inside a ≈+1,600 total). `classifyNegativeFloor` tells the
+  // three causes apart; see src/lib/inventory/negative-floor.ts.
   if (eod.state === 'negative') {
+    const cause = classifyNegativeFloor({
+      total: eod.totalOnHand,
+      program: eod.programOnHand,
+      nonProgram: eod.nonProgramOnHand,
+      inboundStale: eod.inboundStale,
+      inboundDaysSince: eod.inboundDaysSince,
+    });
+    // `state === 'negative'` is decided from the same three numbers, so a null
+    // cause cannot happen; the fallback keeps the panel honest if it ever did.
+    const copy = negativeFloorCopy(
+      cause ?? {
+        kind: 'processing-exceeds-inbound',
+        inboundRecorded: eod.inboundDaysSince != null,
+      },
+    );
     const worst = Math.min(eod.totalOnHand, eod.programOnHand, eod.nonProgramOnHand);
     const magnitude = fmtUnits(Math.abs(Math.round(worst * 10) / 10));
-    // Prefer the intake age — it is the actual cause. Fall back to the anchor age
-    // when the site has no inbound on record at all, rather than asserting a
-    // "0 days old" that would read as though intake were healthy.
-    const why =
-      eod.inboundDaysSince != null
-        ? `most recent inbound is ${eod.inboundDaysSince} ${eod.inboundDaysSince === 1 ? 'day' : 'days'} old`
-        : 'no inbound has ever been recorded for this site';
     const anchorLine = eod.anchor
       ? `Last physical count: <strong>${escapeHtml(fmtCountDayShort(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago).`
       : 'No physical count on record for this site.';
     return eodPanel(
       siteName,
       `<table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding:12px 14px;background:${WARN_BG};border:2px solid ${SVDP_RED};border-radius:6px;font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:${WARN_INK}">` +
-        `<strong style="color:${SVDP_RED};font-size:14px">⚠ On-hand is computing negative (−${magnitude}).</strong><br>` +
-        `Intake data is incomplete — ${escapeHtml(why)}. <strong>This figure is not reliable and is not shown.</strong><br>` +
+        `<strong style="color:${SVDP_RED};font-size:14px">⚠ ${escapeHtml(copy.subject)} is computing negative (−${magnitude})${escapeHtml(copy.qualifier)}.</strong><br>` +
+        `${escapeHtml(copy.reason)} <strong>This figure is not reliable and is not shown.</strong><br>` +
         `${anchorLine} A physical count resets the floor and closes the gap; the drift is recorded as the count's reconciled delta.` +
         `</td></tr></table>`,
     );

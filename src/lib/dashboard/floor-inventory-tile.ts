@@ -26,6 +26,9 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { onHand } from '@/lib/inventory/running-balance';
 import { floorCapacityState } from '@/lib/dashboard/floor-capacity';
+import { classifyNegativeFloor, type NegativeFloorCause } from '@/lib/inventory/negative-floor';
+import { assessInboundRecency, latestVerifiedInboundDay } from '@/lib/loads/eod-inventory';
+import { fleetWideHolidays } from '@/lib/mymrc/freshness';
 import { appTodayISO, dayKeyUTCFromISO } from '@/lib/time';
 
 const D = Prisma.Decimal;
@@ -65,6 +68,14 @@ export interface FloorInventoryTileData {
    * positive total is still a billing-grade error.
    */
   negative: boolean;
+  /**
+   * 2026-10-08 — WHY the floor is negative (null when it is not). Decided here for
+   * the same reason as `negative`: the tile, the overview card and the report must
+   * not disagree about the cause. Intake recency is only read when the TOTAL is
+   * negative — a pool-split verdict does not depend on it, and a healthy floor
+   * (the 5-second poll's normal case) pays no extra query.
+   */
+  negativeCause: NegativeFloorCause | null;
   /**
    * BS-10 — the site's permitted maximum, or null when none is recorded.
    *
@@ -152,12 +163,33 @@ export async function computeFloorInventoryTile(
     maxUnitsTotalOnSite: site?.max_units_total_on_site ?? null,
   });
 
+  const negative = programOnFloor < 0 || nonProgramOnFloor < 0 || totalOnFloor < 0;
+  let negativeCause: NegativeFloorCause | null = null;
+  if (negative) {
+    const recency =
+      totalOnFloor < 0
+        ? assessInboundRecency(
+            await latestVerifiedInboundDay(siteId, now),
+            endKey,
+            await fleetWideHolidays(prisma),
+          )
+        : { stale: false, calendarDaysSince: null };
+    negativeCause = classifyNegativeFloor({
+      total: totalOnFloor,
+      program: programOnFloor,
+      nonProgram: nonProgramOnFloor,
+      inboundStale: recency.stale,
+      inboundDaysSince: recency.calendarDaysSince,
+    });
+  }
+
   return {
     programOnFloor,
     nonProgramOnFloor,
     totalOnFloor,
     anchorPool: balance.anchorPool ?? null,
-    negative: programOnFloor < 0 || nonProgramOnFloor < 0 || totalOnFloor < 0,
+    negative,
+    negativeCause,
     capacity: capacity.capacity,
     overCapacity: capacity.overCapacity,
     pctOfCapacity: capacity.pctOfCapacity,

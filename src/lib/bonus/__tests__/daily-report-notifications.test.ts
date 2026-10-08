@@ -380,7 +380,7 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
       makeEod({ state: 'negative', programOnHand: -300, nonProgramOnHand: 1200, totalOnHand: 900 }),
       'Woodland',
     );
-    expect(panel).toContain('On-hand is computing negative');
+    expect(panel).toContain('Program on-hand is computing negative');
     expect(panel).toContain('(−300)'); // the worst pool, not the positive total
     expect(panel).not.toContain('Program units on hand');
   });
@@ -393,6 +393,7 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
     );
     expect(html).toContain('no inbound has ever been recorded');
     expect(html).not.toContain('days old');
+    expect(html).not.toContain('Intake data is incomplete');
   });
 
   // ADR-0058 §3.3 gates its "estimated floor after today" block on
@@ -401,6 +402,95 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
   it('suppresses the ADR-0058 estimated-floor block', () => {
     const html = bodyWithEod(negativeEod());
     expect(html).not.toContain('Estimated floor after today');
+  });
+});
+
+// ── 2026-10-08 — the negative banner names the CAUSE, not always intake ─────
+//
+// Woodland 2026-10-07 read "Intake data is incomplete — most recent inbound is 0
+// days old" while MyMRC inbound had posted that same day. The real fault was the
+// pool split: since the Sep 14 anchor program computed −147 while non-program sat
+// near +1,750 and the total near +1,600. Each case below was run against the
+// pre-fix renderer and failed (it printed the intake sentence for all three).
+describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
+  it('CASE 1 pool split: total positive, program negative → names the pool, no intake blame', () => {
+    const panel = renderEodInventoryHtml(
+      makeEod({
+        state: 'negative',
+        programOnHand: -147,
+        nonProgramOnHand: 1750,
+        totalOnHand: 1603,
+        programPct: null,
+        nonProgramPct: null,
+      }),
+      'Woodland',
+    );
+    expect(panel).toContain(
+      'Program on-hand is computing negative (−147) while the total is positive.',
+    );
+    expect(panel).toContain(
+      'The program/non-program split looks mis-recorded — check how non-program units are entered in the daily close.',
+    );
+    expect(panel).not.toContain('Intake data is incomplete');
+    expect(panel).not.toContain('days old');
+    // §4a intent survives: neither the negative nor the positive total renders as a figure.
+    expect(panel).not.toContain('1,603');
+    expect(panel).not.toContain('1,750');
+    expect(panel).toContain('This figure is not reliable and is not shown');
+    expect(panel).toContain('Last physical count');
+    expect(panel).toContain('A physical count resets the floor');
+  });
+
+  it('CASE 1 mirrored: a negative NON-program pool names that pool', () => {
+    const panel = renderEodInventoryHtml(
+      makeEod({ state: 'negative', programOnHand: 900, nonProgramOnHand: -40, totalOnHand: 860 }),
+      'Woodland',
+    );
+    expect(panel).toContain(
+      'Non-program on-hand is computing negative (−40) while the total is positive.',
+    );
+    expect(panel).toContain('check how program units are entered in the daily close');
+    expect(panel).not.toContain('Intake data is incomplete');
+  });
+
+  it('CASE 2 stale intake: total negative + stale feed → keeps the intake wording with its age', () => {
+    const panel = renderEodInventoryHtml(
+      makeEod({
+        state: 'negative',
+        programOnHand: -600,
+        nonProgramOnHand: 100,
+        totalOnHand: -500,
+        inboundThrough: utc(2026, 7, 13),
+        inboundDaysSince: 9,
+        inboundBusinessDaysSince: 6,
+        inboundStale: true,
+      }),
+      'Woodland',
+    );
+    expect(panel).toContain('On-hand is computing negative (−600).');
+    expect(panel).toContain('Intake data is incomplete — most recent inbound is 9 days old.');
+    expect(panel).not.toContain('mis-recorded');
+  });
+
+  it('CASE 3 current intake: total negative + fresh feed → processing exceeds inbound, no "0 days old"', () => {
+    const panel = renderEodInventoryHtml(
+      makeEod({
+        state: 'negative',
+        programOnHand: -200,
+        nonProgramOnHand: 50,
+        totalOnHand: -150,
+        inboundDaysSince: 0,
+        inboundStale: false,
+      }),
+      'Woodland',
+    );
+    expect(panel).toContain('On-hand is computing negative (−200).');
+    expect(panel).toContain(
+      'More units have been processed than were recorded coming in since the last physical count.',
+    );
+    expect(panel).not.toContain('Intake data is incomplete');
+    expect(panel).not.toContain('0 days old');
+    expect(panel).toContain('A physical count resets the floor');
   });
 });
 
