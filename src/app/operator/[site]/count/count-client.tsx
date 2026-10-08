@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 import {
   classifyWriteRefusal,
   WriteRefusalNotice,
@@ -63,6 +65,12 @@ export function CountClient({
 }: Props) {
   const t = useT();
   const router = useRouter();
+  // ADR-0140 Am.1 — busy is bounded by the 20 s request deadline; the watchdog
+  // covers what a deadline cannot reach (a hung IndexedDB enqueue, a refresh).
+  const watch = useStallWatch();
+  const submit = (): Promise<void> => watch(submitUnwatched);
+  const approve = (): Promise<void> => watch(approveUnwatched);
+  const discard = (): Promise<void> => watch(discardUnwatched);
   const [primary, setPrimary] = useState(0); // units_indoor (CA) or units_total (OR)
   const [inProcessing, setInProcessing] = useState(0);
   const [splitOn, setSplitOn] = useState(false);
@@ -153,7 +161,7 @@ export function CountClient({
     return body;
   }
 
-  async function submit(): Promise<void> {
+  async function submitUnwatched(): Promise<void> {
     setBusy(true);
     setError(null);
     setRefusal(null);
@@ -165,7 +173,7 @@ export function CountClient({
     const idempotencyKey = newIdempotencyKey();
     const payload = bodyForSubmit();
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
         body: JSON.stringify(payload),
@@ -215,7 +223,9 @@ export function CountClient({
       // Note what is NOT set: `result`. Green means server-acked, always. A
       // queued count shows its own distinct state, because a confirmation the
       // server never gave is the lie that makes an operator stop checking.
-      if (isOfflineError(e)) {
+      // ADR-0140 Am.1 — a submit that hit its 20 s deadline may have landed; the
+      // same key makes the queued replay the same write, so it queues like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError) {
         await enqueueAction({
           scope: 'operator.count.create',
           site_code: siteCode,
@@ -234,13 +244,13 @@ export function CountClient({
     }
   }
 
-  async function approve(): Promise<void> {
+  async function approveUnwatched(): Promise<void> {
     if (!hold) return;
     setBusy(true);
     setError(null);
     setRefusal(null);
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ approverUserId: approverId, pin }),
@@ -305,7 +315,7 @@ export function CountClient({
     }
   }
 
-  async function discard(): Promise<void> {
+  async function discardUnwatched(): Promise<void> {
     if (!hold) return;
     // Audit D-20 — cancelling the native prompt is its own feedback and stays
     // silent; an EMPTY reason typed into it is a refusal that changed nothing on
@@ -321,7 +331,7 @@ export function CountClient({
     setRefusal(null);
     setError(null);
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/holds/${hold.holdId}`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reason }),
@@ -454,12 +464,14 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice
-          refusal={refusal}
-          onRefresh={refreshToToday}
-          siteCode={siteCode}
-          surface="count"
-        />}
+        {refusal && (
+          <WriteRefusalNotice
+            refusal={refusal}
+            onRefresh={refreshToToday}
+            siteCode={siteCode}
+            surface="count"
+          />
+        )}
 
         <label className="flex flex-col gap-2 text-base font-semibold">
           {t('floor.count.hold_manager_label')}
@@ -533,12 +545,14 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice
-          refusal={refusal}
-          onRefresh={refreshToToday}
-          siteCode={siteCode}
-          surface="count"
-        />}
+        {refusal && (
+          <WriteRefusalNotice
+            refusal={refusal}
+            onRefresh={refreshToToday}
+            siteCode={siteCode}
+            surface="count"
+          />
+        )}
 
         <button
           type="button"
@@ -584,12 +598,14 @@ export function CountClient({
           {error}
         </p>
       )}
-      {refusal && <WriteRefusalNotice
+      {refusal && (
+        <WriteRefusalNotice
           refusal={refusal}
           onRefresh={refreshToToday}
           siteCode={siteCode}
           surface="count"
-        />}
+        />
+      )}
 
       <NumberStepper label={primaryLabel} value={primary} onChange={setPrimary} />
       <NumberStepper

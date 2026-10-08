@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useT, useLocale } from '@/i18n/provider';
 import { formatDate, formatTime } from '@/lib/format';
 import { DeadEndBeacon } from '../../../_components/dead-end-beacon';
+import { fetchWithTimeout } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 import {
   listBlocked,
   listConflicts,
@@ -56,6 +58,10 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
   const t = useT();
   const locale = useLocale();
   const router = useRouter();
+  // ADR-0140 Am.1 — a deadline-bounded request plus the stall watchdog.
+  const watch = useStallWatch();
+  const discard = (row: PendingAction | PendingUpload, isUpload: boolean): Promise<void> =>
+    watch(() => discardUnwatched(row, isUpload));
   const [actions, setActions] = useState<PendingAction[]>([]);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   /** Audit D-22 — rows parked on unreachable object storage. See `listBlocked`. */
@@ -100,7 +106,10 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
   }, [refresh]);
 
   /** Discard: audited server-side FIRST, removed locally only if that lands. */
-  async function discard(row: PendingAction | PendingUpload, isUpload: boolean): Promise<void> {
+  async function discardUnwatched(
+    row: PendingAction | PendingUpload,
+    isUpload: boolean,
+  ): Promise<void> {
     // Audit D-20 — this was `window.prompt(...) ?? ''` followed by
     // `if (reason.trim() === '') return;`, which collapsed TWO different things
     // into one silent return. Cancelling the prompt is self-explanatory (the
@@ -118,7 +127,7 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
     setBusy(row.id);
     setError(null);
     try {
-      const res = await fetch('/api/queue/discard', {
+      const res = await fetchWithTimeout('/api/queue/discard', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -257,13 +266,13 @@ export function ConflictsClient({ siteCode, todayISO }: Props) {
             whether IndexedDB is failing on a real iPad, which nothing has ever
             been able to say. */}
         <DeadEndBeacon siteCode={siteCode} surface="conflicts" state="queue_unreadable" />
-      <p
-        role="alert"
-        data-testid="conflicts-unreadable"
-        className="rounded-lg bg-amber-900/50 px-4 py-6 text-base font-medium leading-relaxed text-dr3-cream ring-1 ring-amber-400/40"
-      >
-        {t('floor.conflicts.unreadable')}
-      </p>
+        <p
+          role="alert"
+          data-testid="conflicts-unreadable"
+          className="rounded-lg bg-amber-900/50 px-4 py-6 text-base font-medium leading-relaxed text-dr3-cream ring-1 ring-amber-400/40"
+        >
+          {t('floor.conflicts.unreadable')}
+        </p>
       </>
     );
   }

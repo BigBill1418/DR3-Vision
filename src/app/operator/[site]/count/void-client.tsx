@@ -37,6 +37,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { newIdempotencyKey } from '@/lib/offline-queue';
+import { fetchWithTimeout } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 
 export type VoidableCount = {
   id: string;
@@ -62,17 +64,20 @@ export function CountVoidClient({
 }) {
   const t = useT();
   const router = useRouter();
+  // ADR-0140 Am.1 — a deadline-bounded request plus the stall watchdog.
+  const watch = useStallWatch();
+  const confirmVoid = (): Promise<void> => watch(confirmVoidUnwatched);
   const [phase, setPhase] = useState<Phase>('list');
   const [target, setTarget] = useState<VoidableCount | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function confirmVoid(): Promise<void> {
+  async function confirmVoidUnwatched(): Promise<void> {
     if (!target) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/operator/${siteCode}/count/void`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/void`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',

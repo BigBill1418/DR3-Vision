@@ -19,6 +19,45 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CF — 2026-10-07 ADR-0140 review gaps: floor screens' own requests had no deadline — **FIX IN PR (not merged); ships on Bill's go**
+
+Ryan's independent review of PR #294 found three gaps. All three are fixed in branch `fix/adr0140-remaining-deadlines`
+(ADR-0140 Amendment 1):
+
+1. 13 bare `await fetch(` calls on the operator screens: count ×3, void, drop-off ×3, inbound, processed, load
+   photo ×3, queue-conflicts discard. All now go through `fetchWithTimeout`, and a timed-out keyed write queues
+   under its tap key, the same way an offline one does.
+2. The deadline stopped when the headers arrived, so a body stalled after the status line had none. The deadline
+   now covers the body read.
+3. A caller's `signal` was overwritten. It is now composed with the deadline.
+
+- **CF-1 — merge + deploy: Bill's call.** This is staff-facing behaviour on the dock iPads. After the merge, confirm
+  the new code is live before calling it done. There is no SHA endpoint, so check that the served `/operator` layout chunk
+  hash has changed from the 2026-10-07 one (`app/operator/layout-d3bfde7c33fbcf53.js`, which holds the stall
+  watchdog that `useStallWatch` shares), and that the deployer reports the merge SHA.
+- **CF-2 — real-iPad stall test (Ryan): OPEN.** Every test uses an abort-honouring fetch double. Nobody has stalled
+  a real iPad on Woodland Wi-Fi against this code. Suggested repro: Safari Web Inspector, network throttled to
+  "offline" after the headers arrive.
+- **CF-3 — no dedicated tests yet for the hold approve/discard and queue-conflicts discard timeouts.** They use the
+  same helper and the same catch that already existed; the static scan guards their wrapping. Add tests when
+  either screen's suite is next touched.
+
+---
+
+## 0.CE — 2026-10-06 Woodland iPads froze (ADR-0140, PR #294) — **SHIPPED + LIVE; root cause UNPROVEN** (row backfilled 2026-10-07)
+
+Woodland, about 9:25 AM PDT, 2026-10-06: _"login screen stuck - load buttons stuck ipad browser appears frozen"_.
+The server was healthy throughout. PR #294 (`5f0b4f3`, merged 2026-10-06 22:54 PDT) added deadlines to the drain
+and the keypad, plus the 25 s stall watchdog and the global-error Reload.
+
+- **Live (checked 2026-10-07, no SHA endpoint exists):** the public operator layout chunk served by
+  `dr3-vision.svdp.us` contains the `dr3:stall` watchdog event; `/healthz` returns 200 with `db_ok`.
+- **CE-1 — the freeze's trigger was never reproduced: OPEN.** If it recurs, capture the iPad's state _before_
+  reloading: service-worker version, queue rows and their `last_error`, and whether the stall banner appeared.
+- **CE-2 — gaps found by review:** see 0.CF.
+
+---
+
 ## 0.CD — 2026-10-07 Eugene chain swap (ADR-0019.7) — **SHIPPED**
 
 Bill, 18:31 PDT, option "a": Patrick Dills signs Eugene facility (override Bill/Rick); Rick Albritton signs ops

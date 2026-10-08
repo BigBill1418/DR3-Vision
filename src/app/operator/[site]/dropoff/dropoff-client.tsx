@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueDropoff, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, UPLOAD_TIMEOUT_MS, fetchWithTimeout } from '@/lib/fetch-timeout';
 import {
   classifyWriteRefusal,
   WriteRefusalNotice,
@@ -117,7 +118,7 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
 
     // Step 1 — mint the presigned PUT.
     try {
-      const mint = await fetch(`/api/operator/${siteCode}/dropoff/upload-url`, {
+      const mint = await fetchWithTimeout(`/api/operator/${siteCode}/dropoff/upload-url`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content_type: contentType }),
@@ -140,7 +141,9 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
       // The blob and the units queue TOGETHER, in one row. A drop-off cannot
       // exist without its photo, so queueing half of it would leave the operator
       // told "saved" over a record that can never be completed.
-      if (isOfflineError(e)) return void (await queueIt(null, null));
+      // ADR-0140 Am.1 — a timed-out mint queues with the blob, like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError)
+        return void (await queueIt(null, null));
       setStatus('error');
       setError(t('floor.common.save_failed'));
       return;
@@ -151,14 +154,18 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
     // placeholder key stands in and the row still records the capture.
     if (uploadUrl) {
       try {
-        const put = await fetch(uploadUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': contentType },
-          body: photo,
-        });
+        const put = await fetchWithTimeout(
+          uploadUrl,
+          { method: 'PUT', headers: { 'Content-Type': contentType }, body: photo },
+          UPLOAD_TIMEOUT_MS,
+        );
         if (!put.ok) throw new Error(`put ${put.status}`);
       } catch (e) {
-        if (isOfflineError(e)) return void (await queueIt(storageKey, uploadUrl));
+        // ADR-0140 Am.1 — a PUT past its 90 s deadline is a slow link, not a
+        // refusal: queue it (the drain retries it; it is never parked `blocked:`).
+        if (isOfflineError(e) || e instanceof FetchTimeoutError) {
+          return void (await queueIt(storageKey, uploadUrl));
+        }
         setStatus('error');
         setError(t('floor.common.save_failed'));
         return;
@@ -167,7 +174,7 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
 
     // Step 3 — the drop-off itself.
     try {
-      const res = await fetch(`/api/operator/${siteCode}/dropoff`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/dropoff`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
         body: JSON.stringify({
@@ -198,7 +205,10 @@ export function DropoffClient({ siteCode, dropoffDate }: Props) {
       reset();
       router.refresh();
     } catch (e) {
-      if (isOfflineError(e)) return void (await queueIt(null, null));
+      // ADR-0140 Am.1 — a submit past its deadline may have landed; the same
+      // idempotency key rides the queued replay, so it is the same write.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError)
+        return void (await queueIt(null, null));
       setStatus('error');
       setError(t('floor.common.save_failed'));
     }

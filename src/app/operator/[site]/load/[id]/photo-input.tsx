@@ -8,6 +8,7 @@ import {
   newIdempotencyKey,
   type UploadKind,
 } from '@/lib/offline-queue';
+import { FetchTimeoutError, UPLOAD_TIMEOUT_MS, fetchWithTimeout } from '@/lib/fetch-timeout';
 import { useT, useLocale } from '@/i18n/provider';
 import { MAX_PHOTOS_PER_KIND, canAddPhoto } from '@/lib/loads/photo-limit';
 import { useLiveControl, type StageDisableReason } from './stage-liveness';
@@ -239,7 +240,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured, initialCount = 
 
     // Step 2: mint presigned URL.
     try {
-      const mintRes = await fetch('/api/photos/upload-url', {
+      const mintRes = await fetchWithTimeout('/api/photos/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -263,7 +264,8 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured, initialCount = 
       upload_url = minted.upload_url;
       upload_grant = minted.upload_grant ?? null;
     } catch (e) {
-      if (isOfflineError(e)) {
+      // ADR-0140 Am.1 — a deadline queues the photo, like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError) {
         await queueAndAdvance(null, null);
         return;
       }
@@ -275,14 +277,19 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured, initialCount = 
     // Step 3: PUT to R2.
     if (upload_url) {
       try {
-        const putRes = await fetch(upload_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
-        });
+        const putRes = await fetchWithTimeout(
+          upload_url,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': file.type || 'application/octet-stream' },
+            body: file,
+          },
+          UPLOAD_TIMEOUT_MS,
+        );
         if (!putRes.ok) throw new Error(`R2 PUT failed (${putRes.status})`);
       } catch (e) {
-        if (isOfflineError(e)) {
+        // ADR-0140 Am.1 — a PUT past its 90 s deadline is a slow link: queue it.
+        if (isOfflineError(e) || e instanceof FetchTimeoutError) {
           await queueAndAdvance(storage_key, upload_url);
           return;
         }
@@ -294,7 +301,7 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured, initialCount = 
 
     // Step 4: confirm — write the LoadPhoto row.
     try {
-      const confirmRes = await fetch('/api/photos/confirm', {
+      const confirmRes = await fetchWithTimeout('/api/photos/confirm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -339,7 +346,9 @@ export function PhotoInput({ loadId, kind, labelKey, onCaptured, initialCount = 
       }
       if (!confirmRes.ok) throw new Error(`confirm failed (${confirmRes.status})`);
     } catch (e) {
-      if (isOfflineError(e)) {
+      // ADR-0140 Am.1 — a confirm past its deadline may have landed; the key
+      // rides the replay, so it queues like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError) {
         // R2 PUT already succeeded — queue only the confirm step.
         // We re-use enqueueUpload with the existing storage_key; on
         // replay the queue notices the URL is stale and re-mints, but

@@ -9,6 +9,33 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-07 — Every floor-screen request now has a deadline, body read included (ADR-0140 Amendment 1)
+
+These are the gaps from the independent review of PR #294. **Unmerged, in PR; staff-facing; ships on Bill's go.**
+
+### Fixed
+
+- **13 floor-screen requests had no deadline:** count ×3 (submit, hold approve, hold discard), void, drop-off ×3
+  (mint, R2 PUT, submit), inbound, processed, load photo ×3 (mint, R2 PUT, confirm), and queue-conflicts discard.
+  They now use `fetchWithTimeout`: 20 s for JSON, 90 s for the R2 PUTs. A keyed write that times out is queued under
+  the idempotency key minted at the tap, the same way an offline one is; a write that actually landed replays to the
+  original row. A drop-off or photo PUT that times out is queued, never `blocked:`. Void, hold release and conflicts
+  discard show their existing failure sentence and free the button.
+- **`fetchWithTimeout` now covers the body read.** It used to stop the timer when the headers arrived. Every body
+  reader on the response, and on its `clone()`, now rejects with `FetchTimeoutError` past the deadline.
+- **A caller's `AbortSignal` is now composed with the deadline** instead of being silently overwritten.
+- **`useStallWatch()`** wraps the count, void, inbound, processed and conflicts handlers, so a hang a deadline
+  cannot reach (an IndexedDB enqueue, a refresh) still raises the Reload banner. The photo flows are deliberately
+  excluded: a Reload mid-upload would lose a photo that exists only in memory.
+
+### Tests
+
+New tests in `fetch-timeout` (body stall, clone, signal composition) and `stall-banner` (`useStallWatch`). There are
+deadline cases on count, inbound, processed, drop-off (all 3 steps), load photo (all 3 steps) and void. The drain test
+`offline-queue.dropoff` now proves a drop-off PUT timeout stays retryable while a `TypeError` after a good mint is
+still blocked. A static `floor-fetch-deadline` scan fails on any new bare `fetch(` under `src/app/operator`. Each new
+behavioural test was run against the shipped code and failed there.
+
 ## 2026-10-07 — Eugene signature chain: Patrick signs facility, Rick signs ops (ADR-0019.7)
 
 Bill, 18:31 PDT, option "a". Eugene facility = **Patrick Dills** (override Bill or Rick); ops = **Rick Albritton**

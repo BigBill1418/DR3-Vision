@@ -8,6 +8,8 @@ import { useT, useLocale } from '@/i18n/provider';
 import { pacificDateLabel, dayKeyUTCFromISO, formatPacificDateTime } from '@/lib/time';
 import type { FloorInboundDayView } from '@/lib/loads/floor-inbound';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 import {
   classifyWriteRefusal,
   WriteRefusalNotice,
@@ -33,6 +35,10 @@ export function InboundClient({ siteCode, initialRows }: Props) {
   const t = useT();
   const locale = useLocale();
   const router = useRouter();
+  // ADR-0140 Am.1 — a deadline-bounded request plus the stall watchdog.
+  const watch = useStallWatch();
+  const post = (dateISO: string, program: number, nonProgram: number): Promise<void> =>
+    watch(() => postUnwatched(dateISO, program, nonProgram));
   const [editing, setEditing] = useState<string | null>(null);
   const [busyDay, setBusyDay] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +67,11 @@ export function InboundClient({ siteCode, initialRows }: Props) {
 
   const dateLabel = (iso: string): string => pacificDateLabel(dayKeyUTCFromISO(iso), locale);
 
-  async function post(dateISO: string, program: number, nonProgram: number): Promise<void> {
+  async function postUnwatched(
+    dateISO: string,
+    program: number,
+    nonProgram: number,
+  ): Promise<void> {
     setBusyDay(dateISO);
     setError(null);
     setErrorRoutesToQueue(false);
@@ -76,7 +86,7 @@ export function InboundClient({ siteCode, initialRows }: Props) {
       nonProgramUnits: nonProgram,
     };
     try {
-      const res = await fetch(`/api/operator/${siteCode}/inbound`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/inbound`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
         body: JSON.stringify(payload),
@@ -103,7 +113,8 @@ export function InboundClient({ siteCode, initialRows }: Props) {
       // operator's entry on a mid-submit disconnect and told them to retry from
       // memory. The entry is queued now; the day is carried with it so a replay
       // cannot silently re-file it against a different one.
-      if (isOfflineError(e)) {
+      // ADR-0140 Am.1 — a deadline queues under the same key, like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError) {
         await enqueueAction({
           scope: 'operator.inbound.confirm',
           site_code: siteCode,
@@ -170,12 +181,14 @@ export function InboundClient({ siteCode, initialRows }: Props) {
           {t('floor.inbound.go_to_queue')}
         </Link>
       )}
-      {refusal && <WriteRefusalNotice
+      {refusal && (
+        <WriteRefusalNotice
           refusal={refusal}
           onRefresh={refreshToToday}
           siteCode={siteCode}
           surface="inbound"
-        />}
+        />
+      )}
       {queuedDays.length > 0 && (
         <p
           className="rounded-lg bg-amber-900/50 px-4 py-3 text-sm font-medium text-dr3-cream ring-1 ring-amber-400/40"

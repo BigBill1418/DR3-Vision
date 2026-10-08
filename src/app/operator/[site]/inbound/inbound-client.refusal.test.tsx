@@ -27,6 +27,17 @@ const { enqueueAction, isOfflineError, newIdempotencyKey } = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/offline-queue', () => ({ enqueueAction, isOfflineError, newIdempotencyKey }));
 
+// ADR-0140 Am.1 — every request on this screen runs through `fetchWithTimeout`.
+// The deadline is shortened to 40 ms here so a request that never answers is
+// abandoned inside the test's own timeout; the abort/timeout mechanics are real.
+vi.mock('@/lib/fetch-timeout', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/fetch-timeout')>();
+  return {
+    ...orig,
+    fetchWithTimeout: (url: string, init?: RequestInit) => orig.fetchWithTimeout(url, init, 40),
+  };
+});
+
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
 
@@ -160,5 +171,31 @@ describe('what the new branch must NOT swallow', () => {
     confirm();
     await waitFor(() => expect(document.body.textContent).toContain(en.floor.common.save_failed));
     expect(screen.queryByTestId('write-refusal')).toBeNull();
+  });
+});
+
+/** A request that never answers, but honours abort the way a browser does. */
+function neverAnswers(init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_res, rej) => {
+    init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+  });
+}
+
+// ADR-0140 Am.1 — FALSIFIED BY HAND: with the bare `fetch` back, this never settles.
+describe('an inbound POST that never answers', () => {
+  it('is abandoned on the deadline and queued under the SAME key', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_u: string, init?: RequestInit) => neverAnswers(init)),
+    );
+    renderInbound();
+    confirm();
+    await waitFor(() => expect(screen.getByTestId('inbound-queued')).toBeTruthy());
+    expect(enqueueAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: 'operator.inbound.confirm',
+        idempotency_key: '0000000000abc-0000000000000000key1',
+      }),
+    );
   });
 });

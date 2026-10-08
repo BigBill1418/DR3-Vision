@@ -31,8 +31,12 @@ function emit(stalled: boolean): void {
 
 type Start = ReturnType<typeof useTransition>[1];
 
-export function useWatchedTransition(): ReturnType<typeof useTransition> {
-  const [isPending, startTransition] = useTransition();
+/**
+ * The shared in-flight counter behind both hooks below: one 25 s timer per
+ * screen while anything it is watching is unsettled, raising `dr3:stall` once
+ * and lowering it when everything has settled or the screen unmounts.
+ */
+function useStallTracker(): { begin: () => void; settle: () => void } {
   const inflight = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const raised = useRef(false);
@@ -45,6 +49,16 @@ export function useWatchedTransition(): ReturnType<typeof useTransition> {
     if (raised.current) {
       raised.current = false;
       emit(false);
+    }
+  }, []);
+
+  const begin = useCallback(() => {
+    inflight.current += 1;
+    if (!timer.current) {
+      timer.current = setTimeout(() => {
+        raised.current = true;
+        emit(true);
+      }, STALL_AFTER_MS);
     }
   }, []);
 
@@ -61,15 +75,16 @@ export function useWatchedTransition(): ReturnType<typeof useTransition> {
     [],
   );
 
+  return { begin, settle };
+}
+
+export function useWatchedTransition(): ReturnType<typeof useTransition> {
+  const [isPending, startTransition] = useTransition();
+  const { begin, settle } = useStallTracker();
+
   const watched = useCallback(
     (cb: () => unknown) => {
-      inflight.current += 1;
-      if (!timer.current) {
-        timer.current = setTimeout(() => {
-          raised.current = true;
-          emit(true);
-        }, STALL_AFTER_MS);
-      }
+      begin();
       // React's overloads split sync from async at the type level; whether `cb` is
       // async is only known once it has run, and React itself checks for a thenable
       // at runtime, so one runner serves both.
@@ -89,10 +104,41 @@ export function useWatchedTransition(): ReturnType<typeof useTransition> {
       };
       startTransition(run as () => Promise<void>);
     },
-    [startTransition, settle],
+    [startTransition, begin, settle],
   );
 
   // Same call shape as `startTransition` (sync or async callback); the cast only
   // reconciles React's two overload signatures with our single runtime check.
   return [isPending, watched as unknown as Start];
+}
+
+/**
+ * ADR-0140 Amendment 1 — the same watchdog for a screen whose busy state is a
+ * plain `useState` flag around an async `fetch` handler rather than a
+ * transition (count, void, inbound, processed, queue conflicts). Wrap the
+ * handler: `onClick={() => void watch(submit)}`.
+ *
+ * Every request in those handlers already fails on a 20 s deadline, so this
+ * banner is for what a deadline cannot reach — an IndexedDB `enqueue` that never
+ * resolves on iOS Safari, a `router.refresh()` that never lands. Deliberately
+ * NOT used on the photo flows (drop-off, load photo): a legitimate R2 PUT may
+ * take up to 90 s, and a Reload offered mid-upload would discard a photo that
+ * exists only in memory until it is queued.
+ */
+export function useStallWatch(): <T>(work: () => Promise<T>) => Promise<T> {
+  const { begin, settle } = useStallTracker();
+  return useCallback(
+    <T>(work: () => Promise<T>): Promise<T> => {
+      begin();
+      let p: Promise<T>;
+      try {
+        p = work();
+      } catch (e) {
+        settle();
+        throw e;
+      }
+      return p.finally(settle);
+    },
+    [begin, settle],
+  );
 }

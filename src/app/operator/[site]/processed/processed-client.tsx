@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
+import { useStallWatch } from '@/lib/floor/use-watched-transition';
 import {
   classifyWriteRefusal,
   WriteRefusalNotice,
@@ -34,6 +36,9 @@ export function ProcessedClient({
 }: Props) {
   const t = useT();
   const router = useRouter();
+  // ADR-0140 Am.1 — a deadline-bounded request plus the stall watchdog.
+  const watch = useStallWatch();
+  const submit = (): Promise<void> => watch(submitUnwatched);
   const [program, setProgram] = useState(initialProgram);
   const [nonProgram, setNonProgram] = useState(initialNonProgram);
   const [busy, setBusy] = useState(false);
@@ -57,7 +62,7 @@ export function ProcessedClient({
     router.refresh();
   }
 
-  async function submit(): Promise<void> {
+  async function submitUnwatched(): Promise<void> {
     setBusy(true);
     setError(null);
     setRefusal(null);
@@ -71,7 +76,7 @@ export function ProcessedClient({
       strippedNonProgram: nonProgram,
     };
     try {
-      const res = await fetch(`/api/operator/${siteCode}/processed`, {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/processed`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
         body: JSON.stringify(payload),
@@ -96,7 +101,8 @@ export function ProcessedClient({
       // ADR-0078 D5 — was a bare `catch { setError(…) }`. `setSaved(true)` is
       // deliberately NOT reached from here: the ✓ Saved confirmation means the
       // server acknowledged the write, and nothing weaker may borrow it.
-      if (isOfflineError(e)) {
+      // ADR-0140 Am.1 — a deadline queues under the same key, like offline.
+      if (isOfflineError(e) || e instanceof FetchTimeoutError) {
         await enqueueAction({
           scope: 'operator.processed.confirm',
           site_code: siteCode,
@@ -147,12 +153,14 @@ export function ProcessedClient({
           {error}
         </p>
       )}
-      {refusal && <WriteRefusalNotice
+      {refusal && (
+        <WriteRefusalNotice
           refusal={refusal}
           onRefresh={refreshToToday}
           siteCode={siteCode}
           surface="processed"
-        />}
+        />
+      )}
       {saved && (
         <p className="rounded-lg bg-dr3-green/30 px-4 py-3 text-sm font-medium text-dr3-cream">
           {t('floor.common.saved')}

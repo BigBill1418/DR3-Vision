@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/i18n/provider', () => ({ useT: () => (k: string) => k }));
 
-import { STALL_AFTER_MS, useWatchedTransition } from '@/lib/floor/use-watched-transition';
+import {
+  STALL_AFTER_MS,
+  useStallWatch,
+  useWatchedTransition,
+} from '@/lib/floor/use-watched-transition';
 import { StallBanner } from './stall-banner';
 
 beforeEach(() => vi.useFakeTimers());
@@ -68,6 +72,52 @@ describe('stall watchdog', () => {
 
   it('a prompt transition never raises it', async () => {
     render(<Harness settle={Promise.resolve()} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STALL_AFTER_MS + 100);
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+// ADR-0140 Am.1 — the same watchdog around a plain async handler (the useState-busy
+// floor screens: count, void, inbound, processed, queue conflicts).
+describe('useStallWatch', () => {
+  function WatchHarness({ settle }: { settle: Promise<void> }) {
+    const watch = useStallWatch();
+    useEffect(() => {
+      void watch(async () => {
+        await settle;
+      });
+    }, [watch, settle]);
+    return <StallBanner />;
+  }
+
+  it('raises the banner for a handler unsettled past the threshold, and lowers it on settle', async () => {
+    let release!: () => void;
+    const settle = new Promise<void>((r) => (release = r));
+    render(<WatchHarness settle={settle} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STALL_AFTER_MS + 100);
+    });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    await act(async () => {
+      release();
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a prompt handler never raises it, and a rejecting one still settles', async () => {
+    function Rejecter() {
+      const watch = useStallWatch();
+      useEffect(() => {
+        watch(async () => {
+          throw new Error('boom');
+        }).catch(() => {});
+      }, [watch]);
+      return <StallBanner />;
+    }
+    render(<Rejecter />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STALL_AFTER_MS + 100);
     });
