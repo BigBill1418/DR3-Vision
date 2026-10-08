@@ -31,7 +31,7 @@
 //
 // Verification: at the end the script asserts the row counts documented
 // in `prisma/seed/README.md` (sites=2, users>=7, site_holidays=24,
-// processor_bonus_rules=2, sources=111, transporters=11,
+// processor_bonus_rules=4, sources=111, transporters=11,
 // bonus_pay_periods=52, bonus_signature_chains=2). Mismatches throw and
 // abort the seed — investigate the CSV before proceeding.
 
@@ -1455,7 +1455,7 @@ async function assertCounts() {
   const expectedExact = {
     sites: 2,
     site_holidays: 24,
-    processor_bonus_rules: 2,
+    processor_bonus_rules: 4, // 2 per site: pre- and post-2026-10-13 (ADR-0019.6)
     bonus_pay_periods: 104, // 52 (2026) + 52 (2025) = 104 (ADR-0023 §Q3)
     bonus_signature_chains: 2, // Woodland + Eugene (ADR-0019.2 / T-201)
     transport_rate_tiers: 7, // ADR-0040 D1 CA freight zone table (no OR tiers seeded)

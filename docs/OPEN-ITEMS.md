@@ -19,6 +19,26 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CC — 2026-10-07 bonus rate change for 2026-10-13 (ADR-0019.6) — **SHIPPED; one decision for Bill**
+
+Bill approved at 5:12 PM PDT: from Tue 2026-10-13 both sites pay `MAX(units − 60, 0) × $1.00 + MAX(units − 100, 0)
+× $0.25`, on days dated 10/13 or later only. Shipped as an effective-dated migration plus a seed CSV change, so
+nothing has to be switched on the day. Every pay read now prices each entry by its own `entry_date`
+(see ADR-0019.6 for the evidence that no path ever used "today").
+
+- **DONE (2026-10-07):** migration, seed, per-entry-date pricing, tests, docs. Live verification is recorded in
+  the CHANGELOG entry.
+- **CHECK ON 2026-10-13/14 (no action expected):** the first Period 22 entries price at the new rate on the grid
+  and the standings page. "Qualifies above 60 units/day" shows from 10/13.
+- **DECISION FOR BILL (pre-existing, not changed):** the 8 PM daily report's per-line bonus figure is computed on
+  PROCESSED units only (`daily-report.ts`, the ADR-0083 production-quantity reading). The period will lock on
+  processed + saves. On a day with saves, the email shows a lower bonus than payroll will pay. Options: price
+  that column on paid units (bring it in line with the PDF), or relabel it. Not payroll-affecting either way.
+- The 2026-10-06 comparison PDF (`dr3-bonus-compare-ca-or-20261006`) describes the pre-10/13 rules and is
+  point-in-time.
+
+---
+
 ## 0.CB — 2026-09-25 "are we still ingesting the docs and workbooks" — **ANSWERED: workbook sync exact; doc ingest truthful but 9/11 sources are frozen Outlook copies (ADR-0139 check shipped); retirement table in `docs/plans/workbook-doc-retirement.md`**
 
 Bill, 10:27 PM PDT: _"i hope we are still ingesting the docs and workbooks - in the path to retiring

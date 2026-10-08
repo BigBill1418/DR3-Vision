@@ -54,14 +54,16 @@ The six US federal holidays observed at both DR3 sites: New Year's, Memorial, In
 
 Coverage: 2026 + 2027, matching the contract terms (both end Dec 31, 2027). For 2028+, this file will be appended manually before each year-end deploy or replaced by a generator function in V2.
 
-### `processor_bonus_rules.csv` — 2 rows
+### `processor_bonus_rules.csv` — 4 rows
 
-The bonus calculation parameters per site, derived from `Bonus_Spread_Sheet_2026.xlsx`:
+The bonus calculation parameters per site, as effective-dated windows. Each keyed day is priced by the row covering its own `entry_date` (ADR-0019.6); two rows covering one day is refused.
 
-- **Eugene:** `MAX(units − 50, 0) × $1.00 + MAX(units − 100, 0) × $0.25`
-- **Woodland:** `MAX(units − 50, 0) × $0.50 + MAX(units − 75, 0) × $0.25`
+- **2026-01-01 → 2026-10-12**
+  - **Eugene:** `MAX(units − 50, 0) × $1.00 + MAX(units − 100, 0) × $0.25` (from `Bonus_Spread_Sheet_2026.xlsx`)
+  - **Woodland:** `MAX(units − 50, 0) × $0.50 + MAX(units − 74, 0) × $0.25` (ADR-0019 §1 corrected the spreadsheet's 75)
+- **From 2026-10-13, both sites:** `MAX(units − 60, 0) × $1.00 + MAX(units − 100, 0) × $0.25` (ADR-0019.6, approved by Bill 2026-10-07)
 
-Both rules become effective 2026-01-01 with no end date. When a rate or threshold changes, append a new row with the new `effective_date` and set the previous row's `end_date` — never edit historical rows. This is what enables back-calculation of past bonus periods after a rule change.
+When a rate or threshold changes, append a new row with the new `effective_date` and set the previous row's `end_date` to the day before. Never edit historical rows. Ship the same change as an idempotent migration (precedent: `20260867_adr0019_6_bonus_rate_change_20261013`), because the seed does not run on deploy.
 
 ADR-0011 covers why this is parameterized rather than hardcoded.
 
@@ -115,7 +117,7 @@ After a fresh seed, `npx prisma studio` should show:
 | `sites`                 | 2         |
 | `users`                 | 6         |
 | `site_holidays`         | 24        |
-| `processor_bonus_rules` | 2         |
+| `processor_bonus_rules` | 4         |
 | `sources`               | 111       |
 | `transporters`          | 11        |
 

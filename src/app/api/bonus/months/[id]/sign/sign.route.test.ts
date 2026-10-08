@@ -140,7 +140,8 @@ vi.mock('@/lib/prisma', () => {
     findMany: vi.fn(async ({ where }: { where: { bonus_pay_period_id: string } }) =>
       entryStore
         .filter((e) => e.bonus_pay_period_id === where.bonus_pay_period_id)
-        .map((e) => ({ ...e })),
+        // ADR-0019.6 — entries carry the day they are priced by.
+        .map((e) => ({ entry_date: new Date(Date.UTC(2026, 5, 2)), ...e })),
     ),
     // ADR-0019.3 §2 — the separation-of-duties read, resolving the
     // `bonus_employee.user_id` relation filter against the same entry store.
@@ -176,6 +177,10 @@ vi.mock('@/lib/prisma', () => {
       end_date: null,
     })),
   };
+  // ADR-0019.6 — the rule-book read returns the same single open-ended row.
+  Object.assign(processorBonusRule, {
+    findMany: vi.fn(async () => [await processorBonusRule.findFirst()]),
+  });
   const site = {
     findUnique: vi.fn(async ({ where }: { where: { id?: string; code?: string } }) => {
       if (where.id) return sitesStore.get(where.id) ?? null;

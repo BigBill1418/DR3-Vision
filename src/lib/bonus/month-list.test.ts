@@ -34,6 +34,8 @@ interface MockMonth {
 interface MockEntry {
   id: string;
   bonus_pay_period_id: string;
+  /** ADR-0019.6 — each entry is priced by the rule covering this day. */
+  entry_date: Date;
   mattress_count: Dec;
 }
 interface MockRule {
@@ -95,6 +97,7 @@ function addEntry(monthId: string, count: number): void {
   const e: MockEntry = {
     id: `entry-${++idCounter}`,
     bonus_pay_period_id: monthId,
+    entry_date: new Date(Date.UTC(2026, 5, 2)),
     mattress_count: toDec(count),
   };
   entryStore.set(e.id, e);
@@ -159,6 +162,13 @@ vi.mock('@/lib/prisma', () => {
   };
 
   const processorBonusRule = {
+    // ADR-0019.6 — the rule-book read: every row for the site, oldest first.
+    findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
+      [...ruleStore.values()]
+        .filter((r) => r.site_id === where['site_id'])
+        .sort((a, b) => a.effective_date.getTime() - b.effective_date.getTime())
+        .map((r) => ({ ...r })),
+    ),
     findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
       for (const r of ruleStore.values()) {
         if (r.site_id !== where['site_id']) continue;

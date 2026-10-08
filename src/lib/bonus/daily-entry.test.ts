@@ -308,6 +308,13 @@ vi.mock('@/lib/prisma', () => {
   };
 
   const processorBonusRule = {
+    // ADR-0019.6 — the rule-book read: every row for the site, oldest first.
+    findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
+      [...ruleStore.values()]
+        .filter((r) => r.site_id === where['site_id'])
+        .sort((a, b) => a.effective_date.getTime() - b.effective_date.getTime())
+        .map((r) => ({ ...r })),
+    ),
     findFirst: vi.fn(
       async ({
         where,

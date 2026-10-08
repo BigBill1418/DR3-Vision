@@ -43,7 +43,12 @@ const ruleMock = vi.fn<
   rate_high: '0.25',
 }));
 vi.mock('@/lib/bonus/daily-entry', () => ({
-  resolveActiveRule: (siteId: string, onDate: Date) => ruleMock(siteId, onDate),
+  // ADR-0019.6 — the recompute loads a per-entry-date lookup; this double's one
+  // rule covers every day, so the lookup ignores the date it is asked about.
+  loadRuleLookup: async (siteId: string) => {
+    const rule = await ruleMock(siteId, new Date(0));
+    return () => rule;
+  },
 }));
 
 // ── prisma double ───────────────────────────────────────────────

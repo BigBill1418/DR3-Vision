@@ -108,9 +108,12 @@ vi.mock('@/lib/prisma', () => {
   };
   const bonusDailyEntry = {
     findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
-      return entries
-        .filter((e) => inList(where, 'bonus_pay_period_id', e.bonus_pay_period_id))
-        .map((e) => ({ ...e }));
+      return (
+        entries
+          .filter((e) => inList(where, 'bonus_pay_period_id', e.bonus_pay_period_id))
+          // ADR-0019.6 — entries carry the day they are priced by.
+          .map((e) => ({ entry_date: new Date(Date.UTC(2026, 5, 2)), ...e }))
+      );
     }),
   };
   const processorBonusRule = {
@@ -125,6 +128,10 @@ vi.mock('@/lib/prisma', () => {
       end_date: null,
     })),
   };
+  // ADR-0019.6 — the rule-book read returns the same single open-ended row.
+  Object.assign(processorBonusRule, {
+    findMany: vi.fn(async () => [await processorBonusRule.findFirst()]),
+  });
   const bonusReportingAdjustment = {
     findMany: vi.fn(async ({ where = {} }: { where?: Record<string, unknown> } = {}) => {
       const ed = where['entry_date'] as { gte?: Date; lt?: Date } | undefined;

@@ -215,7 +215,7 @@ describe('every bonus-cents computation goes through the paid-units funnel', () 
   it('the month detail page uses the funnel (the defect this guard was written for)', () => {
     const src = readFileSync(join(REPO_ROOT, 'src/app/bonus/months/[id]/page.tsx'), 'utf8');
     const code = stripComments(src);
-    expect(code).toContain('dailyBonusCentsFor(e, rule)');
+    expect(code).toContain('dailyBonusCentsFor(e, ruleFor(e.entry_date))');
     // And the specific shape that under-paid: a pay total off `mattress_count`.
     expect(code).not.toMatch(/calculateDailyBonusCents\s*\(\s*count\s*,/);
   });

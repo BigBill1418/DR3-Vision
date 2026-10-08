@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import { prisma } from '@/lib/prisma';
-import { resolveActiveRule, resolveRuleForHistorical } from '@/lib/bonus/daily-entry';
+import { loadHistoricalRuleLookup, loadRuleLookup } from '@/lib/bonus/daily-entry';
 import { formatCents } from '@/lib/bonus/calculator';
 import {
   assemblePdfRows,
@@ -146,14 +146,15 @@ export default async function BonusPdfSourcePage({
     select: { id: true, full_name: true },
   });
 
-  // Rule effective at the month's start drives the math (CLAUDE.md hard rule #3).
-  // Historical_imported periods (ADR-0023) can predate the earliest seeded rule;
-  // their displayed total is the stored AS-PAID legacy total (Q1) and the rows
-  // are informational, so fall back to the site's earliest rule rather than
-  // hard-failing the read-only render. Live periods stay strict.
-  const rule = isHistorical
-    ? await resolveRuleForHistorical(month.site_id, month.period_start)
-    : await resolveActiveRule(month.site_id, month.period_start);
+  // Each entry is priced by the rule covering its own entry_date (CLAUDE.md hard
+  // rule #3, ADR-0019.6). Historical_imported periods (ADR-0023) can predate the
+  // earliest seeded rule; their displayed total is the stored AS-PAID legacy
+  // total (Q1) and the rows are informational, so fall back to the site's
+  // earliest rule rather than hard-failing the read-only render. Live periods
+  // stay strict.
+  const ruleFor = isHistorical
+    ? await loadHistoricalRuleLookup(month.site_id)
+    : await loadRuleLookup(month.site_id);
 
   const data = assemblePdfRows({
     month: {
@@ -181,7 +182,7 @@ export default async function BonusPdfSourcePage({
       mattress_count: e.mattress_count.toNumber(),
       saves: e.saves.toNumber(),
     })),
-    rule,
+    ruleFor,
   });
 
   // Grand total printed in the table footer. For a historical_imported period the

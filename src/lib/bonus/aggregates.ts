@@ -10,8 +10,8 @@
 //   - routes EVERY cent through the single `@/lib/bonus/calculator` so the number
 //     on the daily grid, the signed PDF, and these aggregate views can never
 //     diverge. Bonus math is NEVER hardcoded (CLAUDE.md hard rule #3); each
-//     month's totals use the `processor_bonus_rules` row effective on that
-//     month, so a mid-history rate change is reflected per month.
+//     keyed day is priced by the `processor_bonus_rules` row covering its own
+//     entry_date (ADR-0019.6), so a rate change is reflected from its exact day.
 //
 // ADR-0019 §9b (rename): the CURRENT `full_name` is displayed everywhere; the
 // `previous_names` array is surfaced so the UI can show a "previously known as"
@@ -22,7 +22,7 @@ import Papa from 'papaparse';
 import { prisma } from '@/lib/prisma';
 import { type BonusRuleParams } from '@/lib/bonus/calculator';
 import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
-import { resolveRuleForHistorical } from '@/lib/bonus/daily-entry';
+import { loadHistoricalRuleLookup } from '@/lib/bonus/daily-entry';
 import { periodLabel, periodShortLabel } from '@/lib/bonus/period-label';
 import { appCurrentYear } from '@/lib/time';
 
@@ -103,37 +103,6 @@ function parsePreviousNames(raw: unknown): PreviousNameEntry[] {
     }
   }
   return out;
-}
-
-/**
- * Resolve the rule for a period, caching by `ym` so a multi-period or
- * multi-employee rollup never re-queries the same period's rule. The rule
- * effective on the period's first day governs that period.
- *
- * Uses {@link resolveRuleForHistorical} (NOT strict `resolveActiveRule`): the
- * ADR-0023 historical import seeded entries back to Jan 2025, but the
- * `processor_bonus_rules` table only goes back to 2026-01-01. For a pre-rule
- * period the strict resolver throws `NoActiveRuleError`, which 500'd the entire
- * per-employee history page. The historical fallback resolves the period's rule
- * when one exists and otherwise the site's earliest rule — the same graceful
- * read-path behavior ADR-0023 gave the historical PDF render. Live periods are
- * unaffected (the inner strict resolve still succeeds for them).
- */
-function ruleResolver(siteId: string): (periodStart: Date) => Promise<BonusRuleParams> {
-  const cache = new Map<string, Promise<BonusRuleParams>>();
-  return (periodStart: Date) => {
-    const key = ym(periodStart);
-    const hit = cache.get(key);
-    if (hit) return hit;
-    const p = resolveRuleForHistorical(siteId, periodStart).then((r) => ({
-      threshold_low: r.threshold_low,
-      rate_low: r.rate_low,
-      threshold_high: r.threshold_high,
-      rate_high: r.rate_high,
-    }));
-    cache.set(key, p);
-    return p;
-  };
 }
 
 interface Rollup {
@@ -237,14 +206,19 @@ export async function employeeHistory(
     entriesByMonth.set(e.bonus_pay_period_id, list);
   }
 
-  const resolveRule = ruleResolver(siteId);
+  // ADR-0019.6 — one rule-book read; every entry priced by its own entry_date.
+  // Historical lookup (ADR-0023): imported entries back to Jan 2025 predate the
+  // first seeded rule and fall back to the site's earliest rule instead of
+  // 500-ing the history page. Live entries resolve strictly to their own window.
+  const ruleFor = await loadHistoricalRuleLookup(siteId);
   const allMonthTotals: EmployeeMonthTotal[] = [];
   for (const m of months) {
     const monthEntries = entriesByMonth.get(m.id) ?? [];
     if (monthEntries.length === 0) continue; // month with no entries for this employee
-    const rule = await resolveRule(m.period_start);
     const acc = emptyRollup();
-    for (const e of monthEntries) accumulate(acc, e.mattress_count, e.saves, rule);
+    for (const e of monthEntries) {
+      accumulate(acc, e.mattress_count, e.saves, ruleFor(e.entry_date));
+    }
     allMonthTotals.push({
       monthId: m.id,
       ym: ym(m.period_start),
@@ -316,19 +290,19 @@ export async function annualTotals(siteId: string, year: number): Promise<Annual
     select: {
       bonus_employee_id: true,
       bonus_pay_period_id: true,
+      entry_date: true,
       mattress_count: true,
       saves: true,
     },
   });
 
-  const resolveRule = ruleResolver(siteId);
+  // ADR-0019.6 — priced per entry_date (see employeeHistory above).
+  const ruleFor = await loadHistoricalRuleLookup(siteId);
   const byEmployee = new Map<string, Rollup>();
   for (const e of entries) {
-    const monthStart = monthStartById.get(e.bonus_pay_period_id);
-    if (!monthStart) continue;
-    const rule = await resolveRule(monthStart);
+    if (!monthStartById.has(e.bonus_pay_period_id)) continue;
     const acc = byEmployee.get(e.bonus_employee_id) ?? emptyRollup();
-    accumulate(acc, e.mattress_count.toNumber(), e.saves.toNumber(), rule);
+    accumulate(acc, e.mattress_count.toNumber(), e.saves.toNumber(), ruleFor(e.entry_date));
     byEmployee.set(e.bonus_employee_id, acc);
   }
   if (byEmployee.size === 0) return [];

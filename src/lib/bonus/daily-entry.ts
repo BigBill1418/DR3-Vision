@@ -33,6 +33,13 @@ import {
 } from '@/lib/bonus/state-machine';
 import { type BonusRuleParams } from '@/lib/bonus/calculator';
 import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
+import {
+  ruleForDate,
+  ruleLookup,
+  toRuleBook,
+  type DatedBonusRule,
+  type RuleLookup,
+} from '@/lib/bonus/rule-book';
 import { recordSavesMovement } from '@/lib/bonus/saves-inventory';
 import { shouldRequireAmendment } from '@/lib/bonus/amendment-requests';
 
@@ -54,13 +61,9 @@ export function entryDateUTC(date: Date): Date {
 // Active rule resolution (CLAUDE.md hard rule #3)
 // ────────────────────────────────────────────────────────────────────
 
-export class NoActiveRuleError extends Error {
-  readonly status = 409 as const;
-  constructor(siteId: string) {
-    super(`no active processor_bonus_rules row for site ${siteId}`);
-    this.name = 'NoActiveRuleError';
-  }
-}
+// NoActiveRuleError lives in the pure rule-book module (the client amendment
+// editor shares the lookup); re-exported here for the existing import sites.
+export { NoActiveRuleError } from '@/lib/bonus/rule-book';
 
 /**
  * Raised when no SEEDED `bonus_pay_periods` row covers `day` for the site
@@ -78,72 +81,59 @@ export class NoOpenPayPeriodError extends Error {
 }
 
 /**
- * Resolve the `processor_bonus_rules` row in effect for `siteId` on `onDate`:
- * the row with the latest `effective_date` that is `<= onDate` and whose
- * `end_date` is null or `>= onDate`. Throws {@link NoActiveRuleError} if no rule
- * covers the date — bonus math must never fall back to a hardcoded default.
+ * Every `processor_bonus_rules` row for `siteId` as a serialisable rule book
+ * (ADR-0019.6). The table holds a handful of rows per site, so period-level
+ * reads load the whole book once and price each entry by its OWN `entry_date`
+ * via {@link ruleForDate} / {@link ruleLookup} — never one rule for the whole
+ * period, never the rule in force "today".
  */
-export async function resolveActiveRule(
-  siteId: string,
-  onDate: Date,
-): Promise<BonusRuleParams & { id: string; effective_date: Date }> {
-  const on = entryDateUTC(onDate);
-  const rule = await prisma.processorBonusRule.findFirst({
-    where: {
-      site_id: siteId,
-      effective_date: { lte: on },
-      OR: [{ end_date: null }, { end_date: { gte: on } }],
-    },
-    orderBy: { effective_date: 'desc' },
+export async function loadRuleBook(siteId: string): Promise<DatedBonusRule[]> {
+  const rows = await prisma.processorBonusRule.findMany({
+    where: { site_id: siteId },
+    orderBy: { effective_date: 'asc' },
   });
-  if (!rule) throw new NoActiveRuleError(siteId);
-  return {
-    id: rule.id,
-    effective_date: rule.effective_date,
-    threshold_low: rule.threshold_low,
-    rate_low: rule.rate_low.toString(),
-    threshold_high: rule.threshold_high,
-    rate_high: rule.rate_high.toString(),
-  };
+  return toRuleBook(rows);
+}
+
+/** Strict per-entry-date lookup for a live/editable period at `siteId`. */
+export async function loadRuleLookup(siteId: string): Promise<RuleLookup> {
+  return ruleLookup(await loadRuleBook(siteId), { siteId });
 }
 
 /**
- * Resolve a rule for a HISTORICAL period that may predate the earliest
- * `processor_bonus_rules` row. Returns the rule active on `onDate` when one
- * exists; otherwise falls back to the SITE'S EARLIEST rule (oldest
- * `effective_date`). Throws {@link NoActiveRuleError} only when the site has no
- * rule at all.
- *
- * ADR-0023: historical_imported periods (Jan 2025 →) can start before the
- * earliest seeded rule. Their displayed grand total is the stored AS-PAID legacy
- * total (Q1), and the per-employee rows are informational — so a missing
- * date-scoped rule must not hard-fail the read-only render (the PDF page +
- * archive). This mirrors `monthListPayout`'s graceful `NoActiveRuleError`
- * handling. NEVER call this for live/editable periods — those must use the
- * strict {@link resolveActiveRule} so a genuinely missing rule surfaces.
+ * Lookup for a HISTORICAL (ADR-0023 imported) read-only render: a day before
+ * the earliest seeded rule falls back to the site's earliest rule. NEVER use for
+ * live/editable periods — those must use {@link loadRuleLookup} so a genuinely
+ * missing rule surfaces.
+ */
+export async function loadHistoricalRuleLookup(siteId: string): Promise<RuleLookup> {
+  return ruleLookup(await loadRuleBook(siteId), { siteId, historicalFallback: true });
+}
+
+/**
+ * The `processor_bonus_rules` row in effect for `siteId` on `onDate`: the one
+ * row whose window `[effective_date, end_date]` contains the day. Throws
+ * {@link NoActiveRuleError} if none covers it and
+ * {@link OverlappingBonusRulesError} if more than one does — bonus math must
+ * never fall back to a hardcoded default or guess between rows.
+ */
+export async function resolveActiveRule(siteId: string, onDate: Date): Promise<DatedBonusRule> {
+  return ruleForDate(await loadRuleBook(siteId), entryDateUTC(onDate), { siteId });
+}
+
+/**
+ * {@link resolveActiveRule} with the ADR-0023 historical fallback: a day no rule
+ * covers resolves to the SITE'S EARLIEST rule. Throws {@link NoActiveRuleError}
+ * only when the site has no rule at all. Read-only historical renders only.
  */
 export async function resolveRuleForHistorical(
   siteId: string,
   onDate: Date,
-): Promise<BonusRuleParams & { id: string; effective_date: Date }> {
-  try {
-    return await resolveActiveRule(siteId, onDate);
-  } catch (e) {
-    if (!(e instanceof NoActiveRuleError)) throw e;
-    const earliest = await prisma.processorBonusRule.findFirst({
-      where: { site_id: siteId },
-      orderBy: { effective_date: 'asc' },
-    });
-    if (!earliest) throw new NoActiveRuleError(siteId);
-    return {
-      id: earliest.id,
-      effective_date: earliest.effective_date,
-      threshold_low: earliest.threshold_low,
-      rate_low: earliest.rate_low.toString(),
-      threshold_high: earliest.threshold_high,
-      rate_high: earliest.rate_high.toString(),
-    };
-  }
+): Promise<DatedBonusRule> {
+  return ruleForDate(await loadRuleBook(siteId), entryDateUTC(onDate), {
+    siteId,
+    historicalFallback: true,
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────

@@ -16,7 +16,8 @@ import { HOME_ROUTE } from '@/lib/routes';
 import { notFound, redirect } from 'next/navigation';
 import { tryBonusAccess, parseSiteCode } from '@/lib/bonus/access';
 import { prisma } from '@/lib/prisma';
-import { resolveActiveRule } from '@/lib/bonus/daily-entry';
+import { loadRuleBook } from '@/lib/bonus/daily-entry';
+import { ruleLookup } from '@/lib/bonus/rule-book';
 import { formatCents } from '@/lib/bonus/calculator';
 import { dailyBonusCentsFor } from '@/lib/bonus/paid-units';
 import { naturalSlotFor, canOverrideSlot } from '@/lib/bonus/signatures';
@@ -136,7 +137,9 @@ export default async function BonusMonthDetailPage({
   });
   if (!month) notFound();
 
-  const rule = await resolveActiveRule(ctx.siteId, month.period_start);
+  // ADR-0019.6 — each day priced by the rule covering its own entry_date.
+  const ruleBook = await loadRuleBook(ctx.siteId);
+  const ruleFor = ruleLookup(ruleBook, { siteId: ctx.siteId });
 
   const employeeIds = [...new Set(month.daily_entries.map((e) => e.bonus_employee_id))];
   const employees = await prisma.bonusEmployee.findMany({
@@ -162,7 +165,7 @@ export default async function BonusMonthDetailPage({
     // understated every processor's month total by the whole value of their
     // saves — on the very page an admin unlocks a signed month from and reads
     // the corrected total on.
-    acc.totalBonusCents += dailyBonusCentsFor(e, rule);
+    acc.totalBonusCents += dailyBonusCentsFor(e, ruleFor(e.entry_date));
     byEmployee.set(e.bonus_employee_id, acc);
   }
   const rows = [...byEmployee.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -210,6 +213,9 @@ export default async function BonusMonthDetailPage({
       select: { id: true, full_name: true },
     });
     amendDays = monthDays(month.period_start, month.period_end);
+    // Fail on the server, not in the client editor: every editable day must
+    // resolve to exactly one rule (ADR-0019.6).
+    for (const d of amendDays) ruleFor(d.iso);
     amendEntriesByDay = Object.fromEntries(
       month.daily_entries.map((e) => [
         `${isoDay(e.entry_date)}|${e.bonus_employee_id}`,
@@ -265,7 +271,7 @@ export default async function BonusMonthDetailPage({
       // quantity); the money column is paid units. Same split as above.
       acc.countsByDay[isoDay(e.entry_date)] = count;
       acc.totalMattresses += count;
-      acc.totalBonusCents += dailyBonusCentsFor(e, rule);
+      acc.totalBonusCents += dailyBonusCentsFor(e, ruleFor(e.entry_date));
       grid.set(id, acc);
     }
     readOnlyRows = [...grid.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -400,7 +406,7 @@ export default async function BonusMonthDetailPage({
             <AmendmentPanel
               monthId={month.id}
               state={month.state as 'signed' | 'paid' | 'amended'}
-              rule={rule}
+              rules={ruleBook}
               days={amendDays}
               employees={amendEmployees}
               entriesByDay={amendEntriesByDay}

@@ -89,7 +89,8 @@ function makeDb(): SignatureDb {
       // are count-only legacy cases, so saves defaults to 0 unless the fixture
       // sets it; supplying it here keeps the double HONEST rather than letting
       // the lock read a shape the real client would never return.
-      findMany: async () => entries.map((e) => ({ saves: 0, ...e })),
+      findMany: async () =>
+        entries.map((e) => ({ saves: 0, entry_date: new Date(Date.UTC(2026, 4, 5)), ...e })),
       // ADR-0019.3 §2 — no signer in these Woodland override fixtures is a
       // linked `bonus_employee`, so there is no separation-of-duties conflict to
       // report. `signature-sod.test.ts` covers the case where there is one,
@@ -97,13 +98,19 @@ function makeDb(): SignatureDb {
       findFirst: async () => null,
     },
     processorBonusRule: {
-      findFirst: async () => ({
-        id: 'rule-wo',
-        threshold_low: 50,
-        rate_low: { toString: () => '0.5000' },
-        threshold_high: 74,
-        rate_high: { toString: () => '0.2500' },
-      }),
+      // ADR-0019.6 — the lock loads the site rule book and prices each entry
+      // by its own entry_date; one open-ended row covers every fixture day.
+      findMany: async () => [
+        {
+          id: 'rule-wo',
+          threshold_low: 50,
+          rate_low: { toString: () => '0.5000' },
+          threshold_high: 74,
+          rate_high: { toString: () => '0.2500' },
+          effective_date: new Date(Date.UTC(2000, 0, 1)),
+          end_date: null,
+        },
+      ],
     },
     auditLog: {
       create: async ({ data }) => {

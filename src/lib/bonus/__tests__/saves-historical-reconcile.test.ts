@@ -24,9 +24,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Prisma } from '@prisma/client';
 import { calculateDailyBonusCents } from '@/lib/bonus/calculator';
 
-const publishNtfyMock = vi.fn<(args: Record<string, unknown>) => Promise<{ ok: boolean; outcome: 'sent' }>>(
-  async () => ({ ok: true, outcome: 'sent' as const }),
-);
+const publishNtfyMock = vi.fn<
+  (args: Record<string, unknown>) => Promise<{ ok: boolean; outcome: 'sent' }>
+>(async () => ({ ok: true, outcome: 'sent' as const }));
 vi.mock('@/lib/ntfy', () => ({
   publishNtfy: (args: Record<string, unknown>) => publishNtfyMock(args),
 }));
@@ -39,11 +39,8 @@ const WOODLAND = {
 };
 
 vi.mock('@/lib/bonus/daily-entry', () => ({
-  resolveActiveRule: async () => ({
-    id: 'rule-1',
-    effective_date: new Date('2026-01-01'),
-    ...WOODLAND,
-  }),
+  // ADR-0019.6 — one rule covering every day of the fixture period.
+  loadRuleLookup: async () => () => WOODLAND,
 }));
 
 interface MonthRow {

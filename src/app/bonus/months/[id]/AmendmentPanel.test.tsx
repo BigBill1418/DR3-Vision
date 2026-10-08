@@ -30,6 +30,7 @@ vi.mock('next/navigation', () => ({
 
 /** The live Woodland rule: (u−50)×50¢ + (u−75)×25¢. Tiered, not flat. */
 const RULE = { threshold_low: 50, rate_low: 0.5, threshold_high: 75, rate_high: 0.25 };
+const RULES = [{ ...RULE, id: 'rule', effective_date: '2026-01-01', end_date: null }];
 
 const MONTH = 'm-may';
 const MARIA = 'emp-maria';
@@ -82,7 +83,7 @@ function mountPanel(over: { mattress_count?: number; saves?: number; note?: stri
     <AmendmentPanel
       monthId={MONTH}
       state="amended"
-      rule={RULE}
+      rules={RULES}
       days={DAY}
       employees={employees}
       entriesByDay={{ [`2026-05-12|${MARIA}`]: { mattress_count, saves, note } }}

@@ -7,15 +7,17 @@
 // screen, the number on the signed PDF, and the number in the CSV export can never
 // diverge.
 //
-// The corrected Woodland formula (ADR-0019 §1, replacing the spreadsheet's
-// off-by-one high threshold of 75):
+// The formula (ADR-0019 §1):
 //
 //   daily_bonus = MAX(units - threshold_low, 0) * rate_low
 //               + MAX(units - threshold_high, 0) * rate_high
 //
-// Woodland: threshold_low=50, rate_low=$0.50, threshold_high=74, rate_high=$0.25.
-//   - Mattresses 51–74 each earn $0.50.
-//   - Mattresses 75+ each earn $0.75 ($0.50 base + $0.25 high tier).
+// The parameters are DATA, effective-dated per site; which row prices a day is
+// decided by that day's entry_date (`rule-book.ts`, ADR-0019.6). History:
+//   - through 2026-10-12, Woodland 50/$0.50/74/$0.25 (ADR-0019 §1 corrected the
+//     spreadsheet's 75) and Eugene 50/$1.00/100/$0.25;
+//   - from 2026-10-13, both sites 60/$1.00/100/$0.25: units 61–100 earn $1.00,
+//     101+ earn $1.25 (ADR-0019.6).
 //
 // All money is computed and stored as integer CENTS to avoid floating-point drift;
 // `formatCents` is the only place a dollar string is produced.

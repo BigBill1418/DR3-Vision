@@ -234,7 +234,7 @@ describe('the month total recomputes over the amended saves', () => {
     seedEntry({ bonus_employee_id: AAMIR, mattress_count: 48, saves: 0 });
 
     // Both sit UNDER the 50-unit threshold, so the month pays nothing yet.
-    expect(periodBonusCentsFor(entries, RULE)).toBe(0);
+    expect(periodBonusCentsFor(entries, () => RULE)).toBe(0);
 
     await save([
       { bonus_employee_id: MARIA, mattress_count: 45, saves: 20 }, // 65 paid units
@@ -244,7 +244,7 @@ describe('the month total recomputes over the amended saves', () => {
     // Maria: (65−50)×50¢ = 750¢. Aamir: (78−50)×50¢ + (78−75)×25¢ = 1400 + 75 = 1475¢.
     expect(dailyBonusCentsFor(rowFor(MARIA), RULE)).toBe(750);
     expect(dailyBonusCentsFor(rowFor(AAMIR), RULE)).toBe(1475);
-    expect(periodBonusCentsFor(entries, RULE)).toBe(2225);
+    expect(periodBonusCentsFor(entries, () => RULE)).toBe(2225);
   });
 });
 
