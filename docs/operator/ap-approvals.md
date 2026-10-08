@@ -478,3 +478,24 @@ proxies attachment bytes):
   900 s and the client now **re-mints** within 60 s of expiry instead of replaying an
   expired URL (which had returned an R2 403 → blank iframe on a collapse/re-expand or
   read-then-download after 5 min).
+
+## 2026-10-08 — Invoices the team receives directly (ADR-0141)
+
+- **Manager:** site dashboard → **Submit an invoice** (`/dashboard/<site>/ap-submit`).
+  Attach the invoice (PDF or photo), type vendor, invoice number, amount and what it is
+  for, and pick the accounting staff member who receives the decision. Managers submit
+  for their own site only; admins for any site.
+- **Approvers:** the invoice appears in the normal AP queue with a blue "Team
+  submission · submitter (site) → accountant" block. Decide it exactly like a mailbox
+  invoice. The submitter may decide it too (Bill, 2026-10-08).
+- **Mail:** every decision, hold, second signature and resend for a team submission goes
+  To the picked accountant, CC the submitter and the decision roster (Mary). Mailbox
+  invoices are unchanged.
+- **Wrong accountant picked:** an admin opens the request in the AP queue, picks the right
+  person under "Change accountant (admin)" and clicks **Correct and resend**. Audited; it
+  re-sends the decision (or hold notice) to the corrected person.
+- **The accountant list:** `/admin/ap/routing` → "Accounting staff (team-submitted
+  invoices)". Add, deactivate, reactivate. An empty active list blocks submissions with a
+  clear message.
+- **Rollout:** `ap_team_submit` (UI) and `ap_team_outcome` (mail), per site, both born
+  pilot. Flip both at `/admin/rollout` to go live at a site.

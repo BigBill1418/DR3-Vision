@@ -78,6 +78,25 @@ export interface FakeApRequest {
   // so an ABSENT field must read as null (see `escalatedAtOf`).
   escalated_at?: Date | null;
   escalated_to?: string | null;
+  // ADR-0141 — team-submission columns. Optional: an ABSENT field is a mailbox row.
+  intake_channel?: 'mailbox' | 'team_submit';
+  submitted_by?: string | null;
+  submitted_site_id?: string | null;
+  submitted_at?: Date | null;
+  outcome_recipient_id?: string | null;
+  outcome_recipient_email?: string | null;
+  submitted_vendor?: string | null;
+  submitted_invoice_number?: string | null;
+  submitted_amount_cents?: number | null;
+}
+/** ADR-0141 D3 — the accounting-staff list. */
+export interface FakeAccountingContact {
+  id: string;
+  display_name: string;
+  email: string;
+  active: boolean;
+  created_by?: string | null;
+  updated_by?: string | null;
 }
 export interface FakeEquipment {
   id: string;
@@ -226,6 +245,8 @@ export interface FakePollRun {
 
 export interface FakeDb {
   requests: FakeApRequest[];
+  // ADR-0141 D3.
+  accountingContacts: FakeAccountingContact[];
   followups: FakeApFollowup[];
   attachments: FakeApAttachment[];
   users: FakeUser[];
@@ -336,6 +357,7 @@ export interface FakeApprovalRouting {
 export function newFakeDb(seed: Partial<FakeDb> = {}): FakeDb {
   return {
     requests: seed.requests ?? [],
+    accountingContacts: seed.accountingContacts ?? [],
     followups: seed.followups ?? [],
     attachments: seed.attachments ?? [],
     users: seed.users ?? [],
@@ -377,6 +399,18 @@ function pick<T extends object>(row: T, select?: AnyRecord): T {
   for (const k of Object.keys(select)) if (select[k]) out[k] = src[k];
   return out as T;
 }
+
+const TEAM_KEYS = [
+  'intake_channel',
+  'submitted_by',
+  'submitted_site_id',
+  'submitted_at',
+  'outcome_recipient_id',
+  'outcome_recipient_email',
+  'submitted_vendor',
+  'submitted_invoice_number',
+  'submitted_amount_cents',
+] as const;
 
 /** Build a fake PrismaClient over `db`. Cast to PrismaClient at the call site. */
 export function makeFakePrisma(db: FakeDb) {
@@ -594,6 +628,10 @@ export function makeFakePrisma(db: FakeDb) {
           escalated_at: (d['escalated_at'] as Date | null) ?? null,
           escalated_to: (d['escalated_to'] as string | null) ?? null,
         };
+        // ADR-0141 — a caller-chosen id (team submission stores files first), and
+        // the team columns copied only when the caller wrote them.
+        if (typeof d['id'] === 'string') row.id = d['id'];
+        for (const k of TEAM_KEYS) if (k in d) (row as unknown as AnyRecord)[k] = d[k];
         db.requests.push(row);
         return pick(row, args.select);
       },
@@ -701,6 +739,7 @@ export function makeFakePrisma(db: FakeDb) {
           storage_key: (d['storage_key'] as string | null) ?? null,
           link_url: (d['link_url'] as string | null) ?? null,
           nested_subject: (d['nested_subject'] as string | null) ?? null,
+          ...('sha256' in d ? { sha256: d['sha256'] as string | null } : {}),
         };
         db.attachments.push(row);
         return { ...row };
@@ -738,6 +777,44 @@ export function makeFakePrisma(db: FakeDb) {
     apSenderEntry: {
       async findMany() {
         return db.senderEntries.filter((e) => e.active).map((e) => ({ address: e.address }));
+      },
+    },
+    apAccountingContact: {
+      async findUnique(args: { where: AnyRecord; select?: AnyRecord }) {
+        const w = args.where;
+        const row = db.accountingContacts.find(
+          (c) =>
+            (w['id'] !== undefined && c.id === w['id']) ||
+            (w['email'] !== undefined && c.email === w['email']),
+        );
+        return row ? pick(row, args.select) : null;
+      },
+      async findMany(args: { where?: AnyRecord; select?: AnyRecord } = {}) {
+        const w = args.where ?? {};
+        return db.accountingContacts
+          .filter((c) => w['active'] === undefined || c.active === w['active'])
+          .sort((a, b) => a.display_name.localeCompare(b.display_name))
+          .map((c) => pick(c, args.select));
+      },
+      async create(args: { data: AnyRecord; select?: AnyRecord }) {
+        const d = args.data;
+        if (db.accountingContacts.some((c) => c.email === d['email'])) throw p2002('email');
+        const row: FakeAccountingContact = {
+          id: uid('acct'),
+          display_name: d['display_name'] as string,
+          email: d['email'] as string,
+          active: (d['active'] as boolean | undefined) ?? true,
+          created_by: (d['created_by'] as string | null) ?? null,
+          updated_by: (d['updated_by'] as string | null) ?? null,
+        };
+        db.accountingContacts.push(row);
+        return pick(row, args.select);
+      },
+      async update(args: { where: AnyRecord; data: AnyRecord; select?: AnyRecord }) {
+        const row = db.accountingContacts.find((c) => c.id === args.where['id']);
+        if (!row) throw new Error('not found');
+        Object.assign(row, args.data);
+        return pick(row, args.select);
       },
     },
     apDecisionRecipient: {

@@ -4863,6 +4863,21 @@ model ApRequest {
   escalated_at DateTime?
   escalated_to String? // bare FK → users.id (constraint in migration)
 
+  // ADR-0141 — the second intake channel: an invoice a manager received directly
+  // and submitted in Vision. Every pre-existing row is `mailbox`. Bare FK columns
+  // (constraints in migration 20260869). The accountant's address is SNAPSHOTTED
+  // so a later edit to the accounting list cannot redirect a routed decision; only
+  // the audited admin correction changes it.
+  intake_channel           ApIntakeChannel @default(mailbox)
+  submitted_by             String? // bare FK → users.id
+  submitted_site_id        String? // bare FK → sites.id (from the session, never the body)
+  submitted_at             DateTime?
+  outcome_recipient_id     String? // bare FK → ap_accounting_contacts.id
+  outcome_recipient_email  String? // snapshot of the accountant's address
+  submitted_vendor         String? // the submitter's typed values; approvers still confirm
+  submitted_invoice_number String?
+  submitted_amount_cents   Int?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -4881,6 +4896,7 @@ model ApRequest {
   @@index([vendor_freeform])
   @@index([first_approver_id])
   @@index([second_approver_id])
+  @@index([submitted_by])
   @@map("ap_requests")
 }
 
@@ -4957,6 +4973,31 @@ model ApSenderEntry {
 /// EMPTY: with zero active rows a decision REFUSES to mail and pages
 /// `dr3-vision-system` (operator action: add Mary's address here). The decision
 /// reply NEVER goes to the inbound Reply-To (attacker-controlled).
+/// ADR-0141 D3/D6 — how an AP request arrived. `mailbox` = forwarded to the AP
+/// approval mailbox (every row before 2026-10-08); `team_submit` = a manager
+/// submitted it in Vision and named the accountant who receives the outcome.
+enum ApIntakeChannel {
+  mailbox
+  team_submit
+}
+
+/// ADR-0141 D3 — the accounting staff a team submission can name as the recipient
+/// of the decision mail. Admin-managed at /admin/ap/config. Deliberately NOT
+/// `ap_decision_recipients`: every row there is CC'd on EVERY decision.
+model ApAccountingContact {
+  id           String   @id @default(uuid())
+  display_name String
+  email        String   @unique // lower-case @svdp.us (CHECK in migration)
+  active       Boolean  @default(true)
+  created_by   String? // bare audit-actor column
+  updated_by   String? // bare audit-actor column
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@index([active])
+  @@map("ap_accounting_contacts")
+}
+
 model ApDecisionRecipient {
   id         String   @id @default(uuid())
   email      String   @unique

@@ -39,6 +39,52 @@ ADR-0024 Amendment 1, ADR-0118 Amendment 1.
 - Operator route test (+2) and a new manager route test (+3): every write method returns the missing-hold 404 body
   for another site's hold and writes nothing.
 
+## 2026-10-08 — AP: invoices the team receives directly (ADR-0141, Accepted, born pilot)
+
+Bill, 2026-10-08: a site manager who receives an invoice directly can now submit it in
+Vision and pick which accounting staff member gets the approval/rejection. Accounting's
+mailbox flow is unchanged. Bill answered all eight plan questions at 08:56 PDT and added a
+third accountant at 09:05 PDT; ADR-0141 is Accepted and the plan records each answer.
+
+- **Submit screen** `/dashboard/<site>/ap-submit` ("Submit an invoice" tile on the site
+  dashboard): invoice file(s) (PDF or photo, up to 5 × 15 MB), vendor, invoice number,
+  amount, purpose, and one required accountant. Site fixed for a manager, picked by an
+  admin. Phone-width; English, Spanish and Urdu. "My submissions" list with status.
+- **Who may submit:** managers at their own primary site only (the `all_sites` flag does
+  not widen it) and admins anywhere. One gate (`teamSubmitAccess`) serves the tile, the
+  page and `POST /api/dashboard/<site>/ap-submit`.
+- **Same record, same approvers:** a team submission is an ordinary `ap_requests` row
+  (`intake_channel = team_submit`), so the queue, the structured Approve, the ADR-0136
+  duplicate check (the composed subject carries the invoice number) and the $1,000 second
+  signer through the shared resolver all apply unchanged. The queue detail shows a "Team
+  submission · submitter (site) → accountant" block.
+- **Decision mail:** one resolver, `resolveOutcomeRecipients`, now feeds the hold notice and
+  `sendDecisionEmail` (first decision, second signature, resend). Team rows: To the picked
+  accountant, CC the submitter + the `ap_decision_recipients` roster, de-duplicated, on the
+  new per-site `ap_team_outcome` surface. Mailbox rows: exactly the old forwarder routing on
+  `ap_notify`.
+- **Bill's Q6 call:** the submitter MAY approve or hold their own invoice like any other.
+  No submitter guard was added; every existing rule stands. ADR-0141 D5 records the
+  accepted risk.
+- **Accounting-staff list** (`ap_accounting_contacts`): name, `@svdp.us` email (DB CHECK),
+  active. Managed on `/admin/ap/routing` → "Accounting staff (team-submitted invoices)".
+  Seeded by an idempotent, audited data migration with Gloria Salpino, Mary Scott and
+  Yvonne Stephens.
+- **Admin correction:** the accountant is fixed at submit; an admin can correct it from the
+  AP queue detail ("Correct and resend", `POST /api/admin/ap/requests/<id>/accountant`).
+  Audited before/after; it re-sends the decision mail (decided) or hold notice (on hold).
+- **Audit:** submission + accountant choice, each correction and its re-send, every list
+  change, and the three seeded rows.
+- **Migration** `20260869_adr0141_ap_team_submit`: additive only (enum, nullable columns, a
+  shape CHECK, the new table, seed, rollout rows). Replayed clean on an empty PG16.
+- **Rollout (ADR-0047):** `ui/ap_team_submit` and `notification/ap_team_outcome`, one row per
+  site, both born `pilot` (admins only; team mail reroutes to admins with the
+  would-have-sent header). Go-live is Bill's flip at `/admin/rollout`.
+- **Tests:** team path end to end, role/site/pilot gates (lib + route), mail recipients for
+  every decision type on team rows, the admin correction, the list, a real-PG migration
+  suite (seed, idempotency, CHECKs), and a regression suite pinning mailbox routing for
+  every mail type plus the unchanged mailbox `ap_requests` create payload.
+
 ## 2026-10-08 — Negative on-hand names its cause instead of always blaming intake (ADR-0110 Am.1)
 
 Woodland's 2026-10-07 report read "⚠ On-hand is computing negative (−147). Intake data is incomplete — most recent

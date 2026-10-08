@@ -19,6 +19,20 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CG — 2026-10-06 Woodland iPads froze (ADR-0140, PR #294) — **SHIPPED + LIVE; root cause UNPROVEN** (row backfilled 2026-10-07)
+
+Woodland, about 9:25 AM PDT, 2026-10-06: _"login screen stuck - load buttons stuck ipad browser appears frozen"_.
+The server was healthy throughout. PR #294 (`5f0b4f3`, merged 2026-10-06 22:54 PDT) added deadlines to the drain
+and the keypad, plus the 25 s stall watchdog and the global-error Reload.
+
+- **Live (checked 2026-10-07, no SHA endpoint exists):** the public operator layout chunk served by
+  `dr3-vision.svdp.us` contains the `dr3:stall` watchdog event; `/healthz` returns 200 with `db_ok`.
+- **CG-1 — the freeze's trigger was never reproduced: OPEN.** If it recurs, capture the iPad's state _before_
+  reloading: service-worker version, queue rows and their `last_error`, and whether the stall banner appeared.
+- **CG-2 — gaps found by review:** see 0.CF.
+
+---
+
 ## 0.CF — 2026-10-07 ADR-0140 review gaps: floor screens' own requests had no deadline — **FIX IN PR (not merged); ships on Bill's go**
 
 Ryan's independent review of PR #294 found three gaps. All three are fixed in branch `fix/adr0140-remaining-deadlines`
@@ -66,19 +80,15 @@ userId, reason })` with no site and an unguarded `update`. The same site gap was
 
 ---
 
-## 0.CE — 2026-10-06 Woodland iPads froze (ADR-0140, PR #294) — **SHIPPED + LIVE; root cause UNPROVEN** (row backfilled 2026-10-07)
+## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **SHIPPED born pilot; go-live is Bill's**
 
-Woodland, about 9:25 AM PDT, 2026-10-06: _"login screen stuck - load buttons stuck ipad browser appears frozen"_.
-The server was healthy throughout. PR #294 (`5f0b4f3`, merged 2026-10-06 22:54 PDT) added deadlines to the drain
-and the keypad, plus the 25 s stall watchdog and the global-error Reload.
-
-- **Live (checked 2026-10-07, no SHA endpoint exists):** the public operator layout chunk served by
-  `dr3-vision.svdp.us` contains the `dr3:stall` watchdog event; `/healthz` returns 200 with `db_ok`.
-- **CE-1 — the freeze's trigger was never reproduced: OPEN.** If it recurs, capture the iPad's state _before_
-  reloading: service-worker version, queue rows and their `last_error`, and whether the stall banner appeared.
-- **CE-2 — gaps found by review:** see 0.CF.
-
----
+- **CE-1 (Bill):** run a pilot submission as admin at `/dashboard/woodland/ap-submit`
+  (the decision mail reroutes to admins with the would-have-sent header naming the
+  accountant), then flip `ap_team_submit` **and** `ap_team_outcome` live per site at
+  `/admin/rollout`. Flipping only the UI row would let managers submit while the
+  accountant mail still reroutes to admins.
+- **CE-2 (accepted residual):** the submitter may approve their own sub-$1,000 team
+  invoice (Bill's Q6 decision, ADR-0141 D5).
 
 ## 0.CD — 2026-10-07 Eugene chain swap (ADR-0019.7) — **SHIPPED**
 

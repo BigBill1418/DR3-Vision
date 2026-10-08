@@ -118,7 +118,22 @@ export interface ApEquipmentLinkView {
   equipmentRequest: { id: string; description: string; status: string } | null;
 }
 
+/** ADR-0141 — how a team-submitted invoice arrived and where its outcome goes. */
+export interface ApTeamSubmissionView {
+  submitterName: string | null;
+  siteName: string | null;
+  submittedAt: string | null;
+  accountantId: string | null;
+  accountantName: string | null;
+  accountantEmail: string | null;
+  vendor: string | null;
+  invoiceNumber: string | null;
+  amountCents: number | null;
+}
+
 export interface ApDetailView extends ApListRow {
+  /** ADR-0141 — null for an invoice forwarded to the AP mailbox. */
+  teamSubmission: ApTeamSubmissionView | null;
   conversationId: string | null;
   bodyHtmlSanitized: string | null;
   bodyText: string | null;
@@ -410,6 +425,7 @@ export async function getApRequestDetail(
         })
       )?.name ?? null)
     : null;
+  const teamSubmission = r.intake_channel === 'team_submit' ? await teamView(prisma, r) : null;
   return {
     id: r.id,
     // `getApRequestDetail` reads `ap_requests` only, so a detail view is ALWAYS an
@@ -466,6 +482,7 @@ export async function getApRequestDetail(
     secondApproverName,
     secondApprovedAt: r.second_approved_at ? r.second_approved_at.toISOString() : null,
     secondApproverNote: r.second_approver_note,
+    teamSubmission,
     attachments: r.attachments.map((a) => ({
       id: a.id,
       kind: a.kind,
@@ -482,5 +499,45 @@ export async function getApRequestDetail(
       senderAddress: f.sender_address,
       bodyText: f.body_text,
     })),
+  };
+}
+
+async function teamView(
+  prisma: PrismaClient,
+  r: {
+    submitted_by: string | null;
+    submitted_site_id: string | null;
+    submitted_at: Date | null;
+    outcome_recipient_id: string | null;
+    outcome_recipient_email: string | null;
+    submitted_vendor: string | null;
+    submitted_invoice_number: string | null;
+    submitted_amount_cents: number | null;
+  },
+): Promise<ApTeamSubmissionView> {
+  const [submitter, site, contact] = await Promise.all([
+    r.submitted_by
+      ? prisma.user.findUnique({ where: { id: r.submitted_by }, select: { name: true } })
+      : null,
+    r.submitted_site_id
+      ? prisma.site.findUnique({ where: { id: r.submitted_site_id }, select: { name: true } })
+      : null,
+    r.outcome_recipient_id
+      ? prisma.apAccountingContact.findUnique({
+          where: { id: r.outcome_recipient_id },
+          select: { display_name: true },
+        })
+      : null,
+  ]);
+  return {
+    submitterName: submitter?.name ?? null,
+    siteName: site?.name ?? null,
+    submittedAt: r.submitted_at ? r.submitted_at.toISOString() : null,
+    accountantId: r.outcome_recipient_id,
+    accountantName: contact?.display_name ?? null,
+    accountantEmail: r.outcome_recipient_email,
+    vendor: r.submitted_vendor,
+    invoiceNumber: r.submitted_invoice_number,
+    amountCents: r.submitted_amount_cents,
   };
 }

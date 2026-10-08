@@ -60,6 +60,8 @@ export const NOTIFY_SURFACE = {
   // Grandfathered — established production surfaces, seeded `live` (§4.4 out-of-scope).
   BONUS_SIGNATURE_CHAIN: 'bonus_signature_chain',
   SURVEY_SENDS: 'survey_sends',
+  /** ADR-0141 — decision + hold mail for team-submitted invoices (per site). */
+  AP_TEAM_OUTCOME: 'ap_team_outcome',
 } as const;
 
 /** UI surfaces whose per-site audience is gated (ADR-0037 D7 pattern → data-driven). */
@@ -137,6 +139,9 @@ export const UI_SURFACE = {
   // runs the same way as Woodland's today; Bill can ramp one without the other
   // and without a deploy.
   REIMBURSEMENT_TILE: 'reimbursement_tile',
+
+  /** ADR-0141 — the manager "submit an invoice" screen and its API. */
+  AP_TEAM_SUBMIT: 'ap_team_submit',
 } as const;
 
 export type NotifySurfaceCode = (typeof NOTIFY_SURFACE)[keyof typeof NOTIFY_SURFACE];
