@@ -26,6 +26,7 @@ const full: OpsOverview = {
     totalOnFloor: 1289,
     anchorPool: 'measured',
     negative: false,
+    negativeCause: null,
     capacity: 3500,
     overCapacity: false,
     pctOfCapacity: 26,
@@ -284,5 +285,46 @@ describe('ADR-0092 — the stale-claim panel', () => {
     expect(html).toContain('ov-stale-claims');
     expect(html).toContain('Not available');
     expect(html).not.toContain('Every open load is moving');
+  });
+});
+
+// 2026-10-08 — the overview card's subtitle names the cause of a negative floor.
+// Pre-fix it read "intake incomplete" for every cause (failed against old code).
+describe('OpsOverviewPanel — negative floor cause', () => {
+  const render = (floor: OpsOverview['floor']) =>
+    renderToStaticMarkup(<OpsOverviewPanel data={{ ...full, floor }} />);
+
+  it('pool split → no intake blame, figure suppressed', () => {
+    const html = render({
+      ...full.floor!,
+      programOnFloor: -147,
+      nonProgramOnFloor: 1750,
+      totalOnFloor: 1603,
+      negative: true,
+      negativeCause: { kind: 'pool-split', pool: 'program' },
+    });
+    expect(html).toContain('Computing negative — program/non-program split mis-recorded');
+    expect(html).not.toContain('intake incomplete');
+    expect(html).not.toContain('1,603');
+  });
+
+  it('stale intake keeps the intake subtitle', () => {
+    const html = render({
+      ...full.floor!,
+      totalOnFloor: -500,
+      negative: true,
+      negativeCause: { kind: 'intake-stale', inboundDaysSince: 9 },
+    });
+    expect(html).toContain('Computing negative — intake incomplete');
+  });
+
+  it('current intake → processing exceeds recorded inbound', () => {
+    const html = render({
+      ...full.floor!,
+      totalOnFloor: -150,
+      negative: true,
+      negativeCause: { kind: 'processing-exceeds-inbound', inboundRecorded: true },
+    });
+    expect(html).toContain('Computing negative — processing exceeds recorded inbound');
   });
 });

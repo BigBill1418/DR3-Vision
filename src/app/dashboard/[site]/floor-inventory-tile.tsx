@@ -10,6 +10,7 @@
 
 import Link from 'next/link';
 import type { FloorInventoryTileData } from '@/lib/dashboard/floor-inventory-tile';
+import { negativeFloorCopy } from '@/lib/inventory/negative-floor';
 
 /** Decimal(7,1) flows can leave a .5 on the floor; show it only when present. */
 function units(v: number): string {
@@ -32,6 +33,26 @@ function Pool({ label, value, emphasize }: { label: string; value: number; empha
       >
         {units(value)}
       </div>
+    </div>
+  );
+}
+
+function NegativeBanner({ tile }: { tile: FloorInventoryTileData }) {
+  // The loader always sets a cause on a negative floor; the fallback only keeps the
+  // banner truthful (no intake blame) if an older producer ever omits it.
+  const copy = negativeFloorCopy(
+    tile.negativeCause ?? { kind: 'processing-exceeds-inbound', inboundRecorded: true },
+  );
+  return (
+    <div
+      className="rounded border border-red-500/60 bg-red-500/10 p-3 text-sm leading-relaxed text-red-200"
+      data-testid="floor-negative-banner"
+      role="status"
+    >
+      <strong className="block text-red-300">
+        {copy.subject} is computing negative{copy.qualifier}.
+      </strong>
+      {copy.reason} This figure is not reliable and is not shown. A physical count resets the floor.
     </div>
   );
 }
@@ -81,18 +102,11 @@ export function FloorInventoryTile({
         than shown alongside it: a negative printed anywhere on a manager surface
         gets copied into a spreadsheet, and this one is not a measurement of
         anything. The projection row below is suppressed for the same reason.
+        2026-10-08 — the banner names the CAUSE (pool split / stale intake /
+        processing ahead of inbound) instead of always blaming intake.
       */}
       {tile.negative ? (
-        <div
-          className="rounded border border-red-500/60 bg-red-500/10 p-3 text-sm leading-relaxed text-red-200"
-          data-testid="floor-negative-banner"
-          role="status"
-        >
-          <strong className="block text-red-300">On-hand is computing negative.</strong>
-          Intake data is incomplete — processing has been subtracted from inbound that has not all
-          been recorded. This figure is not reliable and is not shown. A physical count resets the
-          floor.
-        </div>
+        <NegativeBanner tile={tile} />
       ) : (
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
           <Pool label="Program" value={tile.programOnFloor} emphasize />

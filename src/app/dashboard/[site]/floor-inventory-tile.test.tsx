@@ -17,6 +17,7 @@ const base: FloorInventoryTileData = {
   totalOnFloor: 1289,
   anchorPool: 'measured',
   negative: false,
+  negativeCause: null,
   capacity: 3500,
   overCapacity: false,
   pctOfCapacity: 26,
@@ -102,6 +103,7 @@ describe('FloorInventoryTile — negative floor', () => {
     nonProgramOnFloor: 512,
     totalOnFloor: -1927,
     negative: true,
+    negativeCause: { kind: 'intake-stale', inboundDaysSince: 13 },
   };
 
   // ── FALSIFICATION (tile banner) ───────────────────────────────────────────
@@ -192,10 +194,75 @@ describe('FloorInventoryTile — over capacity', () => {
       programOnFloor: -2439,
       totalOnFloor: -2439,
       negative: true,
+      negativeCause: { kind: 'processing-exceeds-inbound', inboundRecorded: false },
       overCapacity: false,
     };
     const html = renderToStaticMarkup(<FloorInventoryTile tile={negative} siteCode="eugene" />);
     expect(html).toContain('floor-negative-banner');
     expect(html).not.toContain('floor-over-capacity-banner');
+  });
+});
+
+// ── 2026-10-08 — the banner names the cause instead of always blaming intake ──
+// Each case failed against the pre-fix component, which printed "Intake data is
+// incomplete" for every negative floor (Woodland 2026-10-07, intake 0 days old).
+describe('FloorInventoryTile — negative floor cause (2026-10-08)', () => {
+  const neg = (over: Partial<FloorInventoryTileData>): FloorInventoryTileData => ({
+    ...base,
+    negative: true,
+    ...over,
+  });
+
+  it('CASE 1 pool split → names the program pool, no intake blame, no figures', () => {
+    const html = renderToStaticMarkup(
+      <FloorInventoryTile
+        tile={neg({
+          programOnFloor: -147,
+          nonProgramOnFloor: 1750,
+          totalOnFloor: 1603,
+          negativeCause: { kind: 'pool-split', pool: 'program' },
+        })}
+        siteCode="woodland"
+      />,
+    );
+    expect(html).toContain('Program on-hand is computing negative while the total is positive.');
+    expect(html).toContain('check how non-program units are entered in the daily close');
+    expect(html).not.toContain('Intake data is incomplete');
+    expect(html).not.toContain('147');
+    expect(html).not.toContain('1,603');
+    expect(html).not.toContain('data-testid="floor-pool-total"');
+  });
+
+  it('CASE 2 stale intake → keeps the intake wording with its age', () => {
+    const html = renderToStaticMarkup(
+      <FloorInventoryTile
+        tile={neg({
+          programOnFloor: -600,
+          totalOnFloor: -500,
+          negativeCause: { kind: 'intake-stale', inboundDaysSince: 9 },
+        })}
+        siteCode="woodland"
+      />,
+    );
+    expect(html).toContain('On-hand is computing negative.');
+    expect(html).toContain('Intake data is incomplete — most recent inbound is 9 days old.');
+  });
+
+  it('CASE 3 current intake → processing exceeds recorded inbound, no intake blame', () => {
+    const html = renderToStaticMarkup(
+      <FloorInventoryTile
+        tile={neg({
+          programOnFloor: -200,
+          totalOnFloor: -150,
+          negativeCause: { kind: 'processing-exceeds-inbound', inboundRecorded: true },
+        })}
+        siteCode="woodland"
+      />,
+    );
+    expect(html).toContain(
+      'More units have been processed than were recorded coming in since the last physical count.',
+    );
+    expect(html).not.toContain('Intake data is incomplete');
+    expect(html).not.toContain('days old');
   });
 });

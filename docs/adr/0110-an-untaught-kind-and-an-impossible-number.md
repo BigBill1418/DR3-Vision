@@ -211,3 +211,41 @@ meaningless.
   one release click and buys an audit row naming who approved a floor-moving swing.
 - **A dedicated inbound-freshness module.** Rejected explicitly by the handoff and
   on the merits — the value was already being fetched and discarded.
+
+## Amendment 1 — 2026-10-08: a negative floor names its cause
+
+D3 said a negative pool is "proof that an input is missing — real processing
+subtracted from incomplete intake", and every surface printed that reason for
+every negative. Woodland's 2026-10-07 report read: "⚠ On-hand is computing
+negative (−147). Intake data is incomplete — most recent inbound is 0 days old."
+Intake was current: MyMRC inbound had posted that same day. The fault was the
+**pool split**. Since the Sep 14 anchor (program 128 / non-program 757): inbound
+15,845 program / 1,179 non-program, drop-offs +114, stripped 16,234 program / 186
+non-program. Program came to −147, non-program to ≈1,750, and the total to
+≈+1,600. On 17 of 18 days `stripped_non_program` was 0, so non-program strips
+were being keyed as program.
+
+**Decision (Bill approved, 2026-10-08).** `classifyNegativeFloor`
+(`src/lib/inventory/negative-floor.ts`) picks one of three causes, and the same
+module supplies the wording for the report, the floor tile and the overview card:
+
+| Case | Condition                       | What the manager reads                                                                                                                                                                     |
+| ---- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | total ≥ 0, one pool < 0         | "Program on-hand is computing negative (−147) while the total is positive. The program/non-program split looks mis-recorded — check how non-program units are entered in the daily close." |
+| 2    | total < 0, inbound stale (D4)   | Unchanged: "Intake data is incomplete — most recent inbound is N days old."                                                                                                                |
+| 3    | total < 0, inbound current/none | "More units have been processed than were recorded coming in since the last physical count." (plus "Inbound is up to date…" or "no inbound has ever been recorded for this site")          |
+
+The D3 rule is unchanged. The figure is still replaced, never shown. On the email
+the magnitude appears once, inside the sentence. The tile and the overview card
+carry no magnitude at all. The "Last physical count" line and the "A physical
+count resets the floor" sentence stay.
+
+The tile now carries `negativeCause`, decided in `computeFloorInventoryTile` for
+the same reason `negative` is (one verdict for every surface). Intake recency is
+read **only when the total is negative**, through `latestVerifiedInboundDay` (the
+D4 query, now shared with `latestFlowDayKey`) and `assessInboundRecency`. A pool
+split does not depend on intake, and a healthy floor on the 5-second poll pays no
+extra query.
+
+Not done here: correcting Woodland's mis-keyed split. That is a data-entry issue
+for the daily close, and a physical count resets the floor.
