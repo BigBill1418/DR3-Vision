@@ -107,7 +107,10 @@ a referenced user can't be resolved. Confirm in Entra these accounts are
 - `morena.gomez@svdp.us` (Morena — manager; Woodland ops signer; Woodland
   facility override backup)
 - `janette.tomas@svdp.us` (Janette — manager; Woodland facility signer)
-- `rick.albritton@svdp.us` (Rick — manager; Eugene facility signer)
+- `rick.albritton@svdp.us` (Rick — manager; Eugene facility signer until 2026-10-07,
+  Eugene **ops** signer and facility override backup from 2026-10-07, ADR-0019.7)
+- `patrick.dills@svdp.us` (Patrick — manager; Eugene ops signer 2026-08-11 → 2026-10-07
+  (ADR-0019.3), Eugene **facility** signer from 2026-10-07 (ADR-0019.7))
 
 > Seed accounts are seeded **inactive**; an admin activates each account via the
 > `/admin/users` panel after the user's first Entra SSO sign-in.

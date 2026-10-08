@@ -19,7 +19,21 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.CC — 2026-10-07 bonus rate change for 2026-10-13 (ADR-0019.6) — **SHIPPED; one decision for Bill**
+## 0.CD — 2026-10-07 Eugene chain swap (ADR-0019.7) — **SHIPPED**
+
+Bill, 18:31 PDT, option "a": Patrick Dills signs Eugene facility (override Bill/Rick); Rick Albritton signs ops
+(override Bill). Applied by migration `20260868_adr0019_7_eugene_chain_slot_swap` with an audit row. No Eugene
+period had a signature request outstanding. Period 21 (closes 10/13 07:00 PT) goes to Patrick then Rick.
+
+- **CHECK ON 2026-10-13 (no action expected):** Period 21's close sends the facility request to Patrick.
+- **For Bill only if it ever arises:** the ADR-0019.3 §2 guard still refuses Patrick on any period holding his own
+  entries. Today that means only his 27 historical periods (last entry 2026-01-14). If he is reactivated as a
+  processor and you want him to sign periods that pay himself, that means removing the guard, which is a separate
+  decision.
+
+---
+
+## 0.CC — 2026-10-07 bonus rate change for 2026-10-13 (ADR-0019.6) — **SHIPPED; daily-report question DECIDED 2026-10-07: leave as is**
 
 Bill approved at 5:12 PM PDT: from Tue 2026-10-13 both sites pay `MAX(units − 60, 0) × $1.00 + MAX(units − 100, 0)
 × $0.25`, on days dated 10/13 or later only. Shipped as an effective-dated migration plus a seed CSV change, so
@@ -30,10 +44,12 @@ nothing has to be switched on the day. Every pay read now prices each entry by i
   the CHANGELOG entry.
 - **CHECK ON 2026-10-13/14 (no action expected):** the first Period 22 entries price at the new rate on the grid
   and the standings page. "Qualifies above 60 units/day" shows from 10/13.
-- **DECISION FOR BILL (pre-existing, not changed):** the 8 PM daily report's per-line bonus figure is computed on
+- **DECIDED 2026-10-07 18:31 PDT — Bill chose "c": leave it as is. ACCEPTED / WON'T CHANGE; do not re-raise.**
+  The behaviour as decided: the 8 PM daily report's per-line bonus figure is computed on
   PROCESSED units only (`daily-report.ts`, the ADR-0083 production-quantity reading). The period will lock on
   processed + saves. On a day with saves, the email shows a lower bonus than payroll will pay. Options: price
   that column on paid units (bring it in line with the PDF), or relabel it. Not payroll-affecting either way.
+  (Options were offered; Bill chose neither: the column stays processed-only.)
 - The 2026-10-06 comparison PDF (`dr3-bonus-compare-ca-or-20261006`) describes the pre-10/13 rules and is
   point-in-time.
 

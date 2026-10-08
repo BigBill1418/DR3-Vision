@@ -18,7 +18,7 @@ const SITE_LABEL: Record<SiteCode, string> = {
 
 const SITE_BLURB: Record<SiteCode, string> = {
   woodland: 'California — Janette & Morena',
-  eugene: 'Oregon — Rick & Kelsey',
+  eugene: 'Oregon — Patrick & Rick', // ADR-0019.7: facility & ops signers
 };
 
 export function SitePicker({ sites }: { sites: SiteCode[] }) {
