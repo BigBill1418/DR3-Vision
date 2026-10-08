@@ -46,6 +46,12 @@ Ryan's independent review of PR #294 found three gaps. All three are fixed in br
   list, the hold actions read status via a new read-only, site-scoped `GET …/count/holds/[holdId]`, and nothing is
   resent. F2: the stall banner's 25 s clock is per job (`useStallTracker`). ADR-0140 Amendment 1 › "Review of PR
   #297".
+- **CF-6 — re-review of PR #297, notes N1–N5: FIXED IN PR (2026-10-08, Bill-approved before merge).**
+  Verified-open-because: `src/app/sw.ts` had no `/api/operator/` rule (N1, the status GET fell to the default `/api/`
+  NetworkFirst cache); `hold_timeout_pending` said "try again" outright (N2); `resolveUnanswered` used the 20 s
+  default (N3); the void comment named `snapshot_not_found` where `void-count.ts:323` returns `alreadyVoided` (N4);
+  no discard-pending, discard-resolved-elsewhere or dropped-connection tests (N5). All five fixed on the #297
+  branch; ADR-0140 Amendment 1 › "Re-review of PR #297". Es/Urdu wording of N2 not native-reviewed.
 - **CF-5 — found in passing, NOT fixed here (needs its own reviewed change): OPEN.** (a) `POST`/`DELETE
 …/count/holds/[holdId]` do not compare the hold's `site_id` with the operator's site; `releaseHold` checks the
   approver's eligibility at the hold's site, but `discardHold` would discard another site's hold given its id

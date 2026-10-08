@@ -19,6 +19,12 @@
 export const API_TIMEOUT_MS = 20_000;
 /** Deadline for a photo PUT to R2 — a large body on a weak link needs longer. */
 export const UPLOAD_TIMEOUT_MS = 90_000;
+/**
+ * Deadline for a read-only status check that runs AFTER an action already spent
+ * its API_TIMEOUT_MS inside the same watched job (ADR-0140 Am.1, review N3).
+ * 20 s + 4 s stays under the 25 s stall watchdog; a 5 s read would tie it.
+ */
+export const STATUS_READ_TIMEOUT_MS = 4_000;
 
 export class FetchTimeoutError extends Error {
   constructor(url: string, ms: number) {

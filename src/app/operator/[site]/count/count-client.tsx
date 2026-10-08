@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
 import { enqueueAction, isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
-import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
+import { FetchTimeoutError, fetchWithTimeout, STATUS_READ_TIMEOUT_MS } from '@/lib/fetch-timeout';
 import { useStallWatch } from '@/lib/floor/use-watched-transition';
 import {
   classifyWriteRefusal,
@@ -263,9 +263,14 @@ export function CountClient({
   async function resolveUnanswered(h: Hold, action: 'approve' | 'discard'): Promise<void> {
     let status: string | null = null;
     try {
-      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/holds/${h.holdId}`, {
-        method: 'GET',
-      });
+      // Review N3 — a short deadline of its own. This read runs AFTER the
+      // action's 20 s deadline, inside the same watched job, so at the default
+      // 20 s it would run well past the 25 s Reload banner (STALL_AFTER_MS).
+      const res = await fetchWithTimeout(
+        `/api/operator/${siteCode}/count/holds/${h.holdId}`,
+        { method: 'GET', cache: 'no-store' },
+        STATUS_READ_TIMEOUT_MS,
+      );
       if (res.status === 404) status = 'gone';
       else if (res.ok) {
         const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;

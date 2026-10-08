@@ -9,7 +9,8 @@
 // have LANDED. The screen no longer says "Couldn't save"; it re-reads the
 // server-rendered page (router.refresh) so a void that landed drops off the list
 // and the total is the restored one, and says so. Nothing is resent; a retap of
-// a row that is gone is answered `snapshot_not_found`.
+// a row that is already voided is the no-op success `alreadyVoided`
+// (void-count.ts), never a second void or a second audit row.
 //
 // FALSIFIED BY HAND: with the bare `fetch` restored, the waitFor below times out.
 
@@ -19,7 +20,8 @@ import en from '@/i18n/locales/en/operator.json';
 
 vi.mock('@/lib/offline-queue', () => ({
   newIdempotencyKey: () => 'void-key-1',
-  isOfflineError: () => false,
+  // The real classifier's network-layer half (offline-queue.ts isOfflineError).
+  isOfflineError: (e: unknown) => e instanceof TypeError,
 }));
 
 vi.mock('@/lib/fetch-timeout', async (importOriginal) => {
@@ -82,6 +84,31 @@ describe('a count void that never answers', () => {
       'a void the server never acked shown as done',
     ).toBeNull();
     expect(refresh, 'a void that landed left the stale on-hand number').toHaveBeenCalledTimes(1);
+    expect(fetch, 'the void was resent').toHaveBeenCalledTimes(1);
+  });
+
+  it('a dropped connection (not a deadline) takes the same path: refresh, "may have landed"', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Load failed');
+      }),
+    );
+    render(
+      <CountVoidClient
+        siteCode="woodland"
+        counts={[
+          { id: 'snap-1', countedAtLabel: '9:12 AM', physicalTotal: 2483, enteredByLabel: null },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: en.floor.count.void_action }));
+    fireEvent.click(screen.getByTestId('count-void-yes'));
+
+    await waitFor(() => expect(screen.getByTestId('count-void-list')).toBeTruthy());
+    expect(document.body.textContent).toContain(en.floor.count.void_timeout);
+    expect(document.body.textContent).not.toContain(en.floor.common.save_failed);
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(fetch, 'the void was resent').toHaveBeenCalledTimes(1);
   });
 

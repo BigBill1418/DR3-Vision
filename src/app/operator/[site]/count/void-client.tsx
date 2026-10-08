@@ -120,8 +120,11 @@ export function CountVoidClient({
       // LANDED, and saying "Couldn't save" left the removed count on the list and
       // the old on-hand number on the page. Re-read the server-rendered page: if
       // the void landed, the row is gone from the refreshed list and the total is
-      // the restored one. Nothing is resent; a retap of a row that is gone is
-      // answered `snapshot_not_found` ("not there any more"), never a second void.
+      // the restored one. Nothing is resent, and a second void cannot happen: a
+      // retap of a row that is already voided is answered with the no-op success
+      // `alreadyVoided` (void-count.ts, the `snapshot.voided_at !== null` branch —
+      // no second audit row). `snapshot_not_found` only appears if the refreshed
+      // page has already dropped the row and a stale id is sent anyway.
       if (e instanceof FetchTimeoutError || isOfflineError(e)) {
         setError(t('floor.count.void_timeout'));
         router.refresh();

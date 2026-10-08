@@ -472,7 +472,7 @@
       "void_err_prior_day": "Ese conteo se tomó el {{day}}, no hoy. Pida a la oficina que lo cambie.",
       "void_err_gone": "Ese conteo ya no está.",
       "hold_gone": "Un gerente ya se encargó de esto. Ingresa el conteo otra vez si aún lo necesitas.",
-      "hold_timeout_pending": "El servidor no respondió. El conteo sigue esperando aprobación — inténtalo de nuevo.",
+      "hold_timeout_pending": "El servidor no respondió. El servidor todavía muestra este conteo esperando aprobación, pero puede que tu toque aún se esté procesando. Espera un momento y revisa la pantalla antes de intentarlo de nuevo.",
       "hold_timeout_unknown": "El servidor no respondió. Puede que sí se haya guardado — la pantalla se actualizó. Revisa el total del piso antes de intentarlo de nuevo.",
       "void_timeout": "El servidor no respondió. La lista se actualizó — si ese conteo ya no aparece, se eliminó.",
       "void_done_again": "Volver a los conteos"

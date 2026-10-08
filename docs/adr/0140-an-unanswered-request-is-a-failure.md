@@ -127,7 +127,8 @@ Ryan's review of this amendment's PR found two defects; Bill approved fixing bot
   hold action calls a new read-only `GET /api/operator/[site]/count/holds/[holdId]`, which returns `{ status }` and
   nothing else, requires the same activated operator session as the write routes, and answers 404 for a hold at
   another site exactly as for a missing one. The screen lands on the saved/discarded result, the existing D-9
-  "already dealt with" landing, "still waiting — try again", or "it may have gone through — refreshed" when the
+  "already dealt with" landing, "still waiting, but your tap may still be going through — check before retrying"
+  (softened by re-review N2, below), or "it may have gone through — refreshed" when the
   status cannot be read either. A read was chosen over re-sending the write because a re-sent approve needs the PIN
   again and a re-sent discard is not a probe; the release CAS (ADR-0118) still makes any human retap harmless.
   PIN verification, the self-release refusal and manager eligibility are unchanged.
@@ -143,6 +144,43 @@ Ryan's review of this amendment's PR found two defects; Bill approved fixing bot
   `void-client.deadline.test.tsx` (refresh + honest message; a 500 still reads "Couldn't save"),
   `stall-banner.test.tsx` (overlapping jobs; a stalled first job is not hidden; unmount). Falsified against the
   pre-fix code: 6 of the 7 F1 behavioural cases and the F2 overlap case failed there.
+
+### Re-review of PR #297 (2026-10-08) — PASS-WITH-NOTES, five notes fixed before merge
+
+Ryan re-reviewed the fixed PR (head `e94f766`) and passed it with five notes; Bill approved fixing them on the
+same branch. Each was verified open in the code first.
+
+- **N1 (medium) — the status read could be answered from the service worker's cache.** `src/app/sw.ts` had no
+  rule for `/api/operator/...`, so the new `GET …/count/holds/[holdId]` fell to `@serwist/next/worker`'s
+  production `defaultCache` `/api/` entry: NetworkFirst, 10 s network timeout, cache `apis` kept up to 24 h. On a
+  slow uplink a cached `pending` from an earlier read could be served after a timed-out Approve that had landed.
+  **Decision:** a `NetworkOnly` GET rule for exactly `^/api/operator/[^/]+/count/holds/[^/]+/?$`, placed directly
+  after the `/healthz` rule and ahead of `defaultCache`. Rule order was confirmed in Serwist's source, not assumed:
+  `registerRoute` pushes onto a per-method list in `runtimeCaching` order and `findMatchingRoute` returns the first
+  match. **Not widened** to all of `/api/operator/`: the writes there are POST/DELETE and no runtime route matches
+  those methods, so they already reach the network; the only other operator GET is the inbound day list, whose
+  offline fallback is a separate behaviour decision and is left as it is.
+- **N2 (low) — `hold_timeout_pending` overstated what a `pending` read proves.** The lost Approve can still be in
+  flight server-side. The en/es/ur text now says the server still shows the count waiting but the tap may still be
+  going through, and to check the screen before retrying. Control flow is unchanged. The Spanish and Urdu strings
+  are the implementer's own translations and have not been reviewed by a native speaker.
+- **N3 (low) — the status read used the default 20 s deadline**, so action (20 s) plus read (20 s) ran well past
+  the 25 s stall watchdog in the same watched job. It now uses `STATUS_READ_TIMEOUT_MS` = **4 s** (in
+  `src/lib/fetch-timeout.ts`). 4 s rather than the suggested ~5 s because 20 + 5 = 25 ties `STALL_AFTER_MS` and
+  the Reload banner could still win the race. Every other deadline is unchanged.
+- **N4 (low) — stale comment in `void-client.tsx`.** A retap of an already-voided row is the no-op success
+  `alreadyVoided` (`src/lib/inventory/void-count.ts`, the `snapshot.voided_at !== null` branch, no second audit
+  row), not `snapshot_not_found`; that 404 appears only if the refreshed list has already dropped the row and a
+  stale id is sent. Comment (and the test header) corrected; no behaviour change.
+- **N5 (low) — test gaps.** Added: discard with the hold still pending; discard of a hold resolved elsewhere (lands
+  on D-9, not "discarded"); a dropped connection (`TypeError: Load failed`, not a deadline) for approve, discard and
+  void; and the status read asks for `STATUS_READ_TIMEOUT_MS` with action + read under `STALL_AFTER_MS`.
+- **Tests:** `src/app/sw.routes.test.ts` imports the real `sw.ts` with the production `defaultCache` (outside
+  production `defaultCache` is a single catch-all NetworkOnly entry, which would make the test vacuous), replays
+  Serwist's first-match lookup, and asserts the hold-status read and `/healthz` resolve to NetworkOnly, the rule
+  does not sweep in `/inbound`, and without the custom entries the same URL resolves to the `apis` cache.
+  Falsified by hand: with `[...defaultCache, ...customCaching]` two cases fail; with the `isOfflineError` half
+  removed from the approve/discard catch, the two dropped-connection cases fail.
 
 ### Not verified
 

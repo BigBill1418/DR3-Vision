@@ -37,9 +37,9 @@ These are the gaps from the independent review of PR #294. **Unmerged, in PR; st
   count is no longer on it, it was removed". A timed-out **hold approve/discard** reads the hold's status through a
   new read-only, site-scoped `GET /api/operator/[site]/count/holds/[holdId]` (returns `{ status }` only; another
   site's hold is the same 404 as a missing one) and lands on the saved/discarded result, the existing "a manager
-  already dealt with this one" landing, "still waiting — try again", or, if the status cannot be read either, "it may
-  have gone through — the screen has been refreshed". Nothing is ever resent; the release CAS (ADR-0118) and
-  `snapshot_not_found` keep any retap harmless. PIN, self-release and manager-eligibility checks are untouched.
+  already dealt with this one" landing, "still waiting — but your tap may still be going through, check before
+  retrying", or, if the status cannot be read either, "it may have gone through — the screen has been refreshed".
+  Nothing is ever resent; the release CAS (ADR-0118) and the void's `alreadyVoided` no-op keep any retap harmless. PIN, self-release and manager-eligibility checks are untouched.
   EN/ES/Urdu strings added.
 - **F2 — the stall banner's 25 s clock is now per job.** `useStallTracker` kept one screen-wide timer, started by the
   first job and cleared only when nothing was in flight, so when job 1 settled while job 2 ran, job 1's clock raised
@@ -48,6 +48,25 @@ These are the gaps from the independent review of PR #294. **Unmerged, in PR; st
 - Tests: `count-client.hold-timeout.test.tsx` (5), `holds/[holdId]/route.test.ts` (3), `void-client.deadline` (updated
   - 1), `stall-banner` (+2). The new behavioural tests were run against the pre-fix code and failed there (6 of 7 F1,
     the F2 overlap case).
+
+### Fixed — re-review of PR #297 (PASS-WITH-NOTES; five notes fixed before merge on Bill's approval)
+
+- **N1 — the hold-status read can no longer be answered from the service worker's cache.** It fell to Serwist's
+  default `/api/` rule (NetworkFirst, 10 s, cached up to 24 h), so a slow uplink could get an old `pending` after an
+  Approve that had landed. `src/app/sw.ts` now has a `NetworkOnly` rule for exactly
+  `/api/operator/<site>/count/holds/<id>`, ahead of the defaults, next to the `/healthz` rule. Writes under
+  `/api/operator/` were already uncached (no runtime route matches POST/DELETE); the inbound day list is unchanged.
+- **N2 — "still waiting" is now honest about timing.** EN/ES/Urdu `hold_timeout_pending` says the server still shows
+  the count waiting but the tap may still be going through, and to check before retrying. Same control flow. The
+  Spanish and Urdu wording is the implementer's own translation, not yet native-reviewed.
+- **N3 — the status read has a 4 s deadline** (`STATUS_READ_TIMEOUT_MS`), so a 20 s action plus its read stays under
+  the 25 s Reload banner. Other deadlines unchanged.
+- **N4 — corrected comment** in `void-client.tsx`: a retap of an already-voided row is the `alreadyVoided` no-op
+  success, not `snapshot_not_found`.
+- **N5 — tests:** discard with the hold still pending; discard of a hold resolved elsewhere; a dropped connection
+  (not a deadline) on approve, discard and void; the status read's deadline. New `sw.routes.test.ts` loads the real
+  service worker with production defaults and asserts which route each never-cache read resolves to. Falsified by
+  hand (rule order reversed; dropped-connection branch removed): the new cases fail.
 
 ### Tests
 

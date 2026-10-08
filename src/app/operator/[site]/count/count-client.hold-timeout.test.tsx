@@ -19,16 +19,24 @@ import en from '@/i18n/locales/en/operator.json';
 
 const { enqueueAction, isOfflineError, newIdempotencyKey } = vi.hoisted(() => ({
   enqueueAction: vi.fn(async () => ({})),
-  isOfflineError: vi.fn(() => false),
+  isOfflineError: vi.fn<(e: unknown) => boolean>(() => false),
   newIdempotencyKey: vi.fn(() => '0000000000abc-0000000000000000key1'),
 }));
 vi.mock('@/lib/offline-queue', () => ({ enqueueAction, isOfflineError, newIdempotencyKey }));
 
+// Every call runs on a 40 ms deadline so the tests are fast, but the deadline the
+// component ASKED for is recorded: review N3 pins the status read's own budget.
+const { deadlines } = vi.hoisted(() => ({
+  deadlines: [] as Array<{ url: string; method: string; ms: number | undefined }>,
+}));
 vi.mock('@/lib/fetch-timeout', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/fetch-timeout')>();
   return {
     ...orig,
-    fetchWithTimeout: (url: string, init?: RequestInit) => orig.fetchWithTimeout(url, init, 40),
+    fetchWithTimeout: (url: string, init?: RequestInit, ms?: number) => {
+      deadlines.push({ url, method: init?.method ?? 'GET', ms });
+      return orig.fetchWithTimeout(url, init, 40);
+    },
   };
 });
 
@@ -45,6 +53,8 @@ vi.mock('@/i18n/provider', async () => {
 });
 
 import { CountClient } from './count-client';
+import { API_TIMEOUT_MS, STATUS_READ_TIMEOUT_MS } from '@/lib/fetch-timeout';
+import { STALL_AFTER_MS } from '@/lib/floor/use-watched-transition';
 
 const HOLD_URL = '/api/operator/woodland/count/holds/hold-1';
 
@@ -61,11 +71,20 @@ function neverAnswers(init?: RequestInit): Promise<Response> {
   });
 }
 
+/** The connection drops mid-request: what Safari throws ("Load failed"). */
+function drops(): Promise<Response> {
+  return Promise.reject(new TypeError('Load failed'));
+}
+
 /**
  * The count POST answers with a Tier 2 hold; the hold write (POST/DELETE) never
- * answers; the status read answers with `read` (or never, when null).
+ * answers (or, with `write: 'drop'`, loses its connection); the status read
+ * answers with `read` (or never, when null).
  */
-function server(read: ((init?: RequestInit) => Promise<Response>) | null) {
+function server(
+  read: ((init?: RequestInit) => Promise<Response>) | null,
+  write: 'hang' | 'drop' = 'hang',
+) {
   const f = vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? 'GET';
     if (url === '/api/operator/woodland/count') {
@@ -78,7 +97,8 @@ function server(read: ((init?: RequestInit) => Promise<Response>) | null) {
         approvers: [{ id: 'u-mgr', name: 'Manager' }],
       });
     }
-    if (url === HOLD_URL && (method === 'POST' || method === 'DELETE')) return neverAnswers(init);
+    if (url === HOLD_URL && (method === 'POST' || method === 'DELETE'))
+      return write === 'drop' ? drops() : neverAnswers(init);
     if (url === HOLD_URL && method === 'GET') return read ? read(init) : neverAnswers(init);
     throw new Error(`unexpected ${method} ${url}`);
   });
@@ -114,9 +134,17 @@ async function approve(): Promise<void> {
   fireEvent.click(screen.getByTestId('hold-approve'));
 }
 
+async function discard(): Promise<void> {
+  vi.spyOn(window, 'prompt').mockReturnValue('typo');
+  await toHold();
+  fireEvent.click(screen.getByRole('button', { name: en.floor.count.hold_discard }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  isOfflineError.mockReturnValue(false);
+  deadlines.length = 0;
+  // The real classifier's network-layer half (offline-queue.ts isOfflineError).
+  isOfflineError.mockImplementation((e: unknown) => e instanceof TypeError);
 });
 afterEach(() => {
   cleanup();
@@ -166,11 +194,65 @@ describe('Approve times out', () => {
 
 describe('Discard times out', () => {
   it('and the discard LANDED: shows discarded, without resending', async () => {
-    vi.spyOn(window, 'prompt').mockReturnValue('typo');
     const f = server(async () => json(200, { status: 'discarded' }));
-    await toHold();
-    fireEvent.click(screen.getByRole('button', { name: en.floor.count.hold_discard }));
+    await discard();
     await waitFor(() => expect(document.body.textContent).toContain(en.floor.count.hold_discarded));
     expect(writes(f)).toBe(1);
+  });
+
+  it('and the hold is still pending: stays on the hold and says so', async () => {
+    const f = server(async () => json(200, { status: 'pending' }));
+    await discard();
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(en.floor.count.hold_timeout_pending),
+    );
+    expect(screen.getByTestId('count-hold')).toBeTruthy();
+    expect(document.body.textContent).not.toContain(en.floor.count.hold_discarded);
+    expect(writes(f), 'the discard was resent').toBe(1);
+  });
+
+  it('and someone else resolved it (approved elsewhere): the D-9 landing, not "discarded"', async () => {
+    const f = server(async () => json(200, { status: 'approved' }));
+    await discard();
+    await waitFor(() => expect(document.body.textContent).toContain(en.floor.count.hold_gone));
+    expect(screen.queryByTestId('count-hold')).toBeNull();
+    expect(document.body.textContent).not.toContain(en.floor.count.hold_discarded);
+    expect(refresh).toHaveBeenCalled();
+    expect(writes(f)).toBe(1);
+  });
+});
+
+describe('the connection drops (a network error, not a deadline)', () => {
+  it('Approve: re-reads the status and lands where it says, without resending', async () => {
+    const f = server(async () => json(200, { status: 'approved' }), 'drop');
+    await approve();
+    await waitFor(() => expect(document.body.textContent).toContain(en.floor.count.result_heading));
+    expect(document.body.textContent).not.toContain(en.floor.common.save_failed);
+    expect(refresh).toHaveBeenCalled();
+    expect(writes(f), 'the release was resent').toBe(1);
+  });
+
+  it('Discard: re-reads the status and lands where it says, without resending', async () => {
+    const f = server(async () => json(200, { status: 'discarded' }), 'drop');
+    await discard();
+    await waitFor(() => expect(document.body.textContent).toContain(en.floor.count.hold_discarded));
+    expect(document.body.textContent).not.toContain(en.floor.common.save_failed);
+    expect(writes(f), 'the discard was resent').toBe(1);
+  });
+});
+
+describe('review N3 — the status read has its own short deadline', () => {
+  it('asks for STATUS_READ_TIMEOUT_MS, and action + read stays under the stall watchdog', async () => {
+    server(async () => json(200, { status: 'pending' }));
+    await approve();
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(en.floor.count.hold_timeout_pending),
+    );
+    const read = deadlines.find((d) => d.url === HOLD_URL && d.method === 'GET');
+    const write = deadlines.find((d) => d.url === HOLD_URL && d.method === 'POST');
+    expect(read?.ms).toBe(STATUS_READ_TIMEOUT_MS);
+    // The release itself keeps the default deadline (undefined = API_TIMEOUT_MS).
+    expect(write?.ms ?? API_TIMEOUT_MS).toBe(API_TIMEOUT_MS);
+    expect(API_TIMEOUT_MS + STATUS_READ_TIMEOUT_MS).toBeLessThan(STALL_AFTER_MS);
   });
 });
