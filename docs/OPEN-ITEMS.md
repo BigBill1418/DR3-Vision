@@ -19,13 +19,20 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **SHIPPED born pilot; go-live is Bill's**
+## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **LIVE at both sites (2026-10-08 1:55 PM PDT)**
 
-- **CE-1 (Bill):** run a pilot submission as admin at `/dashboard/woodland/ap-submit`
-  (the decision mail reroutes to admins with the would-have-sent header naming the
-  accountant), then flip `ap_team_submit` **and** `ap_team_outcome` live per site at
-  `/admin/rollout`. Flipping only the UI row would let managers submit while the
-  accountant mail still reroutes to admins.
+- **CE-1 — CLOSED 2026-10-08 13:55 PDT.** Bill, 13:54 PDT: *"no not pilot go live and make sure
+  this is ready to go"*. All four rows (`ap_team_submit` + `ap_team_outcome` × Woodland, Eugene)
+  flipped `pilot → live` together by `scripts/one-off/2026-10-08-ap-team-submit-flip-live.mjs`
+  (4 audit rows, actor label `system:ap-team-submit-flip`). The admin pilot test submission was
+  **skipped** at Bill's direction; the first real team submission is the first end-to-end run, so
+  watch its decision mail. Readiness at flip: Woodland managers Morena Gomez + Janette Tomas,
+  Eugene managers Kelsey Ruhland, Patrick Dills, Rick Albritton, Shannon Rockwell (all with a
+  primary site); 5 active AP approvers; accounting contacts Gloria Salpino, Mary Scott, Yvonne
+  Stephens all active.
+- **CE-3 (open, Bill):** Daven Stetson is an active `manager` with **no `primary_site_id`**, so
+  `teamSubmitAccess` returns `forbidden_site` for him at every site. Set his primary site if he
+  should be able to submit.
 - **CE-2 (accepted residual):** the submitter may approve their own sub-$1,000 team
   invoice (Bill's Q6 decision, ADR-0141 D5).
 
