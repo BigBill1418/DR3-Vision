@@ -842,6 +842,63 @@ async function resolveForwarderRecipients(
   return { recipients, cc };
 }
 
+/** The routing facts a request-scoped email needs (ADR-0141 D4). */
+export interface OutcomeRoutingRow {
+  sender_address: string | null;
+  /** Absent on fixtures/rows read before ADR-0141 — treated as `mailbox`. */
+  intake_channel?: 'mailbox' | 'team_submit' | null;
+  outcome_recipient_email?: string | null;
+  submitted_site_id?: string | null;
+}
+
+export interface OutcomeRouting {
+  recipients: string[];
+  cc: string[];
+  surfaceCode: string;
+  site: { id: string } | null;
+}
+
+/**
+ * ADR-0141 D4 — the ONE recipient resolver for every request-scoped email (hold
+ * notice, decision, second signature, resend).
+ *
+ * - `mailbox` rows: exactly `resolveForwarderRecipients` on the `ap_notify`
+ *   org-wide surface. Byte-identical to the pre-ADR-0141 behaviour, pinned by test.
+ * - `team_submit` rows (Bill, 2026-10-08): To = the accountant the submitter
+ *   picked (the snapshot), CC = the submitter + the `ap_decision_recipients`
+ *   roster, de-duplicated case-insensitively and never repeating the To address.
+ *   Routed through the per-site `ap_team_outcome` surface (ADR-0047: born pilot).
+ */
+export async function resolveOutcomeRecipients(
+  prisma: PrismaClient,
+  req: OutcomeRoutingRow,
+): Promise<OutcomeRouting> {
+  if (req.intake_channel !== 'team_submit') {
+    const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
+    return { recipients, cc, surfaceCode: NOTIFY_SURFACE.AP_NOTIFY, site: null };
+  }
+  const internal = (e: string): boolean => !!e && isInternal(e, internalDomain());
+  const accountant = (req.outcome_recipient_email ?? '').trim();
+  const recipients = internal(accountant) ? [accountant] : [];
+  const roster = (
+    await prisma.apDecisionRecipient.findMany({ where: { active: true }, select: { email: true } })
+  ).map((r) => r.email);
+  const seen = new Set(recipients.map((e) => e.toLowerCase()));
+  const cc: string[] = [];
+  for (const raw of [req.sender_address ?? '', ...roster]) {
+    const e = raw.trim();
+    if (!internal(e) || seen.has(e.toLowerCase())) continue;
+    seen.add(e.toLowerCase());
+    cc.push(e);
+  }
+  return {
+    recipients,
+    cc,
+    surfaceCode: NOTIFY_SURFACE.AP_TEAM_OUTCOME,
+    site: req.submitted_site_id ? { id: req.submitted_site_id } : null,
+  };
+}
+
 export interface HoldArgs {
   prisma?: PrismaClient;
   requestId: string;
@@ -990,11 +1047,14 @@ export async function sendHoldNotice(
       held_by: true,
       held_at: true,
       hold_note: true,
+      intake_channel: true,
+      outcome_recipient_email: true,
+      submitted_site_id: true,
     },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
 
-  const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
+  const { recipients, cc, surfaceCode, site } = await resolveOutcomeRecipients(prisma, req);
   if (recipients.length === 0) {
     log.warn(
       { requestId },
@@ -1018,8 +1078,8 @@ export async function sendHoldNotice(
     <p>No action is needed from you right now; you will receive a decision email once the invoice is approved or rejected.</p>`;
 
   const notified = await notifyStaff({
-    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
-    site: null,
+    surfaceCode,
+    site,
     recipients,
     ...(cc.length > 0 ? { cc } : {}),
     subject: `DR3-Vision AP — request ON HOLD (pending review): ${subject}`.slice(0, 200),
@@ -1095,6 +1155,10 @@ export async function sendDecisionEmail(
       // ADR-0136 — the extracted vendor is one of the spellings the duplicate
       // check compares.
       extraction: true,
+      // ADR-0141 D4 — team submissions route to the chosen accountant.
+      intake_channel: true,
+      outcome_recipient_email: true,
+      submitted_site_id: true,
     },
   });
   if (!req) throw new ApRequestNotFoundError(requestId);
@@ -1106,7 +1170,7 @@ export async function sendDecisionEmail(
           ?.name ?? null)
       : null;
 
-  const { recipients, cc } = await resolveForwarderRecipients(prisma, req.sender_address);
+  const { recipients, cc, surfaceCode, site } = await resolveOutcomeRecipients(prisma, req);
 
   if (recipients.length === 0) {
     log.error(
@@ -1448,8 +1512,8 @@ export async function sendDecisionEmail(
   // empty-recipient REFUSE above still guards the LIVE roster (Mary's GP filing)
   // so a config gap pages before ramp — the gate does not mask it.
   const notified = await notifyStaff({
-    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
-    site: null,
+    surfaceCode,
+    site,
     recipients,
     ...(effectiveCc.length > 0 ? { cc: effectiveCc } : {}),
     // Location rides the SUBJECT line too (2026-07-15 directive) — visible before

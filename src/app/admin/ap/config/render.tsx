@@ -18,7 +18,9 @@ import { redirect } from 'next/navigation';
 import { checkAdmin } from '@/lib/auth-helpers';
 import { getApConfig } from '@/lib/ap/admin-config';
 import { adminMessages as M } from '@/app/admin/messages';
+import { listAccountingContacts } from '@/lib/ap/accounting-contacts';
 import { ApConfigScreen } from './ApConfigScreen';
+import { AccountingContactsPanel } from './AccountingContactsPanel';
 import {
   AP_CONFIG_ROUTES,
   pickApConfigParams,
@@ -40,7 +42,10 @@ export async function renderApConfigPage(view: ApConfigView, props: ApConfigPage
   }
 
   const params = pickApConfigParams(await props.searchParams);
-  const config = await getApConfig({ status: params.status });
+  const [config, contacts] = await Promise.all([
+    getApConfig({ status: params.status }),
+    listAccountingContacts(),
+  ]);
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-12 text-dr3-mist">
@@ -57,6 +62,8 @@ export async function renderApConfigPage(view: ApConfigView, props: ApConfigPage
         </header>
 
         <ApConfigScreen config={config} view={view} params={params} />
+        {/* ADR-0141 D3 — the accounting-staff list for team-submitted invoices. */}
+        <AccountingContactsPanel contacts={contacts} />
       </div>
     </main>
   );
