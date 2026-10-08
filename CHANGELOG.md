@@ -9,6 +9,26 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-07 — Eugene signature chain: Patrick signs facility, Rick signs ops (ADR-0019.7)
+
+Bill, 18:31 PDT, option "a". Eugene facility = **Patrick Dills** (override Bill or Rick); ops = **Rick Albritton**
+(override Bill only); Bill stays the auto-override actor. Woodland unchanged.
+
+- **Before (prod, read 2026-10-07):** facility Rick, ops Patrick (since 2026-08-11). Eugene Periods 21–23 were
+  `draft` with no signatures, so no signature request had gone out. Period 21 closes at 07:00 PT on 10/13 and
+  requests go to Patrick (facility) and Rick (ops).
+- Migration `20260868_adr0019_7_eugene_chain_slot_swap`: swaps only from the exact pre-state (no-op if already
+  swapped, skipped if drifted) and writes one `system:approver-swap` audit row with before/after. Seed CSV and
+  `users.csv` notes match.
+- Separation of duties: Bill accepted Patrick, a Eugene BonusEmployee, holding the facility slot. The ADR-0019.3 §2
+  guard is unchanged. Patrick has no entries since 2026-01-14, so current periods are unaffected, and a historical
+  period holding his entries routes to Rick/Bill.
+- `/bonus` site picker blurb "Oregon — Rick & Kelsey" → "Oregon — Patrick & Rick"; stale comments and the
+  operator signer list updated.
+- Tests: `eugene-chain-swap.test.ts` (9, seed-driven, real `recordSignature`), `signature-sod.test.ts` re-fixtured
+  (7), `eugene-chain-swap.db.test.ts` (2, real Postgres).
+- OPEN-ITEMS 0.CC closed: Bill chose "c" (leave the daily report's processed-only bonus line as is).
+
 ## 2026-10-07 — Bonus rate change from 2026-10-13, both sites; pay priced by each entry's own date (ADR-0019.6)
 
 Approved by Bill at 5:12 PM PDT. From **Tue 2026-10-13** Woodland and Eugene pay

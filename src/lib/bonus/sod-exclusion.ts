@@ -8,6 +8,11 @@
 // 2026-01-14) — and noted that the DB CHECK prevents `requester == approver`,
 // not `approver-has-an-interest`.
 //
+// ADR-0019.7 (2026-10-07) swapped the Eugene slots: Patrick now signs FACILITY
+// and Rick signs ops. Bill accepted Patrick holding a slot while a Eugene
+// BonusEmployee; this guard is unchanged and still refuses him on any period
+// that holds his own entries (routing it to Rick or Bill via facility override).
+//
 // This module is the guard that closes it. The rule is deliberately narrow:
 //
 //   A person may not sign a pay period that contains bonus entries attributable

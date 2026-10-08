@@ -15,6 +15,8 @@
 // instruction, replacing Shannon Rockwell who covered for Kelsey Ruhland), so
 // he is a first-class approver and Rick Albritton is his counterpart. Nothing
 // in the code changed to make that so; repointing the chain row was sufficient.
+// ADR-0019.7 (2026-10-07) swapped the slots (Patrick facility, Rick ops); the
+// counterpart pairing is symmetric, so approvals are unchanged by it.
 // The `patrick_or_other_non_chain_manager` reason string below is now a
 // misnomer, but it is part of the HTTP contract (returned as the `error` field
 // by /api/bonus/amendments), so renaming it is a breaking change and is

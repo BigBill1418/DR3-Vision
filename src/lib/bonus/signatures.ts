@@ -360,10 +360,10 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     // entries in THIS period may not sign it, in any slot, by any path.
     //
     // Deliberately checked on the (person, period) pair and not on the slot:
-    // Patrick Dills holds Eugene's ops slot AND sits in that site's
-    // `facility_override_actor_ids`, so a slot-scoped guard would block his
-    // natural ops signature and leave him free to sign the same conflicted
-    // period through the facility slot instead.
+    // a person can hold one slot naturally AND sit in the other slot's override
+    // list (Patrick held Eugene ops + facility override 2026-08-11 → 10-07), so a
+    // slot-scoped guard would block the natural signature and leave the same
+    // conflicted period signable through the other slot.
     //
     // Read inside the transaction so the entries being judged are the same
     // snapshot the payout lock will total — an amendment editing entries
