@@ -87,15 +87,15 @@ An independent review of PR #294 (Ryan, 2026-10-07) found three gaps in what the
 - **Every awaited request on an operator screen goes through `fetchWithTimeout`.** That is 13 call sites: 20 s for
   JSON and 90 s (`UPLOAD_TIMEOUT_MS`) for the two live R2 PUTs.
 
-  | Screen                                 | Requests                                           | On timeout                                                                                                                                                                                 |
-  | -------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `count/count-client.tsx`               | count POST; hold approve POST; hold discard DELETE | count is **queued** under the key minted at the tap. Approve and discard show "Couldn't save" (no key, not queued); a retry of one that landed meets the existing hold-gone path (404/409) |
-  | `count/void-client.tsx`                | void POST                                          | "Couldn't save", back to the list. A void is never queued, by design                                                                                                                       |
-  | `dropoff/dropoff-client.tsx`           | mint; R2 PUT (90 s); submit                        | **queued** with the blob, under the tap key. A PUT timeout queues with the minted key and is never `blocked:`                                                                              |
-  | `inbound/inbound-client.tsx`           | inbound POST                                       | **queued** under the tap key                                                                                                                                                               |
-  | `processed/processed-client.tsx`       | processed POST                                     | **queued** under the tap key                                                                                                                                                               |
-  | `load/[id]/photo-input.tsx`            | mint; R2 PUT (90 s); confirm                       | **queued**, and the stage advances, exactly as when offline                                                                                                                                |
-  | `queue/conflicts/conflicts-client.tsx` | discard POST                                       | "Discard failed". The local row is kept, because it is removed only on an acknowledged audit write                                                                                         |
+  | Screen                                 | Requests                                           | On timeout                                                                                                                                                           |
+  | -------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `count/count-client.tsx`               | count POST; hold approve POST; hold discard DELETE | count is **queued** under the key minted at the tap. Approve and discard are not queued: they **read the hold's status** and land on what it says (review F1, below) |
+  | `count/void-client.tsx`                | void POST                                          | never queued, by design. **Refreshes the list** and says the void may have landed (review F1, below)                                                                 |
+  | `dropoff/dropoff-client.tsx`           | mint; R2 PUT (90 s); submit                        | **queued** with the blob, under the tap key. A PUT timeout queues with the minted key and is never `blocked:`                                                        |
+  | `inbound/inbound-client.tsx`           | inbound POST                                       | **queued** under the tap key                                                                                                                                         |
+  | `processed/processed-client.tsx`       | processed POST                                     | **queued** under the tap key                                                                                                                                         |
+  | `load/[id]/photo-input.tsx`            | mint; R2 PUT (90 s); confirm                       | **queued**, and the stage advances, exactly as when offline                                                                                                          |
+  | `queue/conflicts/conflicts-client.tsx` | discard POST                                       | "Discard failed". The local row is kept, because it is removed only on an acknowledged audit write                                                                   |
 
   A request that times out may still have landed. That is the case the ADR-0078 idempotency key exists for, so
   every keyed write queues the same way an offline one does (`isOfflineError(e) || e instanceof
@@ -104,7 +104,7 @@ FetchTimeoutError`), and its replay returns the original row. `FetchTimeoutError
   load photos.
 
 - **Stall watchdog for `useState`-busy screens.** `useStallWatch()`, in the same module as `useWatchedTransition`
-  and sharing its counter, wraps the handlers on count, void, inbound, processed and queue conflicts. The 20 s
+  and sharing its tracker, wraps the handlers on count, void, inbound, processed and queue conflicts. The 20 s
   deadline already bounds the request itself, so the banner covers what a deadline cannot reach: an IndexedDB
   enqueue that never resolves, or a refresh that never lands. The photo flows (drop-off, load photo) are
   **deliberately not watched**. A legitimate PUT can take up to 90 s, and offering Reload mid-upload would discard a
@@ -113,6 +113,36 @@ FetchTimeoutError`), and its replay returns the original row. `FetchTimeoutError
 - **Left bare on purpose:** the three `void fetch(` dead-end telemetry beacons (`dead-end-beacon.tsx`,
   `write-refusal.tsx`, `stage-liveness.tsx`). They are fire-and-forget, nothing awaits them, and they hold no busy
   state. `floor-fetch-deadline.test.ts` fails the build on any other bare `fetch(` under `src/app/operator`.
+
+### Review of PR #297 (2026-10-08) — two low findings, fixed before merge
+
+Ryan's review of this amendment's PR found two defects; Bill approved fixing both before merge.
+
+- **F1 — "no answer" was reported as "not saved" on the three un-queued manager actions.** Void, hold approve and
+  hold discard showed "Couldn't save" on a timeout and skipped `router.refresh()`. When the write had landed and only
+  the answer was lost, the on-hand number stayed stale, and a retried approve re-asked for the manager's PIN and was
+  then told to "enter the count again" — an invitation to a duplicate count. **Decision:** on a timeout (or a
+  network-layer failure, which can also follow a delivered request) these actions re-read server state and never
+  resend. A void calls `router.refresh()`, so a void that landed drops off the server-rendered list, and says so. A
+  hold action calls a new read-only `GET /api/operator/[site]/count/holds/[holdId]`, which returns `{ status }` and
+  nothing else, requires the same activated operator session as the write routes, and answers 404 for a hold at
+  another site exactly as for a missing one. The screen lands on the saved/discarded result, the existing D-9
+  "already dealt with" landing, "still waiting — try again", or "it may have gone through — refreshed" when the
+  status cannot be read either. A read was chosen over re-sending the write because a re-sent approve needs the PIN
+  again and a re-sent discard is not a probe; the release CAS (ADR-0118) still makes any human retap harmless.
+  PIN verification, the self-release refusal and manager eligibility are unchanged.
+- **F2 — the stall clock was screen-wide, not per job.** One timer was started by the first job and cleared only at
+  zero in flight, so when job 1 settled while job 2 ran, job 1's clock raised Reload a few seconds into job 2.
+  **Decision:** each job carries its own 25 s clock; the banner is up while any unsettled job is past its deadline
+  and lowered when none is. Restarting one shared clock on every new job was rejected: a second tap would then hide
+  a genuinely stalled first job indefinitely. Unmount clears every timer.
+- **Residual:** a status read of `pending` immediately after a timeout cannot rule out the lost request landing a
+  moment later; the retap is then refused by the CAS and meets the D-9 landing. Accepted.
+- **Tests:** `count-client.hold-timeout.test.tsx` (landed, pending, gone, unreadable, discard landed; each asserts
+  the write was sent once), `holds/[holdId]/route.test.ts` (status only, cross-site 404, session required),
+  `void-client.deadline.test.tsx` (refresh + honest message; a 500 still reads "Couldn't save"),
+  `stall-banner.test.tsx` (overlapping jobs; a stalled first job is not hidden; unmount). Falsified against the
+  pre-fix code: 6 of the 7 F1 behavioural cases and the F2 overlap case failed there.
 
 ### Not verified
 

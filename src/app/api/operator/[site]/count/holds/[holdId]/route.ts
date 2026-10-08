@@ -11,6 +11,12 @@
 // the approver is the operator who entered the count — checked before the PIN, so
 // a self-release attempt cannot be used to probe whether a PIN is correct.
 //
+// GET (ADR-0140 Amendment 1, review F1) reads ONE thing — the hold's status — so
+// a device whose Approve/Discard timed out can find out whether it landed instead
+// of asking for the manager's PIN again. Read-only, no audit row, no PII: it
+// returns `{ status }` and nothing else. Site-scoped: a hold at another site is
+// the same 404 as a hold that does not exist (no id probing across sites).
+//
 // DELETE discards a hold. Discarding writes nothing to inventory, so an operator
 // may do it: abandoning your own mistyped count is not a privileged act. It is
 // recorded with a reason either way.
@@ -32,6 +38,27 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+export async function GET(req: Request, { params }: Params) {
+  const { site, holdId } = await params;
+  try {
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
+    const hold = await prisma.inventoryCountHold.findUnique({
+      where: { id: holdId },
+      select: { status: true, site_id: true },
+    });
+    if (!hold || hold.site_id !== ctx.siteId) {
+      return NextResponse.json({ error: 'hold_not_found' }, { status: 404 });
+    }
+    return NextResponse.json({ status: hold.status }, { status: 200 });
+  } catch (e) {
+    return loadsErrorResponse(e, {
+      site,
+      op: 'operator.count.hold.read',
+      requestId: req.headers.get('x-request-id'),
+    });
+  }
+}
 
 const Release = z.object({
   approverUserId: z.string().min(1),

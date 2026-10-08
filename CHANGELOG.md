@@ -19,14 +19,35 @@ These are the gaps from the independent review of PR #294. **Unmerged, in PR; st
   (mint, R2 PUT, submit), inbound, processed, load photo ×3 (mint, R2 PUT, confirm), and queue-conflicts discard.
   They now use `fetchWithTimeout`: 20 s for JSON, 90 s for the R2 PUTs. A keyed write that times out is queued under
   the idempotency key minted at the tap, the same way an offline one is; a write that actually landed replays to the
-  original row. A drop-off or photo PUT that times out is queued, never `blocked:`. Void, hold release and conflicts
-  discard show their existing failure sentence and free the button.
+  original row. A drop-off or photo PUT that times out is queued, never `blocked:`. Conflicts discard shows its
+  existing failure sentence and frees the button; void and hold release/discard re-read server state (below).
 - **`fetchWithTimeout` now covers the body read.** It used to stop the timer when the headers arrived. Every body
   reader on the response, and on its `clone()`, now rejects with `FetchTimeoutError` past the deadline.
 - **A caller's `AbortSignal` is now composed with the deadline** instead of being silently overwritten.
 - **`useStallWatch()`** wraps the count, void, inbound, processed and conflicts handlers, so a hang a deadline
   cannot reach (an IndexedDB enqueue, a refresh) still raises the Reload banner. The photo flows are deliberately
   excluded: a Reload mid-upload would lose a photo that exists only in memory.
+
+### Fixed — independent review of PR #297 (two low findings, fixed before merge on Bill's approval)
+
+- **F1 — a manager action that landed but lost its answer no longer reads "Couldn't save".** Void, hold approve and
+  hold discard are not queued, so a 20 s timeout (or a connection lost mid-flight) used to show the generic failure and
+  skip `router.refresh()`: the on-hand number stayed stale, and a retried approve re-asked for the manager's PIN only
+  to be told to enter the count again. Now a timed-out **void** refreshes the server-rendered list and says "if that
+  count is no longer on it, it was removed". A timed-out **hold approve/discard** reads the hold's status through a
+  new read-only, site-scoped `GET /api/operator/[site]/count/holds/[holdId]` (returns `{ status }` only; another
+  site's hold is the same 404 as a missing one) and lands on the saved/discarded result, the existing "a manager
+  already dealt with this one" landing, "still waiting — try again", or, if the status cannot be read either, "it may
+  have gone through — the screen has been refreshed". Nothing is ever resent; the release CAS (ADR-0118) and
+  `snapshot_not_found` keep any retap harmless. PIN, self-release and manager-eligibility checks are untouched.
+  EN/ES/Urdu strings added.
+- **F2 — the stall banner's 25 s clock is now per job.** `useStallTracker` kept one screen-wide timer, started by the
+  first job and cleared only when nothing was in flight, so when job 1 settled while job 2 ran, job 1's clock raised
+  Reload a few seconds into job 2. Each job now has its own clock; the banner is up while any unsettled job is past
+  25 s, so a second tap also cannot hide a genuinely stalled first job. Unmount clears every timer.
+- Tests: `count-client.hold-timeout.test.tsx` (5), `holds/[holdId]/route.test.ts` (3), `void-client.deadline` (updated
+  - 1), `stall-banner` (+2). The new behavioural tests were run against the pre-fix code and failed there (6 of 7 F1,
+    the F2 overlap case).
 
 ### Tests
 

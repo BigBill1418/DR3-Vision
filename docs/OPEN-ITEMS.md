@@ -38,9 +38,19 @@ Ryan's independent review of PR #294 found three gaps. All three are fixed in br
 - **CF-2 — real-iPad stall test (Ryan): OPEN.** Every test uses an abort-honouring fetch double. Nobody has stalled
   a real iPad on Woodland Wi-Fi against this code. Suggested repro: Safari Web Inspector, network throttled to
   "offline" after the headers arrive.
-- **CF-3 — no dedicated tests yet for the hold approve/discard and queue-conflicts discard timeouts.** They use the
-  same helper and the same catch that already existed; the static scan guards their wrapping. Add tests when
-  either screen's suite is next touched.
+- **CF-3 — queue-conflicts discard timeout still has no dedicated test: OPEN (narrowed 2026-10-08).** Hold
+  approve/discard timeouts are now covered by `count-client.hold-timeout.test.tsx` (CF-4). Conflicts discard uses the
+  same helper; the static scan guards its wrapping.
+- **CF-4 — review of PR #297, findings F1 + F2: FIXED IN PR (2026-10-08, Bill-approved before merge).** F1: void, hold
+  approve and hold discard no longer report a timed-out-but-landed action as "Couldn't save"; the void refreshes the
+  list, the hold actions read status via a new read-only, site-scoped `GET …/count/holds/[holdId]`, and nothing is
+  resent. F2: the stall banner's 25 s clock is per job (`useStallTracker`). ADR-0140 Amendment 1 › "Review of PR
+  #297".
+- **CF-5 — found in passing, NOT fixed here (needs its own reviewed change): OPEN.** (a) `POST`/`DELETE
+…/count/holds/[holdId]` do not compare the hold's `site_id` with the operator's site; `releaseHold` checks the
+  approver's eligibility at the hold's site, but `discardHold` would discard another site's hold given its id
+  (ADR-0024 site isolation). (b) `discardHold` writes the status and its audit row outside one transaction and
+  without a `status = 'pending'` CAS (ADR-0118 pattern). The new GET does compare site.
 
 ---
 

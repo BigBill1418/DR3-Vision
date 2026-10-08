@@ -20,8 +20,7 @@
 //     Pacific day and the physical/computed kind on every request. This chooses
 //     what to OFFER; a bypassed confirm changes nothing (same contract as the
 //     ADR-0072 tier dialogs in count-client.tsx).
-//   - It does not queue. There is no `enqueueAction` here and no `isOfflineError`
-//     branch: a void is online-only (ADR-0084 D5, reasoned in void-count.ts). A
+//   - It does not queue. There is no `enqueueAction` here: a void is online-only (ADR-0084 D5, reasoned in void-count.ts). A
 //     failed attempt says so and the count stays exactly as it is — which is the
 //     safe direction, because the count is already SAVED. Nothing an operator
 //     typed is ever at risk here; only the withdrawal waits for a connection.
@@ -36,8 +35,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
-import { newIdempotencyKey } from '@/lib/offline-queue';
-import { fetchWithTimeout } from '@/lib/fetch-timeout';
+import { isOfflineError, newIdempotencyKey } from '@/lib/offline-queue';
+import { FetchTimeoutError, fetchWithTimeout } from '@/lib/fetch-timeout';
 import { useStallWatch } from '@/lib/floor/use-watched-transition';
 
 export type VoidableCount = {
@@ -113,10 +112,23 @@ export function CountVoidClient({
       // just changed. Refresh so the operator sees the number they restored
       // rather than the one the void removed.
       router.refresh();
-    } catch {
-      // No offline branch on purpose — see the header. An unreachable server
-      // means the count stands, which is the state the operator can see.
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      // No offline branch on purpose — see the header.
+      //
+      // ADR-0140 Amendment 1 (review F1) — but "no answer" is not "not saved". A
+      // void that hit its deadline (or lost its connection mid-flight) may have
+      // LANDED, and saying "Couldn't save" left the removed count on the list and
+      // the old on-hand number on the page. Re-read the server-rendered page: if
+      // the void landed, the row is gone from the refreshed list and the total is
+      // the restored one. Nothing is resent; a retap of a row that is gone is
+      // answered `snapshot_not_found` ("not there any more"), never a second void.
+      if (e instanceof FetchTimeoutError || isOfflineError(e)) {
+        setError(t('floor.count.void_timeout'));
+        router.refresh();
+      } else {
+        setError(t('floor.common.save_failed'));
+      }
+      setTarget(null);
       setPhase('list');
     } finally {
       setBusy(false);

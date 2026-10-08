@@ -9,7 +9,8 @@
 //
 // This keeps `useTransition`'s signature (a drop-in swap) and adds one thing: if
 // a callback handed to `startTransition` has not settled after STALL_AFTER_MS it
-// raises a `dr3:stall` window event, and lowers it when everything has settled.
+// raises a `dr3:stall` window event, and lowers it when no stalled job remains
+// (each job has its own clock — see `useStallTracker`).
 // The `StallBanner` in FloorShell listens and offers Reload. It does NOT cancel
 // the action: the write may still land, and every queued write is idempotent, so
 // a reload is safe and is the only thing that frees a wedged action queue.
@@ -32,48 +33,75 @@ function emit(stalled: boolean): void {
 type Start = ReturnType<typeof useTransition>[1];
 
 /**
- * The shared in-flight counter behind both hooks below: one 25 s timer per
- * screen while anything it is watching is unsettled, raising `dr3:stall` once
- * and lowering it when everything has settled or the screen unmounts.
+ * The shared in-flight tracker behind both hooks below. Raises `dr3:stall` once
+ * when ANY watched job on this screen has been unsettled for STALL_AFTER_MS, and
+ * lowers it when no stalled job remains or the screen unmounts.
+ *
+ * ADR-0140 Amendment 1 (review F2) — every job carries ITS OWN 25 s clock. The
+ * first version kept one screen-wide timer armed by the first job and cleared
+ * only when the in-flight count reached zero, so when job 1 settled while job 2
+ * was still running, job 1's clock kept ticking for job 2 and the Reload banner
+ * could appear a few seconds into job 2. Per-job clocks also avoid the opposite
+ * mistake — restarting one shared clock on every begin — which would let a
+ * second tap hide a genuinely stalled first job indefinitely.
  */
-function useStallTracker(): { begin: () => void; settle: () => void } {
-  const inflight = useRef(0);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+function useStallTracker(): { begin: () => number; settle: (id: number) => void } {
+  const jobs = useRef(
+    new Map<number, { timer: ReturnType<typeof setTimeout>; stalled: boolean }>(),
+  );
+  const nextId = useRef(0);
   const raised = useRef(false);
 
-  const settle = useCallback(() => {
-    inflight.current = Math.max(0, inflight.current - 1);
-    if (inflight.current > 0) return;
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    if (raised.current) {
+  // Reconcile the banner with the jobs: up iff some unsettled job is past its deadline.
+  const sync = useCallback(() => {
+    let anyStalled = false;
+    for (const j of jobs.current.values()) if (j.stalled) anyStalled = true;
+    if (anyStalled && !raised.current) {
+      raised.current = true;
+      emit(true);
+    } else if (!anyStalled && raised.current) {
       raised.current = false;
       emit(false);
     }
   }, []);
 
-  const begin = useCallback(() => {
-    inflight.current += 1;
-    if (!timer.current) {
-      timer.current = setTimeout(() => {
-        raised.current = true;
-        emit(true);
-      }, STALL_AFTER_MS);
-    }
-  }, []);
+  const settle = useCallback(
+    (id: number) => {
+      const job = jobs.current.get(id);
+      if (!job) return; // settled twice, or after unmount
+      clearTimeout(job.timer);
+      jobs.current.delete(id);
+      sync();
+    },
+    [sync],
+  );
 
-  // Leaving the screen (a working navigation) lowers the banner and drops the timer.
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = null;
+  const begin = useCallback(() => {
+    nextId.current += 1;
+    const id = nextId.current;
+    const job = {
+      stalled: false,
+      timer: setTimeout(() => {
+        job.stalled = true;
+        sync();
+      }, STALL_AFTER_MS),
+    };
+    jobs.current.set(id, job);
+    return id;
+  }, [sync]);
+
+  // Leaving the screen (a working navigation) lowers the banner and drops every timer.
+  useEffect(() => {
+    const map = jobs.current;
+    return () => {
+      for (const j of map.values()) clearTimeout(j.timer);
+      map.clear();
       if (raised.current) {
         raised.current = false;
         emit(false);
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   return { begin, settle };
 }
@@ -84,7 +112,8 @@ export function useWatchedTransition(): ReturnType<typeof useTransition> {
 
   const watched = useCallback(
     (cb: () => unknown) => {
-      begin();
+      const id = begin();
+      const done = (): void => settle(id);
       // React's overloads split sync from async at the type level; whether `cb` is
       // async is only known once it has run, and React itself checks for a thenable
       // at runtime, so one runner serves both.
@@ -93,13 +122,13 @@ export function useWatchedTransition(): ReturnType<typeof useTransition> {
         try {
           result = cb();
         } catch (e) {
-          settle();
+          done();
           throw e;
         }
         if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
-          return (result as Promise<void>).finally(settle);
+          return (result as Promise<void>).finally(done);
         }
-        settle();
+        done();
         return undefined;
       };
       startTransition(run as () => Promise<void>);
@@ -129,15 +158,15 @@ export function useStallWatch(): <T>(work: () => Promise<T>) => Promise<T> {
   const { begin, settle } = useStallTracker();
   return useCallback(
     <T>(work: () => Promise<T>): Promise<T> => {
-      begin();
+      const id = begin();
       let p: Promise<T>;
       try {
         p = work();
       } catch (e) {
-        settle();
+        settle(id);
         throw e;
       }
-      return p.finally(settle);
+      return p.finally(() => settle(id));
     },
     [begin, settle],
   );

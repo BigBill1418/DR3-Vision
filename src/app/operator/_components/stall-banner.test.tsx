@@ -107,6 +107,69 @@ describe('useStallWatch', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  // ADR-0140 Am.1 review F2 — each job has its own clock. FALSIFIED BY HAND: with
+  // the old single screen-wide timer, the first `queryByRole` below finds the
+  // banner (job A's clock fires 5 s into job B).
+  it('a second job gets its own 25 s clock after the first settles', async () => {
+    let watch!: ReturnType<typeof useStallWatch>;
+    function Overlap() {
+      watch = useStallWatch();
+      return <StallBanner />;
+    }
+    render(<Overlap />);
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    void watch(() => new Promise<void>((r) => (releaseA = r)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    void watch(() => new Promise<void>((r) => (releaseB = r)));
+    await act(async () => {
+      releaseA();
+      await vi.advanceTimersByTimeAsync(10_000); // t=30 s: A's deadline passed, B is 10 s old
+    });
+    expect(screen.queryByRole('alert'), 'job A’s clock raised the banner over job B').toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STALL_AFTER_MS); // B is now 35 s old
+    });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    await act(async () => {
+      releaseB();
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a stalled first job is not hidden by a second tap, and unmount lowers the banner', async () => {
+    let watch!: ReturnType<typeof useStallWatch>;
+    function Overlap() {
+      watch = useStallWatch();
+      return <StallBanner />;
+    }
+    const events: boolean[] = [];
+    const onStall = (e: Event): void => {
+      events.push((e as CustomEvent<{ stalled: boolean }>).detail.stalled);
+    };
+    window.addEventListener('dr3:stall', onStall);
+    const { unmount } = render(<Overlap />);
+    void watch(() => new Promise<void>(() => {})); // A never settles
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    void watch(() => new Promise<void>(() => {})); // B, 20 s in
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_100); // A is past 25 s
+    });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    unmount();
+    expect(events).toEqual([true, false]);
+    // No orphaned timer re-raises it after the screen is gone.
+    await vi.advanceTimersByTimeAsync(STALL_AFTER_MS * 2);
+    expect(events).toEqual([true, false]);
+    window.removeEventListener('dr3:stall', onStall);
+  });
+
   it('a prompt handler never raises it, and a rejecting one still settles', async () => {
     function Rejecter() {
       const watch = useStallWatch();

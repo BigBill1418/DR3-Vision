@@ -244,6 +244,76 @@ export function CountClient({
     }
   }
 
+  /**
+   * ADR-0140 Amendment 1 (review F1) — an Approve or Discard that got no answer.
+   *
+   * Neither is queued (a manager's PIN must never sit in IndexedDB), so the
+   * deadline is where the screen used to say "Couldn't save. Try again." — even
+   * when the release had LANDED and only its answer was lost. The operator then
+   * saw a stale floor number, and a retry re-asked for the manager's PIN only to
+   * be told "a manager already dealt with this one, enter the count again" —
+   * an invitation to a duplicate count.
+   *
+   * So the screen ASKS the server what happened (read-only GET, site-scoped,
+   * returns only the status) and lands where the answer says. Nothing is resent:
+   * the release CAS (ADR-0118) already makes a second Approve harmless, and this
+   * path never issues one. If the status cannot be read either, it says plainly
+   * that the action may have gone through and refreshes the server-rendered page.
+   */
+  async function resolveUnanswered(h: Hold, action: 'approve' | 'discard'): Promise<void> {
+    let status: string | null = null;
+    try {
+      const res = await fetchWithTimeout(`/api/operator/${siteCode}/count/holds/${h.holdId}`, {
+        method: 'GET',
+      });
+      if (res.status === 404) status = 'gone';
+      else if (res.ok) {
+        const b = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        status = typeof b['status'] === 'string' ? b['status'] : null;
+      }
+    } catch {
+      status = null;
+    }
+
+    if (status === 'approved' && action === 'approve') {
+      // Landed. Same terminal state as the acked path below.
+      setResult({
+        computedTotal: String(h.priorTotal ?? 0),
+        physicalTotal: h.newTotal,
+        reconciledDelta: h.newTotal - (h.priorTotal ?? 0),
+      });
+      setHold(null);
+      setPin('');
+      setApproverId('');
+      setPhase('entry');
+      router.refresh();
+      return;
+    }
+    if (status === 'discarded' && action === 'discard') {
+      setHold(null);
+      setPhase('discarded');
+      return;
+    }
+    if (status === 'approved' || status === 'discarded' || status === 'gone') {
+      // Resolved, but not by this tap — the existing D-9 landing.
+      setHold(null);
+      setPin('');
+      setApproverId('');
+      setError(t('floor.count.hold_gone'));
+      setPhase('entry');
+      router.refresh();
+      return;
+    }
+    if (status === 'pending') {
+      // The server says nothing has happened (yet). A retry is safe: if the lost
+      // request lands first, the CAS refuses the second and D-9 handles it.
+      setError(t('floor.count.hold_timeout_pending'));
+      return;
+    }
+    setError(t('floor.count.hold_timeout_unknown'));
+    router.refresh();
+  }
+
   async function approveUnwatched(): Promise<void> {
     if (!hold) return;
     setBusy(true);
@@ -308,8 +378,10 @@ export function CountClient({
       setHold(null);
       setPhase('entry');
       router.refresh();
-    } catch {
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      if (e instanceof FetchTimeoutError || isOfflineError(e))
+        await resolveUnanswered(hold, 'approve');
+      else setError(t('floor.common.save_failed'));
     } finally {
       setBusy(false);
     }
@@ -361,8 +433,10 @@ export function CountClient({
           }
         }
       }
-    } catch {
-      setError(t('floor.common.save_failed'));
+    } catch (e) {
+      if (e instanceof FetchTimeoutError || isOfflineError(e))
+        await resolveUnanswered(hold, 'discard');
+      else setError(t('floor.common.save_failed'));
     } finally {
       setBusy(false);
     }
