@@ -9,6 +9,25 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-08 — AP team-submitted invoices go LIVE at both sites (ADR-0141)
+
+Bill, 1:54 PM PDT: *"no not pilot go live and make sure this is ready to go"*. At 1:55 PM PDT
+`ap_team_submit` (the manager submit screen) and `ap_team_outcome` (the decision mail to the chosen
+accountant) were flipped `pilot → live` together at Woodland and Eugene, by
+`scripts/one-off/2026-10-08-ap-team-submit-flip-live.mjs`. That script is the file that ran, inside
+`dr3-vision-app`: it dry-ran first, then applied in one transaction, writing four audit rows with a
+named non-human actor label (never Bill's user id). Both surfaces flipped together so managers can
+never submit while accountant mail is still diverted to admins. The gate reads the DB on every
+request, so the flip took effect with no deploy.
+
+Readiness checked before the flip:
+- Woodland managers: 2 (Morena, Janette). Eugene managers: 4 (Kelsey, Patrick, Rick, Shannon).
+- 5 active AP approvers.
+- 3 active accounting contacts.
+
+The admin pilot test submission (OPEN-ITEMS CE-1) was skipped at Bill's direction. Daven Stetson
+(manager, no primary site) cannot submit until he has one (CE-3).
+
 ## 2026-10-08 — Dock loads stop double-counting: verify guard + one source per day in the invoice exports (ADR-0142)
 
 Bill approved both fixes at 09:20 AM PDT. His decision: dock (`b2b_haul`) loads are floor/haul tracking only. The
