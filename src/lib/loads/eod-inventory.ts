@@ -388,19 +388,30 @@ async function resolveCounter(anchor: {
  * day); `arrived_at` is a true instant, so it is shifted through the Pacific zone.
  * Null when the site has no flow at all.
  */
+/**
+ * Pacific day key of the newest VERIFIED inbound for a site at/before `upTo`, or
+ * null when the site has none. The ADR-0089 delivered signal (see the §4(b) note in
+ * `latestFlowDayKey`). Exported so the live floor tile grades intake recency off
+ * the same query the end-of-day report does (2026-10-08 negative-floor causes).
+ */
+export async function latestVerifiedInboundDay(siteId: string, upTo: Date): Promise<Date | null> {
+  const agg = await prisma.inboundLoad.aggregate({
+    _max: { arrived_at: true },
+    where: {
+      site_id: siteId,
+      status: { in: [...VERIFIED_INBOUND_STATUSES] },
+      arrived_at: { lte: upTo },
+    },
+  });
+  return agg._max.arrived_at ? pacificDayKeyUTC(agg._max.arrived_at) : null;
+}
+
 async function latestFlowDayKey(
   siteId: string,
   endOfDay: Date,
 ): Promise<{ any: Date | null; inbound: Date | null }> {
-  const [inbound, dropoff, processed, renovation, landfilled] = await Promise.all([
-    prisma.inboundLoad.aggregate({
-      _max: { arrived_at: true },
-      where: {
-        site_id: siteId,
-        status: { in: [...VERIFIED_INBOUND_STATUSES] },
-        arrived_at: { lte: endOfDay },
-      },
-    }),
+  const [inboundKey, dropoff, processed, renovation, landfilled] = await Promise.all([
+    latestVerifiedInboundDay(siteId, endOfDay),
     prisma.consumerDropoff.aggregate({
       _max: { dropoff_date: true },
       where: { site_id: siteId, dropoff_date: { lte: endOfDay } },
@@ -436,7 +447,6 @@ async function latestFlowDayKey(
   // `recycler_reported_delivery_date ?? docking_appointment_date` (inbound-bridge.ts),
   // the same COALESCE the mirror-freshness guard keys on. Measuring anything else
   // would certify a feed we cannot see — the ADR-0089 D3 lesson.
-  const inboundKey = inbound._max.arrived_at ? pacificDayKeyUTC(inbound._max.arrived_at) : null;
   const keys: Date[] = [];
   if (inboundKey) keys.push(inboundKey);
   if (dropoff._max.dropoff_date) keys.push(dropoff._max.dropoff_date);

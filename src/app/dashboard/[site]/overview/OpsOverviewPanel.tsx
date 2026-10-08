@@ -12,6 +12,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import type { OpsOverview, MirrorFreshnessPanel } from '@/lib/dashboard/ops-overview';
+import { negativeFloorCopy } from '@/lib/inventory/negative-floor';
 import { SectionBand, StatCard, ScrollTable, FreshnessBadge, EmptyNote, StatusPill } from './ui';
 import type { Tone } from './ui';
 
@@ -157,7 +158,11 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
             <StatCard
               label="On the floor"
               value="—"
-              sub="Computing negative — intake incomplete"
+              sub={`Computing negative — ${
+                data.floor.negativeCause
+                  ? negativeFloorCopy(data.floor.negativeCause).short
+                  : 'not reliable'
+              }`}
               href={`/dashboard/${siteCode}/loads-inventory`}
               testId="ov-floor-total"
             />

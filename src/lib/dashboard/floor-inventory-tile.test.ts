@@ -35,6 +35,8 @@ const store = {
   } as Record<string, Prisma.Decimal | null>,
   wholeUnitsSold: { program_units: 0, non_program_units: 0 } as Record<string, number | null>,
   landfilled: { program_units: 0, non_program_units: 0 } as Record<string, number | null>,
+  // 2026-10-08 — newest verified inbound instant (the `_max` the cause reads).
+  inboundLatest: null as Date | null,
   closes: [] as { stripped_program: Prisma.Decimal; stripped_non_program: Prisma.Decimal }[],
   lastClosesWhere: null as null | { site_id: string; production_date: { gte: Date; lte: Date } },
 };
@@ -45,8 +47,14 @@ vi.mock('@/lib/prisma', () => ({
     // BS-10 — the tile now reads the site's permitted maximum so it can state an
     // UPPER bound. Woodland's real cap, so the over-capacity cases in
     // `floor-capacity.test.ts` and these pool cases share one set of numbers.
-    site: { findUnique: async () => ({ max_units_indoor: 3500, max_units_total_on_site: null }) },
-    inboundLoad: { aggregate: async (): Promise<Agg> => ({ _sum: store.inbound }) },
+    site: {
+      findUnique: async () => ({ max_units_indoor: 3500, max_units_total_on_site: null }),
+      // fleetWideHolidays — zero sites short-circuits to "no holidays".
+      count: async () => 0,
+    },
+    inboundLoad: {
+      aggregate: async () => ({ _sum: store.inbound, _max: { arrived_at: store.inboundLatest } }),
+    },
     consumerDropoff: { groupBy: async () => store.dropoffs },
     processedUnitsDaily: {
       aggregate: async (): Promise<Agg> => ({ _sum: store.stripped }),
@@ -75,6 +83,7 @@ beforeEach(() => {
   store.landfilled = { program_units: 0, non_program_units: 0 };
   store.closes = [];
   store.lastClosesWhere = null;
+  store.inboundLatest = null;
 });
 
 // Rick's morning: a measured physical count of 137 program + 1152 non-program.
@@ -189,5 +198,70 @@ describe('computeProgramPoolProjection — pure §3 projection', () => {
     ]);
     expect(p.trailingUnitsPerDay).toBe(3.5);
     expect(p.programDaysRemaining).toBe(3);
+  });
+});
+
+// ── 2026-10-08 — the tile carries the CAUSE of a negative floor ─────────────
+// Woodland 2026-10-07: program −147 inside a ≈+1,600 total, intake current. The
+// pre-fix loader had no `negativeCause` at all, so every assertion below failed
+// against it (`expected undefined to deeply equal …`).
+describe('computeFloorInventoryTile — negativeCause', () => {
+  const NOW = new Date('2026-07-21T19:00:00Z'); // Tue 2026-07-21 Pacific
+  function anchor(program: number, nonProgram: number) {
+    store.anchor = {
+      snapshot_at: new Date('2026-07-01T14:00:00Z'),
+      units_indoor: null,
+      units_total: program + nonProgram,
+      units_in_processing: 0,
+      program_units: D(program),
+      non_program_units: D(nonProgram),
+      pool_attribution: 'measured',
+    };
+  }
+
+  it('a healthy floor has no cause', async () => {
+    rickMorningAnchor();
+    const tile = await computeFloorInventoryTile('S1', { now: NOW });
+    expect(tile.negative).toBe(false);
+    expect(tile.negativeCause).toBeNull();
+  });
+
+  it('CASE 1: positive total, negative program pool → pool-split (program), intake not consulted', async () => {
+    anchor(0, 1750);
+    store.stripped = { stripped_program: D(147), stripped_non_program: D(0) };
+    store.inboundLatest = new Date('2026-06-01T07:00:00Z'); // stale — must NOT matter here
+    const tile = await computeFloorInventoryTile('S1', { now: NOW });
+    expect(tile.programOnFloor).toBe(-147);
+    expect(tile.totalOnFloor).toBeGreaterThan(0);
+    expect(tile.negativeCause).toEqual({ kind: 'pool-split', pool: 'program' });
+  });
+
+  it('CASE 2: negative total + stale intake → intake-stale with the calendar age', async () => {
+    anchor(100, 0);
+    store.stripped = { stripped_program: D(300), stripped_non_program: D(0) };
+    store.inboundLatest = new Date('2026-07-08T07:00:00Z'); // Pacific 07-08, 13 days back
+    const tile = await computeFloorInventoryTile('S1', { now: NOW });
+    expect(tile.negativeCause).toEqual({ kind: 'intake-stale', inboundDaysSince: 13 });
+  });
+
+  it('CASE 3: negative total + current intake → processing-exceeds-inbound', async () => {
+    anchor(100, 0);
+    store.stripped = { stripped_program: D(300), stripped_non_program: D(0) };
+    store.inboundLatest = new Date('2026-07-21T07:00:00Z'); // same Pacific day
+    const tile = await computeFloorInventoryTile('S1', { now: NOW });
+    expect(tile.negativeCause).toEqual({
+      kind: 'processing-exceeds-inbound',
+      inboundRecorded: true,
+    });
+  });
+
+  it('CASE 3 (no intake feed at all, Eugene) → processing-exceeds-inbound, inboundRecorded false', async () => {
+    anchor(100, 0);
+    store.stripped = { stripped_program: D(300), stripped_non_program: D(0) };
+    const tile = await computeFloorInventoryTile('S1', { now: NOW });
+    expect(tile.negativeCause).toEqual({
+      kind: 'processing-exceeds-inbound',
+      inboundRecorded: false,
+    });
   });
 });
