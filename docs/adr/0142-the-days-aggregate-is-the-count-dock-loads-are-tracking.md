@@ -66,17 +66,34 @@ dropped from October's file too.
 Woodland September 2026 MRC export (read-only prod computation, route window): **before** 196 rows /
 41,218 units (25 aggregate / 21,804 + 171 dock / 19,414); **after** 25 rows / 21,804 units.
 
-### D3 — Invoice generation is NOT changed (affected differently)
+### D3 — Invoice generation is NOT changed, but this ADR leaves its freight leg structurally empty on aggregate days
 
-`resolveTransportationInputs` (`src/lib/invoices/generation-inputs.ts`) shares `INVOICE_STATUSES`, but it bills
-**freight per truck**: one leg per `transport_charged` load, priced from that load's source mileage. Aggregate rows
-carry no source or mileage, and none of their three writers sets `transport_charged`, so there is no unit
-double-count to remove. (The EOD checkbox `setInboundTransportCharged` can flag any row, an aggregate included; a
-flagged aggregate fails loud in the freight leg, `FreightInputError` for want of a source.) Applying the export predicate would delete every freight leg on an aggregate day. Today
-`transport_charged` is `false` on every row, so the leg is empty either way (ADR-0125, OPEN-ITEMS §0.BO BO-4). Once
-the classifier is populated, freight will bill from `submitted` dock rows, which this ADR calls tracking-only.
-Whether a dock row is the freight record while the aggregate is the unit record is Bill's decision. It is reported,
-not made here.
+`resolveTransportationInputs` (`src/lib/invoices/generation-inputs.ts`) shares `INVOICE_STATUSES` but bills
+**freight per truck**: one leg per load with `transport_charged = true`, priced from that load's source mileage.
+Aggregate rows carry no source or mileage. Applying the export predicate here would remove freight, not a unit
+double count, so the predicate is not applied.
+
+The consequence Bill has to decide on (corrected after Ryan's review, 2026-10-08): `transport_charged` has exactly
+two writers, the **verify gate** (`verify-gate.ts`, stamped from `sources.is_trans_charge` at verify) and the **EOD
+add-line** (`eod/inbound-line.ts`), plus the manual EOD checkbox `setInboundTransportCharged`. A dock load is
+created `transport_charged = false` and keeps that value until it is verified. D1 means a dock load on an
+aggregate-owned day is **never verified**, so it never receives the flag. Once `sources.is_trans_charge` is
+populated, those trucks still produce **no freight leg**, unless someone ticks the EOD checkbox per load by hand.
+The leg comes out empty with no error. At Woodland today that is every dock load: all 374 sit on aggregate days.
+Today `transport_charged` is `false` on every row, so nothing bills yet either way (ADR-0125, OPEN-ITEMS §0.BO
+BO-4). The silent empty leg starts the day the classifier is populated.
+
+The options are Bill's, not made here:
+
+- (a) stamp `transport_charged` on dock loads at a point other than verify, e.g. at operator submit from the
+  source flag;
+- (b) bill freight from the MyMRC haul record (per haul, with mileage via the collection source), not from dock
+  rows;
+- (c) keep the manual EOD checkbox as the freight record.
+
+Whichever is chosen, the ADR-0115 zero-row warning in `resolveTransportationInputs` only fires when no row in the
+window is flagged. It will not tell "classifier populated but dock loads unflagged" apart from "classifier never
+populated".
 
 ## Alternatives considered
 
@@ -109,6 +126,8 @@ not made here.
   Pacific-not-UTC bucketing, allowed on a day without one, a voided aggregate does not block, and a verify racing a
   lock-holding aggregate writer waits and is refused. The race case alone goes red when only the lock line is
   removed.
-- `src/lib/exports.single-source.db.test.ts` (real Postgres, real route handlers): both exports emit 4 rows /
-  600 units instead of 6 / 670.
+- `src/lib/exports.single-source.db.test.ts` (real Postgres, real route handlers): September emits 5 rows /
+  670 units instead of 7 / 740; another site's aggregate does not suppress this site's dock row; and the
+  17:04 PDT Sep 30 dock load (UTC 2026-10-01T00:04Z) is dropped from October's file because its Pacific day is
+  aggregate-owned (the D2 month-edge claim, red on f32a067).
 - Both were run red against f32a067 first.

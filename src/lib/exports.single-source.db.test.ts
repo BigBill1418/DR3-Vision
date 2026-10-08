@@ -13,9 +13,11 @@
 // the assertion is on the CSV a manager downloads, not on a helper.
 //
 // ── FALSIFIED (2026-10-08) ─────────────────────────────────────────────────────
-// Against f32a067's routes both exports emit all 6 fixture rows / 670 units instead of
-// 4 rows / 600 — the two dock rows on the aggregate day (including the 19:00 PDT one
-// whose UTC date is the next day) are exported alongside the aggregate.
+// Against f32a067's routes the September exports emit 7 rows / 740 units instead of
+// 5 / 670 (the two dock rows on the Sep 10 aggregate day — including the 19:00 PDT one
+// whose UTC date is the next day — ride alongside the aggregate), and the October export
+// emits the Sep 30 17:04 PDT dock load whose Pacific day the Sep 30 aggregate owns.
+// The other-site aggregate case passes on both (it guards against an over-broad fix).
 //
 // Runs in the ADR-0078 real-database CI lane (`db.test.ts` path filter).
 
@@ -35,6 +37,9 @@ if (REAL_DB && process.env['DATABASE_URL'] !== REAL_DB) {
 const NS = 'adr0142-export';
 const SITE = `${NS}-site`;
 const SOURCE = `${NS}-source`;
+// A second site whose aggregate sits on a day that is dock-only at SITE. It must not
+// suppress SITE's dock rows: the aggregate lookup is site-scoped.
+const OTHER_SITE = `${NS}-other-site`;
 
 vi.mock('@/lib/auth-helpers', () => ({
   requireManagerForSite: async () => ({
@@ -72,6 +77,7 @@ interface Fx {
   status: 'submitted' | 'verified' | 'voided';
   at: string;
   units: number;
+  site?: string;
 }
 
 // September 2026 is PDT (UTC-7): Pacific midnight = 07:00Z.
@@ -107,6 +113,15 @@ const FIXTURE: Fx[] = [
     at: '2026-09-11T17:00:00Z',
     units: 25,
   },
+  // Another site's aggregate on Sep 11 — must not touch SITE's Sep 11 dock row.
+  {
+    id: `${NS}-other-agg-0911`,
+    type: 'mymrc_haul',
+    status: 'verified',
+    at: '2026-09-11T07:00:00Z',
+    units: 777,
+    site: OTHER_SITE,
+  },
   // Sep 12 — aggregate only → exported.
   {
     id: `${NS}-agg-0912`,
@@ -130,18 +145,52 @@ const FIXTURE: Fx[] = [
     at: '2026-09-13T18:00:00Z',
     units: 15,
   },
+  // Month edge. Sep 30 aggregate (UTC 2026-09-30T07:00Z → September's file) and a dock
+  // load at 17:04 PDT Sep 30, whose UTC instant (2026-10-01T00:04Z) falls in OCTOBER's
+  // UTC-month window. Its Pacific day is aggregate-owned, so October drops it.
+  {
+    id: `${NS}-agg-0930`,
+    type: 'mymrc_haul',
+    status: 'verified',
+    at: '2026-09-30T07:00:00Z',
+    units: 70,
+  },
+  {
+    id: `${NS}-dock-0930-edge`,
+    type: 'b2b_haul',
+    status: 'submitted',
+    at: '2026-10-01T00:04:00Z',
+    units: 131,
+  },
+  // Oct 2 — dock only → October keeps it (the control for the edge case).
+  {
+    id: `${NS}-dock-1002`,
+    type: 'b2b_haul',
+    status: 'submitted',
+    at: '2026-10-02T18:00:00Z',
+    units: 12,
+  },
 ];
 
-const EXPECTED_IDS = [`${NS}-agg-0910`, `${NS}-dock-0911`, `${NS}-agg-0912`, `${NS}-dock-0913`];
+const EXPECTED_IDS = [
+  `${NS}-agg-0910`,
+  `${NS}-dock-0911`,
+  `${NS}-agg-0912`,
+  `${NS}-dock-0913`,
+  `${NS}-agg-0930`,
+];
 const EXPECTED_PER_DAY: Record<string, number> = {
   '2026-09-10': 500,
   '2026-09-11': 25,
   '2026-09-12': 60,
   '2026-09-13': 15,
+  '2026-09-30': 70,
 };
 
 async function cleanup(d: any): Promise<void> {
-  await d.$executeRawUnsafe(`DELETE FROM "inbound_loads" WHERE "site_id" = '${SITE}'`);
+  await d.$executeRawUnsafe(
+    `DELETE FROM "inbound_loads" WHERE "site_id" IN ('${SITE}', '${OTHER_SITE}')`,
+  );
 }
 
 function parseCsv(csv: string): Array<Record<string, string>> {
@@ -151,8 +200,12 @@ function parseCsv(csv: string): Array<Record<string, string>> {
   return lines.map((l) => Object.fromEntries(l.split(',').map((v, i) => [cols[i]!, v])));
 }
 
-const get = async (route: { GET: (r: Request) => Promise<Response> }, path: string) => {
-  const res = await route.GET(new Request(`http://test${path}?site=woodland&month=2026-09`));
+const get = async (
+  route: { GET: (r: Request) => Promise<Response> },
+  path: string,
+  month = '2026-09',
+) => {
+  const res = await route.GET(new Request(`http://test${path}?site=woodland&month=${month}`));
   expect(res.status).toBe(200);
   return parseCsv(await res.text());
 };
@@ -165,6 +218,11 @@ describe.skipIf(!REAL_DB)('ADR-0142 — invoice exports: one source per Pacific 
     db = new PC({ datasources: { db: { url: REAL_DB! } } });
     await cleanup(db);
     await db.site.upsert({ where: { id: SITE }, update: {}, create: { id: SITE, ...SITE_FIELDS } });
+    await db.site.upsert({
+      where: { id: OTHER_SITE },
+      update: {},
+      create: { id: OTHER_SITE, ...SITE_FIELDS, code: `${NS}-other`, name: 'Export Probe Other' },
+    });
     await db.source.upsert({
       where: { id: SOURCE },
       update: {},
@@ -174,7 +232,7 @@ describe.skipIf(!REAL_DB)('ADR-0142 — invoice exports: one source per Pacific 
       await db.inboundLoad.create({
         data: {
           id: f.id,
-          site_id: SITE,
+          site_id: f.site ?? SITE,
           source_id: f.type === 'b2b_haul' ? SOURCE : null,
           load_source_type: f.type,
           status: f.status,
@@ -211,6 +269,22 @@ describe.skipIf(!REAL_DB)('ADR-0142 — invoice exports: one source per Pacific 
     const rows = await get(await import('@/app/api/exports/mrc/route'), '/api/exports/mrc');
     expect(rows).toHaveLength(EXPECTED_IDS.length);
     const total = rows.reduce((s, r) => s + Number(r['Unit Count at Unload']), 0);
-    expect(total).toBe(600);
+    expect(total).toBe(670);
+  });
+
+  it("another site's aggregate does not suppress this site's dock rows", async () => {
+    const rows = await get(await import('@/app/api/exports/svdp/route'), '/api/exports/svdp');
+    const ids = rows.map((r) => r['DR3 Load ID']);
+    expect(ids).toContain(`${NS}-dock-0911`);
+    expect(ids).not.toContain(`${NS}-other-agg-0911`);
+  });
+
+  it('month edge: the 17:04 PDT Sep 30 dock load is dropped from OCTOBER (its Pacific day is aggregate-owned)', async () => {
+    const rows = await get(
+      await import('@/app/api/exports/svdp/route'),
+      '/api/exports/svdp',
+      '2026-10',
+    );
+    expect(rows.map((r) => r['DR3 Load ID'])).toEqual([`${NS}-dock-1002`]);
   });
 });

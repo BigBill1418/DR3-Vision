@@ -34,7 +34,11 @@ month; 171 / 19,414 in the route's UTC window) **plus 25 aggregate rows / 21,804
   Woodland September MRC export: **before 196 rows / 41,218 units, after 25 rows / 21,804.**
 - **Invoice generation unchanged, reported.** `resolveTransportationInputs` shares `INVOICE_STATUSES` but bills
   freight per truck from per-load rows; aggregates carry no source or mileage. The export predicate would delete
-  freight, not a double count. `transport_charged` is `false` everywhere today. Decision for Bill in ADR-0142 D3.
+  freight, not a double count. **But the freight leg goes silently empty on aggregate days:**
+  `transport_charged` is stamped only at verify (or by the EOD add-line / manual checkbox), and dock loads on
+  aggregate days can no longer be verified. Once `sources.is_trans_charge` is populated those trucks get no freight
+  leg and nothing errors. `transport_charged` is `false` everywhere today. Decision for Bill in ADR-0142 D3 (premise
+  corrected after Ryan's review).
 - No data rows were touched. Tests (real Postgres, run red against f32a067 first):
   `verify-gate.aggregate-day.db.test.ts` (refusal per aggregate type, Pacific-not-UTC bucketing, allowed day,
   voided aggregate, lock-holding writer race) and `exports.single-source.db.test.ts` (both route handlers).

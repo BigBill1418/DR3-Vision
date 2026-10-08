@@ -4515,8 +4515,12 @@ are broken out below because they are not all about corrections.
     = re-check inside the bridge's locked per-day transaction.
   - **Export month window is UTC** (`monthRange`): a dock-only day's evening loads can land
     in the next month's file.
-  - **Freight vs unit source (Bill's call, ADR-0142 D3):** once `transport_charged` is
-    populated, freight bills from `submitted` dock rows that are now tracking-only for units.
+  - **Freight leg goes silently empty on aggregate days (Bill's call, ADR-0142 D3).**
+    `transport_charged` is written only at verify (from `sources.is_trans_charge`), by the
+    EOD add-line, or by the manual EOD checkbox. Dock loads on aggregate days can no longer
+    be verified, so once the classifier is populated those trucks get **no freight leg**
+    and nothing errors. Today that is all 374 Woodland dock loads. Options: stamp at
+    submit, bill freight from the MyMRC haul, or keep the manual checkbox.
   - **Three dock loads match no delivered haul**, for Bill to decide (not touched):
     `fce4fbc5` and `2b60d7ba` (no haul ID), `3b9e6968` (points at an MRC-Rejected haul).
 - **L-5 — DEFECT (data): H-135881's header and its evidence disagree.** `total_units = 95`
