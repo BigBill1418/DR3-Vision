@@ -28,9 +28,12 @@
 # with its own per-service tunnel (not on host-systemd), to keep the
 # ingress graph isolated and make rollback atomic with the app rollback.
 #
-# Tunnel + token live in ~/.dr3-vision-secrets/tunnel.env on CHAD-HQ
-# (mode 600, NOT in the repo). The deployer sources it via env_file.
-# To rotate: re-mint via CF API + replace TUNNEL_TOKEN.
+# Tunnel token lives in /opt/cf-tunnel-tokens/dr3-vision-cloudflared/token on
+# CHAD-HQ (0400, uid 65532 = cloudflared's nonroot user; NOT in the repo), mounted
+# as a compose secret and read via TUNNEL_TOKEN_FILE (2026-10-09, fleet audit
+# 2026-09-18 #13: env values show in `docker inspect`). ~/.dr3-vision-secrets/
+# tunnel.env is kept at rest as the source copy but is no longer read.
+# To rotate: re-mint via CF API, rewrite that file AND tunnel.env's TUNNEL_TOKEN.
 # =============================================================================
 name: dr3-vision
 
@@ -1384,8 +1387,12 @@ services:
     container_name: dr3-vision-cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run
-    env_file:
-      - /home/bbarnard065/.dr3-vision-secrets/tunnel.env
+    environment:
+      # TUNNEL_ID mirrors the non-secret id that tunnel.env used to inject.
+      TUNNEL_ID: 3999bb3b-7f86-4896-8f8c-77ef27f8f2cf
+      TUNNEL_TOKEN_FILE: /run/secrets/cloudflared_tunnel_token
+    secrets:
+      - cloudflared_tunnel_token
     depends_on:
       app:
         condition: service_healthy
@@ -1461,3 +1468,7 @@ volumes:
     name: dr3-vision_postgres-data
   mymrc-auth-state:
     name: dr3-vision_mymrc-auth-state
+
+secrets:
+  cloudflared_tunnel_token:
+    file: ${CF_TOKEN_FILE:-/opt/cf-tunnel-tokens/dr3-vision-cloudflared/token}
