@@ -9,6 +9,19 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-09 — Tunnel token read from a secret file, not an env var (infra only)
+
+Fleet audit 2026-09-18 item #13. `dr3-vision-cloudflared` got its token as `TUNNEL_TOKEN` from
+`~/.dr3-vision-secrets/tunnel.env` (`env_file`), so the value was readable in `docker inspect`. It now
+reads `TUNNEL_TOKEN_FILE=/run/secrets/cloudflared_tunnel_token`, a compose secret backed by
+`/opt/cf-tunnel-tokens/dr3-vision-cloudflared/token` on CHAD-HQ (dir 0711 root, file 0400 uid 65532).
+`TUNNEL_ID` is set inline (same non-secret value tunnel.env injected); `tunnel.env` stays on disk as the
+source copy but is no longer read. The rendered compose config differs from before only in that swap.
+Zero downtime: a canary connector carried `dr3-vision.svdp.us` while only the cloudflared service was
+recreated (`up -d --no-deps cloudflared`); app, worker, db and every cron service untouched. No app
+code, no migration, no floor/AP/bonus behaviour change. A token rotation must rewrite the file (and
+tunnel.env, so the two never disagree). Register: OPEN-ITEMS 0.CF.
+
 ## 2026-10-08 — AP team-submitted invoices go LIVE at both sites (ADR-0141)
 
 Bill, 1:54 PM PDT: *"no not pilot go live and make sure this is ready to go"*. At 1:55 PM PDT

@@ -19,6 +19,18 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CF — 2026-10-09 tunnel token moved to a secret file (fleet audit #13) — **DONE (2026-10-09)**
+
+- **CF-1 — CLOSED 2026-10-09.** `dr3-vision-cloudflared` reads its token via `TUNNEL_TOKEN_FILE` from
+  `/opt/cf-tunnel-tokens/dr3-vision-cloudflared/token` (CHAD-HQ, 0400 uid 65532) instead of `TUNNEL_TOKEN`
+  from `tunnel.env`. Verified after the switch: one connector with 4 connections and
+  `dr3-vision.svdp.us` returning the same 307 as the pre-change baseline; canary removed. See CHANGELOG
+  2026-10-09.
+- **CF-2 (accepted residual):** `~/.dr3-vision-secrets/tunnel.env` still holds the token at rest (mode
+  600), deliberately, as the source copy. Rotation must update both places.
+
+---
+
 ## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **LIVE at both sites (2026-10-08 1:55 PM PDT)**
 
 - **CE-1 — CLOSED 2026-10-08 13:55 PDT.** Bill, 13:54 PDT: *"no not pilot go live and make sure
