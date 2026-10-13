@@ -9,6 +9,15 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-13 — Bonus history list opens on All time (fix)
+
+Eugene's manager (Patrick) reported "nothing there" on 2026-10-13. Data was intact: the 9/29–10/12 period
+(29 entries) had auto-closed to `paid` at 08:30 PT, and `/bonus/months` defaulted to the "Current month"
+filter, which lists periods by `period_start` in the current calendar month, i.e. only the new, empty
+10/13 period. `parsePayPeriodFilter` now defaults to `all` (explicit `?filter=current|year` unchanged), so
+the just-closed period is always visible. Same trap would have recurred every period rollover and every
+January with a "This year" default. Test updated in `month-list.test.ts`.
+
 ## 2026-10-09 — Tunnel token read from a secret file, not an env var (infra only)
 
 Fleet audit 2026-09-18 item #13. `dr3-vision-cloudflared` got its token as `TUNNEL_TOKEN` from
