@@ -3,7 +3,7 @@
 // The standing readable surface for `bonus_signature_chains`. Server-rendered,
 // no client state: everything here is a read.
 //
-// Why a page and not just the ntfy: the 08:30 PT auto-override already refuses
+// Why a page and not just the ntfy: the 09:00 PT auto-override already refuses
 // to sign as an inactive actor and pages when it does. That guard speaks at the
 // point of failure — thirty minutes before an immovable payroll deadline — and
 // only through the alert channel. On 2026-08-05 the app logged
@@ -60,10 +60,10 @@ const OVERALL_HEADLINE: Record<ChainStatus, string> = {
 
 const OVERALL_BODY: Record<ChainStatus, string> = {
   green:
-    'Every signer, override actor, and auto-override actor resolves to a live account. The 08:30 AM PT auto-override has someone to sign as.',
+    'Every signer, override actor, and auto-override actor resolves to a live account. The 09:00 AM PT auto-override has someone to sign as.',
   amber:
-    'Every reference still resolves to a live account, so the 08:30 AM PT auto-override can sign — but the chain has lost a backstop or its four-eyes property. Fix before it is load-bearing.',
-  red: 'At least one reference cannot sign. The 08:30 AM PT auto-override will refuse, and the 09:00 AM PT payroll deadline will be missed unless a human signs manually.',
+    'Every reference still resolves to a live account, so the 09:00 AM PT auto-override can sign — but the chain has lost a backstop or its four-eyes property. Fix before it is load-bearing.',
+  red: 'At least one reference cannot sign. The 09:00 AM PT auto-override will refuse, and the 09:30 AM PT payroll deadline will be missed unless a human signs manually.',
 };
 
 /**
@@ -181,7 +181,7 @@ export default async function BonusChainHealthPage() {
                     <p className="text-sm text-emerald-200">
                       Every signer and override actor resolves to a live account.
                       {site.autoOverrideActorName
-                        ? ` ${site.autoOverrideActorName} can sign at 08:30 AM PT if nobody else has.`
+                        ? ` ${site.autoOverrideActorName} can sign at 09:00 AM PT if nobody else has.`
                         : ''}
                     </p>
                   ) : (
@@ -249,7 +249,7 @@ export default async function BonusChainHealthPage() {
               <p className="mt-2 text-dr3-mist">
                 Nothing has ever written a row to <code>bonus_chain_health_runs</code>, so the 06:30
                 AM PT cron may not have run. This is not evidence that the chain is healthy — it
-                means nobody has been watching it, and a break between now and the next 08:30 AM PT
+                means nobody has been watching it, and a break between now and the next 09:00 AM PT
                 auto-override would go unannounced.
               </p>
             </div>

@@ -29,7 +29,7 @@
 // fires ONLY after the mail actually succeeds and ONLY when the period is still
 // `signed` — never on a fail-open no-op (`disabled: true`, M365/R2 unconfigured)
 // and never on an exhausted/failed send. Leaving a genuinely-undelivered period
-// `signed` is load-bearing: it lets the T-206 t4 09:00 PT deadline-miss check
+// `signed` is load-bearing: it lets the T-206 t4 09:30 PT deadline-miss check
 // (which keys off `state != 'paid'`) alert on a REAL miss while staying silent
 // for a period that did deliver.
 
@@ -222,7 +222,7 @@ export function triggerPayrollDelivery(monthId: string): void {
 
       // Confirmed Graph delivery (202 + message id) is the ONLY trigger for
       // signed -> paid. A fail-open no-op (disabled: M365/R2 unconfigured) or an
-      // exhausted/failed send leaves the period `signed` so the t4 09:00 PT
+      // exhausted/failed send leaves the period `signed` so the t4 09:30 PT
       // deadline-miss check alerts on a real miss. sendPayrollPdf already
       // persisted payroll_sent_at + payroll_message_id on success.
       if (sendResult.delivered) {

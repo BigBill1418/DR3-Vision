@@ -31,7 +31,7 @@ export async function POST(req: Request): Promise<Response> {
   // getting its own. This fire is at 06:30 PT, which is the earliest point in
   // the payroll morning and FORTY MINUTES ahead of the t1 escalation tier: a
   // delivery re-driven here has the whole ladder still in front of it, and an
-  // ambiguous one puts a person on it two and a half hours before the 09:00 PT
+  // ambiguous one puts a person on it three hours before the 09:30 PT
   // deadline rather than after. It also runs on non-payroll mornings, so a
   // delivery lost on any other day is recovered the next morning instead of
   // waiting for the fortnight to come round.

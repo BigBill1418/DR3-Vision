@@ -11,7 +11,7 @@
 // comma-separated UUID strings, so the database enforces nothing about them, and
 // the primary-signer FKs enforce existence but say nothing about `is_active`.
 //
-// Why a standing indicator rather than another alert: the 08:30 PT auto-override
+// Why a standing indicator rather than another alert: the 09:00 PT auto-override
 // already refuses to sign as an inactive actor and fires an urgent ntfy. That
 // guard is correct and it is not enough. It speaks at the point of failure —
 // thirty minutes before an immovable payroll deadline — and only through the
@@ -167,21 +167,21 @@ function consequence(slot: ChainSlot, reason: 'missing' | 'inactive' | 'deleted'
   switch (slot) {
     case 'auto_override':
       return (
-        `The ${SLOT_LABEL[slot]} ${state}. The 08:30 PT auto-override will REFUSE to sign ` +
-        `(escalation.ts actorUnavailable) and the 09:00 PT payroll deadline will be missed ` +
+        `The ${SLOT_LABEL[slot]} ${state}. The 09:00 PT auto-override will REFUSE to sign ` +
+        `(escalation.ts actorUnavailable) and the 09:30 PT payroll deadline will be missed ` +
         `unless a human signs manually.`
       );
     case 'facility_signer':
     case 'ops_signer':
       return (
         `The ${SLOT_LABEL[slot]} ${state}. That slot cannot be signed normally and no ` +
-        `signature-request email can reach them; the period depends entirely on the 08:30 PT ` +
+        `signature-request email can reach them; the period depends entirely on the 09:00 PT ` +
         `auto-override.`
       );
     default:
       return (
         `A ${SLOT_LABEL[slot]} ${state}. That backstop is unavailable if the primary signer ` +
-        `cannot sign before the 09:00 PT deadline.`
+        `cannot sign before the 09:30 PT deadline.`
       );
   }
 }
@@ -275,10 +275,10 @@ export function evaluateChainHealth(input: ChainHealthInput): ChainHealthResult 
             ? `No override actor is configured for the ${which} slot, and its signer is ` +
               'separation-of-duties excluded from periods containing their own bonus entries ' +
               '(ADR-0019.3 §2). For those periods that signer cannot sign and no human backstop ' +
-              'is configured, so only an admin or the 08:30 PT auto-override could complete them.'
+              'is configured, so only an admin or the 09:00 PT auto-override could complete them.'
             : `No override actor is configured for the ${which} ` +
               'slot. If its signer is unavailable, no human can sign on their behalf before the ' +
-              '09:00 PT deadline — only the 08:30 PT auto-override could rescue the period.',
+              '09:30 PT deadline — only the 09:00 PT auto-override could rescue the period.',
         });
       }
     }
@@ -447,7 +447,7 @@ export async function loadChainHealth(db: PrismaClient): Promise<ChainHealthRepo
             userId: null,
             detail:
               `No bonus_signature_chains row exists for ${site.name}. No slot can be signed and ` +
-              `the 08:30 PT auto-override has nothing to act on.`,
+              `the 09:00 PT auto-override has nothing to act on.`,
           },
         ],
       });
@@ -535,10 +535,10 @@ export async function runChainHealthSweep(
             : `Bonus signature chain degraded — ${site.siteName}`,
         body:
           `${site.siteName}: ${site.findings.length} finding(s). ${worst?.detail ?? ''} ` +
-          `Fix before the next 08:30 AM PT auto-override window.`,
+          `Fix before the next 09:00 AM PT auto-override window.`,
         // ADR-0037: red is `high`, not `urgent`. A broken chain is genuinely
         // actionable and payroll-impacting, but it is SLOW-MOVING — it is only
-        // load-bearing at 08:30 PT on a payroll morning, so it does not warrant
+        // load-bearing at 09:00 PT on a payroll morning, so it does not warrant
         // waking Bill at 3am. Amber is `default`.
         priority: site.status === 'red' ? 'high' : 'default',
         tags: site.status === 'red' ? ['rotating_light', 'bonus', 'chain'] : ['warning', 'bonus'],

@@ -142,7 +142,7 @@ export async function POST(
         // reachable directly by anyone holding a session.
         //
         // The message names the route forward rather than just refusing, because
-        // the period still has to be signed before the 09:00 PT deadline.
+        // the period still has to be signed before the 09:30 PT deadline.
         return NextResponse.json(
           {
             error:

@@ -20,7 +20,7 @@
 //
 // Scenario anchor (ADR-0019.1): Period 12 (Woodland) closes Mon Jun 8 2026 17:30
 // PT; signatures land Mon evening + Tue morning; Period 13 (Tue Jun 9 → Mon Jun
-// 22) is the next draft. T-213 exercises the Tue 08:30 PT auto-override path.
+// 22) is the next draft. T-213 exercises the Tue 09:00 PT auto-override path.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // signed -> paid (T-211 step 5, now WIRED): `triggerPayrollDelivery` advances the
@@ -30,7 +30,7 @@
 // shared delivery trigger so BOTH the manual 2nd-signature path and the t3
 // auto-override path reach `paid`. A fail-open no-op (M365/R2 unconfigured) or an
 // exhausted/failed send leaves the period `signed` — which is exactly what the
-// T-206 t4 09:00 PT deadline-miss check (keyed on `state != 'paid'`) needs to
+// T-206 t4 09:30 PT deadline-miss check (keyed on `state != 'paid'`) needs to
 // alert on a REAL miss while staying silent for a period that did deliver. These
 // tests drive the REAL chain in-process (R2 + Graph mocked at the boundary) and
 // assert the period ends `paid` on success and stays `signed` on failure.
@@ -993,7 +993,7 @@ describe('T-212 — Eugene parallel cycle with site isolation', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// T-213 — Auto-override escalation path (06:00 + 07:30 ntfy → 08:30 auto-sign)
+// T-213 — Auto-override escalation path (06:00 + 07:30 ntfy → 09:00 auto-sign)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('T-213 — auto-override escalation path', () => {
   const SITE = { code: 'woodland', name: 'DR3 Woodland' };
@@ -1023,8 +1023,8 @@ describe('T-213 — auto-override escalation path', () => {
     expect(t2Call.fingerprint).toBe('bonus-escalation-warning:woodland:wl-p12:t2');
     expect(t2Call.body).toContain('Bill Barnard');
 
-    // t3 08:30 PT — auto-override: sign BOTH slots as the chain auto actor (Bill).
-    vi.setSystemTime(new Date('2026-06-09T15:30:00Z')); // Tue Jun 9 08:30 PT
+    // t3 09:00 PT — auto-override: sign BOTH slots as the chain auto actor (Bill).
+    vi.setSystemTime(new Date('2026-06-09T16:00:00Z')); // Tue Jun 9 09:00 PT
     const t3 = await runEscalationTier({ db: db(), tier: 't3', now: TODAY });
     expect(t3.autoSigned).toBe(2);
     const p = periodById('wl-p12');
@@ -1037,7 +1037,7 @@ describe('T-213 — auto-override escalation path', () => {
     expect(p.ops_auto_override_at).not.toBeNull();
     // The override reason carries the ADR-0019.1 escalation attestation language.
     expect(p.facility_override_reason).toContain('ADR-0019.1 escalation policy');
-    expect(p.ops_override_reason).toContain('08:30 AM PT');
+    expect(p.ops_override_reason).toContain('09:00 AM PT');
 
     // Audit records system:bonus-escalation as the actor on the auto-signatures.
     const escalationAudits = store.audit.filter((a) => a.actor_label === 'system:bonus-escalation');
@@ -1054,7 +1054,7 @@ describe('T-213 — auto-override escalation path', () => {
 
   it('builds the ADR-0019.1 auto-override attestation from the stamped slot for the PDF', async () => {
     const { buildAttestation } = await import('@/lib/bonus/pdf-data');
-    vi.setSystemTime(new Date('2026-06-09T15:30:00Z')); // Tue Jun 9 08:30 PT
+    vi.setSystemTime(new Date('2026-06-09T16:00:00Z')); // Tue Jun 9 09:00 PT
     await runEscalationTier({ db: db(), tier: 't3', now: TODAY });
     const p = periodById('wl-p12');
     // The PDF page (T-209) feeds *_auto_override_at into buildAttestation; assert
@@ -1075,12 +1075,12 @@ describe('T-213 — auto-override escalation path', () => {
     expect(attest.lines[1]).toContain(
       'System-applied admin override per ADR-0019.1 escalation policy',
     );
-    expect(attest.lines[1]).toContain('did not sign by 08:30 AM PT');
+    expect(attest.lines[1]).toContain('did not sign by 09:00 AM PT');
   });
 
   it('does NOT auto-sign when the configured auto-override actor is inactive (risk mitigation)', async () => {
     store.users = store.users.map((u) => (u.id === 'bill' ? { ...u, is_active: false } : u));
-    vi.setSystemTime(new Date('2026-06-09T15:30:00Z'));
+    vi.setSystemTime(new Date('2026-06-09T16:00:00Z'));
     const t3 = await runEscalationTier({ db: db(), tier: 't3', now: TODAY });
     expect(t3.actorUnavailable).toBe(1);
     expect(t3.autoSigned).toBe(0);
@@ -1104,7 +1104,7 @@ describe('T-213 — auto-override escalation path', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)', () => {
   const SITE = { code: 'woodland', name: 'DR3 Woodland' };
-  // Period 12 closed Mon Jun 8; the t4 09:00 PT fire runs on Tue Jun 9, where
+  // Period 12 closed Mon Jun 8; the t4 09:30 PT fire runs on Tue Jun 9, where
   // yesterdayKey(Jun 9) == period_end (Jun 8) — so the period is in t4 scope.
   const T4_TODAY = dayUTC(2026, 5, 9);
 
@@ -1119,7 +1119,7 @@ describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)'
     store.entries = [{ bonus_pay_period_id: 'wl-p12', mattress_count: 60 }];
   });
 
-  it('(a) confirmed delivery → paid, and t4 at 09:00 PT fires NO false deadline-miss', async () => {
+  it('(a) confirmed delivery → paid, and t4 at 09:30 PT fires NO false deadline-miss', async () => {
     // Real delivery chain runs to a confirmed send → signed -> paid.
     triggerPayrollDelivery('wl-p12');
     await flushPayrollDelivery('wl-p12');
@@ -1127,7 +1127,7 @@ describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)'
     expect(periodById('wl-p12').payroll_sent_at).not.toBeNull();
 
     publishNtfy.mockClear();
-    // t4 09:00 PT — a paid period is OUT of the `state != 'paid'` scope, so no
+    // t4 09:30 PT — a paid period is OUT of the `state != 'paid'` scope, so no
     // deadline-miss alert fires (the false-positive this fix closes).
     const t4 = await runEscalationTier({ db: db(), tier: 't4', now: T4_TODAY });
     expect(t4.periodsExamined).toBe(0);
@@ -1138,7 +1138,7 @@ describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)'
     expect(missAlert).toBeUndefined();
   });
 
-  it('(b) delivery FAILURE → stays signed, and t4 at 09:00 PT DOES fire the real deadline-miss', async () => {
+  it('(b) delivery FAILURE → stays signed, and t4 at 09:30 PT DOES fire the real deadline-miss', async () => {
     // Mail-send fails (exhausted/non-retryable): sendPayrollPdf returns
     // delivered:false. The period must NOT advance to paid — leaving it `signed`
     // so the real miss is alerted.
@@ -1154,7 +1154,7 @@ describe('payroll delivery → paid vs. t4 deadline-miss (T-211 step 5 / T-206)'
     expect(periodById('wl-p12').state).toBe('signed');
 
     publishNtfy.mockClear();
-    // t4 09:00 PT — a still-`signed` period IS in scope → real deadline-miss.
+    // t4 09:30 PT — a still-`signed` period IS in scope → real deadline-miss.
     const t4 = await runEscalationTier({ db: db(), tier: 't4', now: T4_TODAY });
     expect(t4.deadlineMissed).toBe(1);
     const missAlert = publishNtfy.mock.calls

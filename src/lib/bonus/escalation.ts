@@ -11,14 +11,14 @@
 //   t1 06:00 PT — low-urgency ntfy per still-unsigned slot.
 //   t2 07:30 PT — urgent ntfy per still-unsigned slot; body lists the
 //                 override-authorized humans from the signature chain.
-//   t3 08:30 PT — AUTO-OVERRIDE: sign each still-unsigned slot AS the chain's
+//   t3 09:00 PT — AUTO-OVERRIDE: sign each still-unsigned slot AS the chain's
 //                 auto_override_actor via the SAME override path as a manual
 //                 override (recordSignature), stamping `*_auto_override_at` and
 //                 the ADR-0019.1 reason; this triggers the existing
 //                 post-signature side-effects (PDF + M365). The auto-override
 //                 actor MUST be a valid ACTIVE user first — else urgent ntfy +
 //                 NO auto-sign (addendum risk-mitigation row).
-//   t4 09:00 PT — (T-206) urgent payroll-deadline-missed ntfy for any
+//   t4 09:30 PT — (T-206) urgent payroll-deadline-missed ntfy for any
 //                 yesterday's-period that has not reached `paid`.
 //
 // SCOPE: "yesterday's-close" periods — `state IN ('pending_signatures',
@@ -37,7 +37,7 @@ import { log } from '@/lib/observability/logger';
 // Tiers
 // ────────────────────────────────────────────────────────────────────
 
-/** The four escalation fires (06:00 / 07:30 / 08:30 / 09:00 PT). */
+/** The four escalation fires (06:00 / 07:30 / 09:00 / 09:30 PT). */
 export type EscalationTier = 't1' | 't2' | 't3' | 't4';
 
 const TIERS: ReadonlySet<string> = new Set<EscalationTier>(['t1', 't2', 't3', 't4']);
@@ -52,7 +52,7 @@ export function isEscalationTier(v: string | null): v is EscalationTier {
 function escalationReason(slotLabel: string): string {
   return (
     `system-applied admin override per ADR-0019.1 escalation policy after ` +
-    `the ${slotLabel} slot failed to sign by 08:30 AM PT deadline`
+    `the ${slotLabel} slot failed to sign by 09:00 AM PT deadline`
   );
 }
 
@@ -247,8 +247,8 @@ async function tierWarning(
 
   let body =
     `${period.site.name} ${periodLabel} is still unsigned by ${slotNames}. ` +
-    `Sign before Tue 08:30 AM PT or the system auto-overrides as the configured ` +
-    `admin to hit the 09:00 AM PT payroll deadline.`;
+    `Sign before Tue 09:00 AM PT or the system auto-overrides as the configured ` +
+    `admin to hit the 09:30 AM PT payroll deadline.`;
 
   if (tier === 't2' && db) {
     const humans = await overrideAuthorizedHumans(db, period.site_id);
@@ -322,7 +322,7 @@ async function tierAutoOverride(
         `The configured auto-override actor (${actorId}) for ${period.site.name} is ` +
         `${actor ? 'INACTIVE' : 'MISSING'}. The system did NOT auto-sign ` +
         `Period ${period.period_number} (${period.period_year}). Sign manually NOW — ` +
-        `the 09:00 AM PT payroll deadline is at risk.`,
+        `the 09:30 AM PT payroll deadline is at risk.`,
       priority: 'urgent',
       tags: ['rotating_light', 'bonus', 'auto-override'],
       fingerprint: `bonus-auto-override-actor-unavailable:${period.site.code}:${period.id}`,
@@ -354,7 +354,7 @@ async function tierAutoOverride(
       result.autoSigned += 1;
       signedAny = true;
     } else if (res.reason === 'already_signed') {
-      // IDEMPOTENT: a slot signed manually before 08:30 (or already auto-signed
+      // IDEMPOTENT: a slot signed manually before 09:00 (or already auto-signed
       // on a prior fire / re-POST) is NOT re-overridden — recordSignature rejects
       // it and we move on. Not an error.
       log.info(
@@ -417,7 +417,7 @@ function signedSlotsLabel(slots: readonly SignatureSlot[]): string {
 // ────────────────────────────────────────────────────────────────────
 
 // t4 fires only for periods in the LIVE payroll lifecycle that should have
-// reached `paid` by the 09:00 PT deadline but didn't. Terminal / archival
+// reached `paid` by the 09:30 PT deadline but didn't. Terminal / archival
 // states are NOT live deadlines and must never page:
 //   - `paid`                — success.
 //   - `skipped`             — pre-cutover empties (ADR-0019.1); terminal, no PDF.
@@ -442,7 +442,7 @@ async function runDeadlineMissed(
   // Periods still in the live lifecycle (not yet `paid`) whose payroll deadline
   // has arrived or PASSED. Two cases, distinguished by `period_end`:
   //
-  //   period_end == yesterday  → TODAY's 09:00 PT deadline missed: the PDF did
+  //   period_end == yesterday  → TODAY's 09:30 PT deadline missed: the PDF did
   //                              not ship (M365/R2 outage after auto-override, or
   //                              never signed). Bill intervenes for today's run.
   //   period_end <  yesterday  → STRANDED: the period missed its ENTIRE escalation
@@ -453,9 +453,9 @@ async function runDeadlineMissed(
   // BUGFIX (audit P1-4, 2026-07-21): this query used `period_end == yesterday`
   // ONLY, so a period whose window was missed was never re-examined and stranded
   // FOREVER unpaged. We now look back with `lte` so a stranded period is
-  // re-detected and PAGES every 09:00 PT run until an operator resolves it.
+  // re-detected and PAGES every 09:30 PT run until an operator resolves it.
   // We deliberately do NOT auto-sign a stranded period late: ADR-0019.1's
-  // auto-override is bound to the tight Tue 08:30/09:00 PT window (t3 keeps its
+  // auto-override is bound to the tight Tue 09:00/09:30 PT window (t3 keeps its
   // `period_end == yesterday` scoping), and signing days after the payroll
   // deadline is out of policy — the correct action is an operator intervention,
   // which this urgent page requests.
@@ -506,7 +506,7 @@ async function runDeadlineMissed(
       topic: 'dr3-vision-system',
       title: `URGENT: payroll deadline MISSED — ${period.site.name} Period ${period.period_number}`,
       body:
-        `${period.site.name} ${periodLabel} is in state '${period.state}' at the 09:00 AM PT ` +
+        `${period.site.name} ${periodLabel} is in state '${period.state}' at the 09:30 AM PT ` +
         `payroll deadline — the signed PDF was NOT delivered to payroll. Intervene manually.`,
       priority: 'urgent',
       tags: ['rotating_light', 'bonus', 'deadline'],

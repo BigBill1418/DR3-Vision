@@ -11,7 +11,7 @@
 //                      just after it)
 //   tier=t2  07:30 PT  urgent ntfy per still-unsigned slot, body lists the
 //                      override-authorized humans from the signature chain
-//   tier=t3  08:30 PT  AUTO-OVERRIDE: system-sign each still-unsigned slot AS
+//   tier=t3  09:00 PT  AUTO-OVERRIDE: system-sign each still-unsigned slot AS
 //                      the chain's auto_override_actor (Bill), stamping
 //                      `*_auto_override_at` + the ADR-0019.1 reason text; this
 //                      runs through the SAME state-machine path as a manual
@@ -21,7 +21,7 @@
 //                      user — else an urgent ntfy fires and we DO NOT sign
 //                      (better to miss with an explicit alert than fail silently
 //                      — addendum risk-mitigation row).
-//   tier=t4  09:00 PT  (T-206) urgent payroll-deadline-missed ntfy for any
+//   tier=t4  09:30 PT  (T-206) urgent payroll-deadline-missed ntfy for any
 //                      yesterday's-period row that has not reached `paid`.
 //
 // SCOPE — "yesterday's-close" periods (ADR-0019.1 §6): the close cron now fires
@@ -65,7 +65,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // The escalation tiers fire the morning AFTER the Mon 17:30 PT close, so they
   // examine yesterday's-close periods. `appToday()` keys off the Pacific zone
-  // (the fires land 06:00–09:00 PT, already past UTC midnight — a raw Date would
+  // (the fires land 06:00–09:30 PT, already past UTC midnight — a raw Date would
   // resolve to the wrong calendar day).
   const result = await runEscalationTier({ db: prisma, tier, now: appToday() });
 

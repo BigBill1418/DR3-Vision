@@ -3,11 +3,11 @@
 // WHY THIS EXISTS, stated once so the assertions below read as consequences
 // rather than arbitrary rules:
 //
-// The 08:30 PT auto-override is the mechanism ADR-0019.1 §4 calls "load-bearing
+// The 09:00 PT auto-override is the mechanism ADR-0019.1 §4 calls "load-bearing
 // for hitting the 9:00 AM deadline reliably". It refuses to sign as an inactive
 // actor (`actorUnavailable` in escalation.ts) — correctly, because signing as a
 // deactivated identity would be worse. But that guard is a DETECTOR AT THE POINT
-// OF FAILURE: it speaks at 08:30 on payroll morning, thirty minutes before the
+// OF FAILURE: it speaks at 09:00 on payroll morning, thirty minutes before the
 // deadline, and only by firing an ntfy.
 //
 // That is not enough, twice proven:
@@ -70,7 +70,7 @@ describe('evaluateChainHealth — the healthy baseline', () => {
 
 // ── The failure class that killed payroll twice ──────────────────────
 describe('evaluateChainHealth — inactive / missing references are RED', () => {
-  it('an INACTIVE auto-override actor is red and names the 08:30 consequence', () => {
+  it('an INACTIVE auto-override actor is red and names the 09:00 consequence', () => {
     const input = healthyEugene();
     input.chain.auto_override_actor_user_id = 'ops-alias';
     input.users = [DEAD_BILL, RICK, PATRICK];
@@ -83,7 +83,7 @@ describe('evaluateChainHealth — inactive / missing references are RED', () => 
     expect(f?.userId).toBe('ops-alias');
     // The detail must state the operational consequence, not just the fact —
     // "inactive user" alone does not tell an operator payroll is at risk.
-    expect(f?.detail).toMatch(/08:30/);
+    expect(f?.detail).toMatch(/09:00/);
     expect(f?.detail).toMatch(/auto-override/i);
   });
 

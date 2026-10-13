@@ -44,23 +44,23 @@ describe('bonus-escalation cron — nextEscalationFire', () => {
     expect(pacificHHMM(from, next.delay)).toBe('07:30');
   });
 
-  it('picks t3 08:30 PT when between 07:30 and 08:30', () => {
+  it('picks t3 09:00 PT when between 07:30 and 09:00', () => {
     // 2026-07-15 08:00 PDT = 15:00 UTC.
     const from = new Date('2026-07-15T15:00:00Z');
     const next = nextEscalationFire(from);
     expect(next.tier).toBe('t3');
-    expect(pacificHHMM(from, next.delay)).toBe('08:30');
-  });
-
-  it('picks t4 09:00 PT when between 08:30 and 09:00', () => {
-    // 2026-07-15 08:45 PDT = 15:45 UTC.
-    const from = new Date('2026-07-15T15:45:00Z');
-    const next = nextEscalationFire(from);
-    expect(next.tier).toBe('t4');
     expect(pacificHHMM(from, next.delay)).toBe('09:00');
   });
 
-  it('rolls to next-day t1 after 09:00 PT', () => {
+  it('picks t4 09:30 PT when between 09:00 and 09:30', () => {
+    // 2026-07-15 09:15 PDT = 16:15 UTC.
+    const from = new Date('2026-07-15T16:15:00Z');
+    const next = nextEscalationFire(from);
+    expect(next.tier).toBe('t4');
+    expect(pacificHHMM(from, next.delay)).toBe('09:30');
+  });
+
+  it('rolls to next-day t1 after 09:30 PT', () => {
     // 2026-07-15 10:00 PDT = 17:00 UTC. All today fired → tomorrow 07:10 t1.
     const from = new Date('2026-07-15T17:00:00Z');
     const next = nextEscalationFire(from);
@@ -82,8 +82,8 @@ describe('bonus-escalation cron — nextEscalationFire', () => {
     const expected: Record<string, string> = {
       t1: '07:10',
       t2: '07:30',
-      t3: '08:30',
-      t4: '09:00',
+      t3: '09:00',
+      t4: '09:30',
     };
     const base = Date.UTC(2026, 5, 1, 0, 0, 0); // Jun 1 2026 (PDT)
     for (let h = 0; h < 24; h++) {
