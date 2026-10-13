@@ -204,7 +204,7 @@ describe('buildAttestation', () => {
   });
 
   it('auto override renders the ADR-0019.1 escalation language', () => {
-    // Tue Jun 9 2026 08:30 PT == 15:30 UTC (PDT, UTC-7).
+    // Tue Jun 9 2026 09:00 PT == 16:00 UTC (PDT, UTC-7).
     const at = new Date('2026-06-09T15:30:00Z');
     const out = buildAttestation(
       {
@@ -220,7 +220,7 @@ describe('buildAttestation', () => {
       'Signed by Bill Barnard, Administrator, on behalf of Janette Tomas, Facility Manager.',
     );
     expect(out.lines[1]).toBe(
-      'System-applied admin override per ADR-0019.1 escalation policy. Janette Tomas did not sign by 08:30 AM PT on Tue Jun 9, 2026.',
+      'System-applied admin override per ADR-0019.1 escalation policy. Janette Tomas did not sign by 09:00 AM PT on Tue Jun 9, 2026.',
     );
   });
 

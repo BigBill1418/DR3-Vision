@@ -16,8 +16,8 @@
 // 06:00 — which now predates the close — to 07:10, a post-close nudge):
 //   07:10 PT → tier t1  (low-urgency "still unsigned" post-close nudge)
 //   07:30 PT → tier t2  (urgent ntfy + override-authorized humans in the body)
-//   08:30 PT → tier t3  (AUTO-OVERRIDE: system-sign unsigned slots, fire PDF+mail)
-//   09:00 PT → tier t4  (T-206 payroll-deadline-missed ntfy if not yet `paid`)
+//   09:00 PT → tier t3  (AUTO-OVERRIDE: system-sign unsigned slots, fire PDF+mail)
+//   09:30 PT → tier t4  (T-206 payroll-deadline-missed ntfy if not yet `paid`)
 //
 // Schedule note (same shape as period-close): the daemon fires DAILY at each
 // time. ADR-0019.1's escalation is "every other Tuesday", but cron/this loop
@@ -43,8 +43,8 @@ const TOKEN = process.env.INTERNAL_CRON_TOKEN ?? '';
 // A tier fire that fails (transport error / redirect / non-200 — usually the app
 // being down) is NOT "done until the next tier" any more. We retry it a bounded
 // number of times, spaced within the tier's own window, inside the same daemon
-// run. 3 attempts × 15min ≈ 30min covers the t3→t4 gap so the 08:30 auto-override
-// gets several shots before the 09:00 PT payroll deadline. No new infra: the
+// run. 3 attempts × 15min ≈ 30min covers the t3→t4 gap so the 09:00 auto-override
+// gets several shots before the 09:30 PT payroll deadline. No new infra: the
 // retry runs off the daemon's own timers, and the NEXT tier is armed immediately
 // (see scheduleNext) so retries never delay a later tier's wall-clock fire.
 const MAX_TIER_ATTEMPTS = 3;
@@ -100,8 +100,8 @@ const TIER_FAILURE_PRIORITY = { t1: 'high', t2: 'high', t3: 'urgent', t4: 'urgen
 const FIRES = [
   { hour: 7, minute: 10, tier: 't1' },
   { hour: 7, minute: 30, tier: 't2' },
-  { hour: 8, minute: 30, tier: 't3' },
-  { hour: 9, minute: 0, tier: 't4' },
+  { hour: 9, minute: 0, tier: 't3' },
+  { hour: 9, minute: 30, tier: 't4' },
 ];
 
 // Parts formatter to read the Pacific wall clock off a UTC instant — same
@@ -253,7 +253,7 @@ async function publishFireFailure(tier, now = new Date()) {
   const title = `[DR3-Vision] escalation tier ${tier} fire FAILED`.slice(0, 250);
   const detail =
     tier === 't3'
-      ? 'Auto-override + payroll PDF did NOT run — sign manually before the 09:00 AM PT deadline.'
+      ? 'Auto-override + payroll PDF did NOT run — sign manually before the 09:30 AM PT deadline.'
       : tier === 't4'
         ? 'The payroll-deadline backstop did NOT run — verify payroll delivery manually.'
         : 'Signature-reminder tier did not fire — check the app and bonus signatures.';
@@ -373,6 +373,6 @@ const isEntrypoint =
   process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
 if (isEntrypoint) {
   setupShutdown();
-  logTs('cron host started — escalation tiers anchored to 07:10/07:30/08:30/09:00 America/Los_Angeles');
+  logTs('cron host started — escalation tiers anchored to 07:10/07:30/09:00/09:30 America/Los_Angeles');
   scheduleNext();
 }

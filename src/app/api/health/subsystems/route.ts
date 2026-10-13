@@ -62,7 +62,7 @@ async function probeMymrc(): Promise<Subsystem> {
 // This is the ONE subsystem here that is a live correctness probe rather than a
 // config-presence check, and it earns the exception: the thing it watches broke
 // payroll twice (2026-07-07, 2026-08-04) and was invisible both times until the
-// 08:30 PT auto-override declined to run. It is two indexed reads plus one
+// 09:00 PT auto-override declined to run. It is two indexed reads plus one
 // `user.findMany` over ~4 ids, which is cheaper than the `SELECT 1` above.
 //
 // A DB error degrades to amber rather than red: probeDb already owns the

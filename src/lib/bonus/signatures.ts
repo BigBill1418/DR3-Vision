@@ -186,7 +186,7 @@ export interface RecordSignatureOpts {
   overrideReason?: string;
   /**
    * AUTO-OVERRIDE (T-205, ADR-0019.1 §4): when true, this is a system-applied
-   * admin override fired by the Tue 08:30 PT escalation cron. It is structurally
+   * admin override fired by the Tue 09:00 PT escalation cron. It is structurally
    * the SAME path as a manual override (requires `onBehalfOf` + a non-blank
    * `overrideReason`, enforces the same chain-sourced authority on the actor),
    * but additionally stamps `*_auto_override_at` so the PDF (T-209) can render
@@ -371,7 +371,7 @@ export async function recordSignature(opts: RecordSignatureOpts): Promise<Record
     //
     // This does NOT strand a period. The excluded person is by definition not
     // the only route: the counterpart slot's signer is unaffected, the slot's
-    // override actors and any admin may sign it, and the 08:30 PT auto-override
+    // override actors and any admin may sign it, and the 09:00 PT auto-override
     // actor is a separate identity. Exclusion routes the period to the existing
     // chain (ADR-0019.2 §3) rather than removing its last signer.
     const conflict = await findSodConflict(monthId, signer.userId, tx);

@@ -265,7 +265,7 @@ export interface AttestationResult {
 /**
  * Tuesday-date label for the auto-override deadline message, e.g. "Tue Jun 9,
  * 2026" — assembled from Pacific-zone parts so the weekday/month/day reflect
- * Bill's wall clock for this true instant (08:30 AM PT). Built by hand rather
+ * Bill's wall clock for this true instant (09:00 AM PT). Built by hand rather
  * than via a single Intl format string because en-US inserts a comma after the
  * weekday ("Tue, Jun 9"); the ADR-0019.1 wording has no such comma.
  */
@@ -308,7 +308,7 @@ export function buildAttestation(
       source: 'auto_override',
       lines: [
         `Signed by ${actor}, ${overrideActorRole}, on behalf of ${natural}, ${slot.slotRole}.`,
-        `System-applied admin override per ADR-0019.1 escalation policy. ${natural} did not sign by 08:30 AM PT on ${deadline}.`,
+        `System-applied admin override per ADR-0019.1 escalation policy. ${natural} did not sign by 09:00 AM PT on ${deadline}.`,
       ],
     };
   }

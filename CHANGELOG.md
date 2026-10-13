@@ -9,6 +9,13 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-13 — Bonus auto-override moves to 09:00 PT; payroll deadline 09:30 PT (ADR-0019.1 Am. 3)
+
+Operator-directed (Bill, 09:25 PDT): give signers more time. t3 auto-override 08:30 → 09:00 PT, t4
+payroll-deadline-missed 09:00 → 09:30 PT (so it does not fire alongside the auto-sign), both sites. Cron `FIRES`
+table, escalation/chain-health/PDF attestation copy and tests updated; t1/t2 unchanged. Old PDFs keep their
+08:30 text. Needs the escalation daemon to restart on the new image. Deadline 09:30 not yet confirmed with payroll.
+
 ## 2026-10-09 — Tunnel token read from a secret file, not an env var (infra only)
 
 Fleet audit 2026-09-18 item #13. `dr3-vision-cloudflared` got its token as `TUNNEL_TOKEN` from

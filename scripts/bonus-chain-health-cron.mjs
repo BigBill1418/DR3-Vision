@@ -8,9 +8,9 @@
 // loops.
 //
 // Fires at 06:30 America/Los_Angeles. The time is not arbitrary: the escalation
-// ladder's first tier runs at 07:10 and its auto-override at 08:30, so this lands
+// ladder's first tier runs at 07:10 and its auto-override at 09:00, so this lands
 // FORTY MINUTES BEFORE the machinery that depends on the chain starts running.
-// A chain found broken here is still fixable by hand before the 09:00 payroll
+// A chain found broken here is still fixable by hand before the 09:30 payroll
 // deadline; a chain found broken by the auto-override itself is not, which is
 // what happened on 2026-07-07 and again on 2026-08-04.
 //

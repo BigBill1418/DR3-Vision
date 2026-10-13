@@ -37,7 +37,7 @@ export interface SignatureChain {
   ops_signer_user_id: string;
   /** Users who may override the ops slot (parsed from the CSV column). */
   ops_override_actor_user_ids: string[];
-  /** The user the escalation cron signs AS at the Tue 08:30 PT deadline. */
+  /** The user the escalation cron signs AS at the Tue 09:00 PT deadline. */
   auto_override_actor_user_id: string;
 }
 
@@ -156,7 +156,7 @@ async function loadSignatureChain(siteId: string, db: SignatureChainDb): Promise
 
 /**
  * The configured auto-override actor for a site (ADR-0019.1 §4 escalation). The
- * escalation cron (T-205) signs unsigned slots AS this user at Tue 08:30 PT.
+ * escalation cron (T-205) signs unsigned slots AS this user at Tue 09:00 PT.
  * Never hardcoded — read from the chain (addendum hard rule #3).
  */
 export async function getAutoOverrideActor(

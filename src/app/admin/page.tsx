@@ -130,7 +130,7 @@ const TILES = [
   {
     // ADR-0019.4. Its own tile rather than a line on the bonus surface: the
     // thing being watched is the CONFIGURATION that lets payroll be signed at
-    // all, and it is only load-bearing at 08:30 AM PT on a payroll morning —
+    // all, and it is only load-bearing at 09:00 AM PT on a payroll morning —
     // which is exactly why it needs a standing place someone can look at on any
     // other morning. Twice (2026-07-07, 2026-08-04) the first anyone knew of a
     // dead override actor was the deadline.
