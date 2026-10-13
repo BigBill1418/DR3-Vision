@@ -39,7 +39,10 @@ export const MONTH_FILTERS: readonly MonthFilter[] = ['current', 'year', 'all'];
 
 /** Narrow an arbitrary string (e.g. a search param) to a {@link MonthFilter}. */
 export function parsePayPeriodFilter(value: string | null | undefined): MonthFilter {
-  return value === 'year' || value === 'all' ? value : 'current';
+  // Default is ALL, not the current calendar month: a period is closed and paid
+  // on its first morning-after, so a "current month" default shows only the new
+  // empty period and hides the one the manager just finished (Eugene, 2026-10-13).
+  return value === 'current' || value === 'year' ? value : 'all';
 }
 
 /** Coarse signature progress for a month, derived from the two signer columns. */

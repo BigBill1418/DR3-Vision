@@ -203,13 +203,13 @@ function dayBonus(count: number): number {
 const NOW = new Date(Date.UTC(2026, 5, 15)); // 2026-06-15
 
 describe('parsePayPeriodFilter', () => {
-  it('narrows known values and defaults unknowns to current', () => {
+  it('narrows known values and defaults unknowns to all (ADR-0019 §8 Am.)', () => {
     expect(parsePayPeriodFilter('current')).toBe('current');
     expect(parsePayPeriodFilter('year')).toBe('year');
     expect(parsePayPeriodFilter('all')).toBe('all');
-    expect(parsePayPeriodFilter('bogus')).toBe('current');
-    expect(parsePayPeriodFilter(null)).toBe('current');
-    expect(parsePayPeriodFilter(undefined)).toBe('current');
+    expect(parsePayPeriodFilter('bogus')).toBe('all');
+    expect(parsePayPeriodFilter(null)).toBe('all');
+    expect(parsePayPeriodFilter(undefined)).toBe('all');
   });
 
   it('every MONTH_FILTERS value round-trips', () => {

@@ -5,7 +5,7 @@
 // the caller's Woodland site (CLAUDE.md hard rule #2) through the read-only
 // `@/lib/bonus/month-list` data layer.
 //
-// Offers a current-month / this-year / all-time filter, shows each month's state
+// Offers a current-month / this-year / all-time filter (default: all-time), shows each month's state
 // badge and payout total, badges AMENDED months with a link to the prior
 // version, and links every row to the detail page (/bonus/months/[id]).
 // English-only (ADR-0017). Money is integer cents formatted via the shared
