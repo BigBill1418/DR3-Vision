@@ -15,6 +15,7 @@ Operator-directed (Bill, 09:25 PDT): give signers more time. t3 auto-override 08
 payroll-deadline-missed 09:00 → 09:30 PT (so it does not fire alongside the auto-sign), both sites. Cron `FIRES`
 table, escalation/chain-health/PDF attestation copy and tests updated; t1/t2 unchanged. Old PDFs keep their
 08:30 text. Needs the escalation daemon to restart on the new image. Deadline 09:30 not yet confirmed with payroll.
+
 ## 2026-10-13 — Bonus history list opens on All time (fix)
 
 Eugene's manager (Patrick) reported "nothing there" on 2026-10-13. Data was intact: the 9/29–10/12 period
