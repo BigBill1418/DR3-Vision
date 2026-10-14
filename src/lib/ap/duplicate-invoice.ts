@@ -125,6 +125,21 @@ export function vendorsCompatible(a: readonly string[], b: readonly string[]): b
   );
 }
 
+/**
+ * The decided_by / audit actor_label of a request the intake duplicate guard
+ * rejected on its own (ADR-0136 Amendment 2). `decided_by` is a bare text column;
+ * `audit_log.actor_user_id` is a users FK, so this id rides `actor_label` there.
+ */
+export const AP_DUPLICATE_GUARD_ACTOR = 'system:ap-duplicate-guard';
+
+/** The display name for a `system:` actor id, or null for a person's user id. */
+export function systemActorName(id: string | null | undefined): string | null {
+  if (!id?.startsWith('system:')) return null;
+  return id === AP_DUPLICATE_GUARD_ACTOR
+    ? 'DR3-Vision duplicate check (automatic)'
+    : 'DR3-Vision (automatic)';
+}
+
 /** Statuses that mean "accounting has been, or is about to be, told to pay this". */
 export const APPROVED_STATUSES = ['approved', 'pending_second_approval'] as const;
 
@@ -141,6 +156,8 @@ export interface DuplicateApproval {
   /** Terminal decision time, or the first approval of a >= $1,000 in flight. */
   approvedAt: Date | null;
   approvedBy: string | null;
+  /** The site the approval was filed against (null for a NOT-DR3 filing). */
+  siteId: string | null;
 }
 
 export interface DuplicateCheck {
@@ -282,6 +299,8 @@ export async function findApprovedDuplicates(
       first_approved_at: true,
       first_approver_id: true,
       original_attachment_sha256: true,
+      site_id: true,
+      filed_not_dr3: true,
       attachments: {
         where: { sha256: { in: fileHashes } },
         select: {
@@ -323,6 +342,7 @@ export async function findApprovedDuplicates(
       amountCents: r.confirmed_amount_cents ?? r.amount_cents,
       approvedAt: r.decided_at ?? r.first_approved_at,
       approvedBy: r.decided_by ?? r.first_approver_id,
+      siteId: r.filed_not_dr3 ? null : r.site_id,
     }));
   return { invoiceNumber, forwardedApproval: !!echoed, matches };
 }

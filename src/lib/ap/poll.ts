@@ -25,7 +25,12 @@ import {
 import { alreadySeen, ingestMessage, quarantineMessage, type IngestOutcome } from './ingest';
 import { apNewRequestEmails } from './approvers';
 import { resolveSenderPolicy } from './senders';
-import { alertDeadman, alertQuarantine, notifyNewRequestBatch, type NewRequestItem } from './notify';
+import {
+  alertDeadman,
+  alertQuarantine,
+  notifyNewRequestBatch,
+  type NewRequestItem,
+} from './notify';
 
 const DEADMAN_MINUTES = 45;
 
@@ -52,6 +57,10 @@ export interface ApPollResult {
   requestsCreated: number;
   followupsCreated: number;
   quarantined: number;
+  /** ADR-0136 Amendment 2 — created and rejected at intake as already-approved
+   * duplicates (also counted in requestsCreated: a request row exists). Log only;
+   * the ap_poll_runs ledger has no column for it. */
+  autoRejected: number;
   moved: number;
   duplicates: number;
   resynced: boolean;
@@ -79,6 +88,7 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
   let requestsCreated = 0;
   let followupsCreated = 0;
   let quarantined = 0;
+  let autoRejected = 0;
   let duplicates = 0;
   let moved = 0;
   let resynced = false;
@@ -148,7 +158,10 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
         outcome = await quarantineMessage(ingestCtx, msg, 'ingest_error');
       }
       if (outcome.kind === 'created') requestsCreated += 1;
-      else if (outcome.kind === 'followup') followupsCreated += 1;
+      else if (outcome.kind === 'auto_rejected') {
+        requestsCreated += 1;
+        autoRejected += 1;
+      } else if (outcome.kind === 'followup') followupsCreated += 1;
       else if (outcome.kind === 'quarantined') quarantined += 1;
       else duplicates += 1;
 
@@ -169,7 +182,7 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     await saveDeltaToken(mailbox, sourceFolder, delta.deltaToken, prisma);
     log(
       'info',
-      `[ap-poll] ${tag} ok — listed=${messagesListed} created=${requestsCreated} followups=${followupsCreated} quarantined=${quarantined} dup=${duplicates} moved=${moved}`,
+      `[ap-poll] ${tag} ok — listed=${messagesListed} created=${requestsCreated} followups=${followupsCreated} quarantined=${quarantined} autoRejected=${autoRejected} dup=${duplicates} moved=${moved}`,
     );
   } catch (err) {
     if (err instanceof AuthFailedError) {
@@ -186,8 +199,8 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
   // Flush the buffered new-request notice(s) whatever the run's outcome: requests
   // created before a later failure are already committed and must still be announced.
   if (pendingNew.length > 0) {
-    await notifyNewRequestBatch({ items: pendingNew, approverEmails: pendingEmails }).catch(
-      (e) => log('warn', `[ap-poll] ${tag} new-request notice failed (non-fatal): ${describe(e)}`),
+    await notifyNewRequestBatch({ items: pendingNew, approverEmails: pendingEmails }).catch((e) =>
+      log('warn', `[ap-poll] ${tag} new-request notice failed (non-fatal): ${describe(e)}`),
     );
   }
 
@@ -199,6 +212,7 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     requestsCreated,
     followupsCreated,
     quarantined,
+    autoRejected,
     duplicates,
     moved,
     resynced,

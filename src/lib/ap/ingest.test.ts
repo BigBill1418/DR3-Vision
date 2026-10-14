@@ -266,3 +266,47 @@ describe('ingestMessage — idempotency + follow-ups (C4)', () => {
     expect(n.newRequestCalls).toHaveLength(0); // no second all-approver alert
   });
 });
+
+// ADR-0136 Amendment 2 — the intake duplicate guard runs after the request exists;
+// a rejection is a distinct outcome and is never announced as new work.
+describe('ingestMessage — intake duplicate guard', () => {
+  it('auto-rejected → outcome auto_rejected, no new-request notice', async () => {
+    const db = newFakeDb();
+    const n = spyNotifier();
+    const guard = vi.fn(async () => ({
+      rejected: true as const,
+      matchedRequestIds: ['sept'],
+      mail: 'sent' as const,
+    }));
+    const out = await ingestMessage(
+      { ...makeCtx(db, n), duplicateGuard: guard },
+      byImid('<pdf-invoice-1@svdp.us>'),
+    );
+    expect(out).toEqual({ kind: 'auto_rejected', requestId: db.requests[0]!.id });
+    expect(guard).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requestId: db.requests[0]!.id }),
+      expect.anything(),
+    );
+    expect(n.newRequestCalls).toHaveLength(0);
+  });
+
+  it('left pending → the normal created outcome + notice', async () => {
+    const db = newFakeDb();
+    const n = spyNotifier();
+    const guard = vi.fn(async () => ({ rejected: false as const, skip: 'no_match' as const }));
+    const out = await ingestMessage(
+      { ...makeCtx(db, n), duplicateGuard: guard },
+      byImid('<pdf-invoice-1@svdp.us>'),
+    );
+    expect(out.kind).toBe('created');
+    expect(n.newRequestCalls).toHaveLength(1);
+  });
+
+  it('records each stored file’s sha256 at intake (the same-file key)', async () => {
+    const db = newFakeDb();
+    await ingestMessage(makeCtx(db, spyNotifier()), byImid('<pdf-invoice-1@svdp.us>'));
+    const file = db.attachments.find((a) => a.kind === 'file')!;
+    expect(file.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+});

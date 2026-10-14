@@ -61,6 +61,13 @@ MSGRAPH_MAIL_MAILBOX=approvals-dr3@svdp.us
 # AP_QUARANTINE_EMAIL=bill@barnardhq.com
 ```
 
+`AP_AUTO_REJECT_DUPLICATES` (optional, default on; ADR-0136 Amendment 2): a forwarded invoice
+that is already approved is rejected at intake by "DR3-Vision duplicate check (automatic)",
+with the normal decision mail to the forwarder and accounting. Correction/resubmission
+wording stays pending. Set `AP_AUTO_REJECT_DUPLICATES=false` here and recreate `app` to turn
+it off. Rejections are visible in the audit log (`outcome: auto_rejected_duplicate`) and on
+the poll log line (`autoRejected=N`).
+
 This file is read by the **`app`** service (the poll route + transport run inside
 the app). It is OPTIONAL / fail-open: absent → the transport selects the MOCK.
 

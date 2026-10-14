@@ -141,3 +141,80 @@ request (DR3 105730/105731, `5312.jpg`, `Invoice 19…29.pdf`) are not matches, 
 
 **Residual.** The same invoice re-scanned or re-exported (different bytes) under a subject
 with no number. The check still runs outside the decide transaction.
+
+## Amendment 2 — 2026-10-14 (Pacific): an already-approved invoice is rejected at intake
+
+(The 2026-09-23 addendum above is Amendment 1.)
+
+**What happened.** 2026-10-13, 3:27–4:13 PM PT: AP re-forwarded ~28 United Fleet
+Maintenance invoices (6652..6821) that had been approved in September. Each re-forward
+is a new message, so each became an ordinary pending request, was announced to the
+approvers, and was then rejected by hand ("already approved by X on 09-09"). This ADR's
+guard only ran when someone pressed Approve, so the approvers did the matching. Of the 26
+requests in that batch, 23 match an approved request by subject invoice number + vendor;
+only 8 by identical file, because nothing hashed a file at intake. The per-invoice email
+flood from the same batch was fixed separately (ADR-0066 amendment, 2026-10-13: one
+new-request notice per poll).
+
+**Decision (Bill, 2026-10-14, chosen over flag-and-hold).**
+
+1. **Reject at intake.** `src/lib/ap/auto-reject-duplicate.ts` runs right after
+   `ingest.ts` creates a request (after its attachments and insert audit). It runs the
+   same `findApprovedDuplicates`: invoice number + compatible vendor, identical invoice
+   file, or Vision's own approval mail forwarded back. On a hit it rejects through
+   `decideRequest`, the one decision path. So the `won` audit row, the stamped original
+   and the decision mail are the ones a human Reject produces. It does not create a
+   second rejection path.
+2. **Who decided.** `decided_by = 'system:ap-duplicate-guard'`. `decided_by` is bare text,
+   but `audit_log.actor_user_id` is a users FK, so `decideRequest` now writes a `system:`
+   actor as `actor_label` (the convention used by `system:ap-poll` and others). Every place
+   that resolves a decider's name (decision mail, stamp, queue detail, history) shows it
+   as **"DR3-Vision duplicate check (automatic)"**, not "another approver".
+3. **The note** says what was matched: `Auto-rejected: duplicate of already-approved
+request <id> (invoice <n> | the same invoice file, approved <date> PT by <name>).` The
+   site is the original's site. A decision without a site is refused (operator directive
+   2026-07-15), and the duplicate belongs to the same books.
+4. **The second audit row** has `outcome: 'auto_rejected_duplicate'`,
+   `matched_request_ids`, `same_file_request_ids`, `invoice_number`, `forwarded_approval`,
+   `rejected_against` and the mail outcome.
+5. **Not announced, not pending.** `ingestMessage` returns `auto_rejected`. The request
+   is never added to the poll's batched new-request notice. The poll counts it in
+   `requestsCreated` (the row exists) and in a new `autoRejected` count shown on the
+   `[ap-poll] … ok` log line and in the route's result. There is no ledger column for it,
+   deliberately: no migration.
+6. **The same-file key exists at intake.** `ingest.ts` records each stored file's
+   sha256 as it writes the file. This was the gap in Amendment 1, where the hash was only
+   computed when someone approved.
+
+**Safeguards.** This ADR's loose key is biased toward false matches. A false match used to
+cost one sentence (the audited override). Here it costs a rejected invoice, so:
+
+- **Kill switch.** `AP_AUTO_REJECT_DUPLICATES=false` (or `0`) in the app env turns
+  intake rejection off. It defaults to on, and turning it off gives back the old
+  behaviour: the copy stays pending and the Approve-time guard still refuses it.
+- **Correction and resubmission wording stays with a person.** A subject or body
+  containing `correction`, `corrected`, `revised`, `revision`, `resubmit`/`re-submit`/
+  `resubmission` or `updated invoice` is never auto-rejected. Invoice 6646's
+  "-Note Correction" re-forward, the case that started this ADR, was legitimate. None
+  of the 26 requests from 2026-10-13 contains these words, so the batch would still have
+  been rejected.
+- **Only a terminal approval counts.** A `pending_second_approval` original can still
+  be overridden to rejected, and if it is, the new copy is the one to keep. The
+  original must also be site-filed. A NOT-DR3 original leaves the copy pending.
+- **It never throws.** Any failure (lookup, decide, a race) leaves an ordinary pending
+  request and logs a warning. The Approve-time guard is still in front of it.
+
+**The mail.** It is the existing decision mail, sent from the app's M365 sender
+(`@svdp.us`). For a mailbox request it goes To the forwarding AP address (internal
+`@svdp.us`, validated at intake) and CC to the `ap_decision_recipients` roster
+(accounting). Body: Decision REJECTED, the original's site, Approver "DR3-Vision duplicate
+check (automatic)", the decided time, and the note naming the approved request. The
+stamped original is attached. This is what the approvers' hand rejections sent on
+2026-10-13, but it now says that it was automatic and what it matched. It carries no
+"approved" or "pay" wording. Each duplicate gets one mail, as each hand rejection did.
+
+**Residuals.** A batch of N duplicates still sends N rejection mails (to AP and
+accounting); a batched rejection digest would need its own decision. The vendor check is
+still the loose one. Two invoices that genuinely share a number at vendors whose names
+share a significant word would be rejected; such a false rejection can be reversed with
+the kill switch and AP's re-send.

@@ -9,6 +9,19 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-14 — AP: an invoice that is already approved is rejected at intake (ADR-0136 Am. 2)
+
+On 2026-10-13, 3:27–4:13 PM PT, AP re-forwarded ~28 United Fleet Maintenance invoices that had already been approved in
+September. Approvers rejected each one by hand. Now the ADR-0136 duplicate match (invoice number + vendor, identical
+file, or a forwarded approval mail) runs right after intake. A hit is rejected through `decideRequest`: decider
+`system:ap-duplicate-guard`, shown as "DR3-Vision duplicate check (automatic)", filed under the original's site, with a
+note naming the approved request. It gets the normal decision mail and audit, plus an `auto_rejected_duplicate` audit
+row with `matched_request_ids`. It is not announced as a new request; the poll log line gains `autoRejected=`.
+Safeguards: `AP_AUTO_REJECT_DUPLICATES=false|0` kill switch (default on); correction/resubmission wording stays
+pending; only a terminal `approved`, site-filed original counts. Intake now records each file's sha256 (the same-file
+key). `decideRequest` writes `system:` actors as `actor_label` (audit FK). New tests: `auto-reject-duplicate.test.ts`,
+`poll-auto-reject.test.ts`, plus ingest cases.
+
 ## 2026-10-13 — AP new-request email honours the approver's pref and is batched per poll (ADR-0066 Am.)
 
 Shannon (Eugene, `notify_new_invoice=false` since 2026-08-07) received 27 new-request emails on 10/13, ~25 of them

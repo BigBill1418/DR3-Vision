@@ -13,6 +13,7 @@ import {
   decisionMailUnsentWhere,
   isDecisionMailUnsent,
 } from './decision-mail';
+import { systemActorName } from './duplicate-invoice';
 
 export type ApStatus =
   | 'pending'
@@ -403,8 +404,10 @@ export async function getApRequestDetail(
   });
   if (!r) return null;
   const decidedByName = r.decided_by
-    ? ((await prisma.user.findUnique({ where: { id: r.decided_by }, select: { name: true } }))
-        ?.name ?? null)
+    ? (systemActorName(r.decided_by) ??
+      (await prisma.user.findUnique({ where: { id: r.decided_by }, select: { name: true } }))
+        ?.name ??
+      null)
     : null;
   const heldByName = r.held_by
     ? ((await prisma.user.findUnique({ where: { id: r.held_by }, select: { name: true } }))?.name ??

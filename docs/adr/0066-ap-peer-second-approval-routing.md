@@ -416,3 +416,5 @@ receive only the Eugene production report) got 27 "new AP approval request" emai
 - `poll.ts` buffers created requests and sends ONE notice per poll (`notifyNewRequestBatch`): a single request keeps
   its per-request email and deep link; two or more become one summary email listing up to 30. A forwarded batch of 25
   invoices had mailed every approver 25 times.
+- 2026-10-14 cross-ref: a request that the intake duplicate guard rejects as an already-approved invoice (ADR-0136
+  Amendment 2) is never added to that batch. A batch made up entirely of such re-forwards sends no new-request notice.

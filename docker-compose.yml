@@ -181,6 +181,9 @@ services:
       # the creds live here. Optional / FAIL-OPEN: absent → the transport selects
       # the fixture-driven MOCK (logged loudly at each poll), the app still boots.
       # See docs/operator/ap-approvals.md.
+      # AP_AUTO_REJECT_DUPLICATES (optional, default ON — ADR-0136 Amendment 2) may
+      # also live here: `false`/`0` stops the intake rejection of already-approved
+      # invoices (they then stay pending for a person).
       - path: /home/bbarnard065/.dr3-vision-secrets/msgraph-mail.env
         required: false
       # ADR-0057 — MyMRC credential ENCRYPTION KEY (MYMRC_CRED_KEY), the AES-256-GCM

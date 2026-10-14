@@ -42,6 +42,7 @@ import {
   extractionVendor,
   findApprovedDuplicates,
   invoiceFileHashes,
+  systemActorName,
   type DuplicateApproval,
 } from './duplicate-invoice';
 import { isLikelyInlineImage } from './signature-images';
@@ -360,6 +361,8 @@ export async function pendingApCount(prisma: PrismaClient = defaultPrisma): Prom
 
 async function resolveName(prisma: PrismaClient, userId: string | null): Promise<string> {
   if (!userId) return 'another approver';
+  const system = systemActorName(userId);
+  if (system) return system;
   const u = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
   return u?.name ?? 'another approver';
 }
@@ -370,8 +373,18 @@ async function resolveName(prisma: PrismaClient, userId: string | null): Promise
  * of a race (both attempts audited). The state change stands even if the decision
  * email later refuses/fails — that is surfaced via `mail` + a page, never silently.
  */
+/**
+ * Audit actor for a decision. A person is `actor_user_id` (a users FK); a `system:`
+ * actor (ADR-0136 Amendment 2, the intake duplicate guard) is `actor_label`, since
+ * it has no users row and the FK would refuse it.
+ */
+function auditActor(actorId: string): { actor_user_id: string } | { actor_label: string } {
+  return actorId.startsWith('system:') ? { actor_label: actorId } : { actor_user_id: actorId };
+}
+
 export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   const prisma = args.prisma ?? defaultPrisma;
+  const actor = auditActor(args.actorUserId);
   // Location invariant — EXACTLY ONE of a real DR3 site tag OR the NOT-DR3
   // disposition, validated BEFORE any read/state change (mirrors the reject-note +
   // site boundaries). NOT-DR3 (2026-07-20) requires a reason (`note`) and forbids a
@@ -434,7 +447,7 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
   const overrideReason = args.duplicateOverrideReason?.trim() || null;
   if (duplicate && duplicateMatches.length > 0 && !overrideReason) {
     await writeAudit({
-      actor_user_id: args.actorUserId,
+      ...actor,
       action: 'update',
       table_name: TABLE,
       row_id: args.requestId,
@@ -584,7 +597,7 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       // Won — audit the winning transition in the SAME tx (both-attempts-audited).
       await writeAudit(
         {
-          actor_user_id: args.actorUserId,
+          ...actor,
           action: 'update',
           table_name: TABLE,
           row_id: args.requestId,
@@ -647,7 +660,7 @@ export async function decideRequest(args: DecideArgs): Promise<DecideResult> {
       select: { status: true, decided_by: true, decided_at: true },
     });
     await writeAudit({
-      actor_user_id: args.actorUserId,
+      ...actor,
       action: 'update',
       table_name: TABLE,
       row_id: args.requestId,
