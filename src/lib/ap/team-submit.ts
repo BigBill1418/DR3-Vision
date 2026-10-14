@@ -21,7 +21,7 @@ import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import type { NormFileAttachment } from '@/lib/msgraph-mail';
 import { extractFromRequest } from './extraction/pipeline';
 import { notifyNewRequest } from './notify';
-import { apApproverEmails } from './approvers';
+import { apNewRequestEmails } from './approvers';
 import { sendDecisionEmail, sendHoldNotice, type ApMailOutcome } from './approvals';
 
 /** A phone photo or a scanned PDF, with room to spare (the reimbursement limit). */
@@ -174,7 +174,7 @@ export async function submitTeamInvoice(
   const put = deps.put ?? putApAttachment;
   const extract = deps.extract ?? extractFromRequest;
   const notifyNew = deps.notifyNew ?? notifyNewRequest;
-  const approverEmails = deps.approverEmails ?? apApproverEmails;
+  const approverEmails = deps.approverEmails ?? apNewRequestEmails;
   validate(input);
 
   const accountant = await prisma.apAccountingContact.findUnique({

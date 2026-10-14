@@ -14,6 +14,7 @@
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import type { PrismaClient } from '@prisma/client';
 import type { OpsIdentity } from '@/lib/ops/viewer';
+import { wantsEvent } from './notification-prefs';
 
 /** The active OR clause: no expiry, or an expiry strictly in the future. */
 function activeWhere(now: Date) {
@@ -46,6 +47,30 @@ export async function apApproverEmails(prisma: PrismaClient = defaultPrisma): Pr
     select: { email: true },
   });
   return rows.map((r) => r.email).filter((e): e is string => !!e);
+}
+
+/**
+ * The roster addresses that should receive the NEW-REQUEST email: `apApproverEmails`
+ * minus anyone whose own `notify_new_invoice` pref is off. The roster says who MAY
+ * act; the pref says who WANTS the broadcast. Before this, the pref was never read on
+ * the send path (`newInvoiceRecipients` was dead code), so an approver switched off on
+ * purpose (Shannon, 2026-08-07) still got one email per invoice. A missing prefs row
+ * keeps the column default (yes). Fail-open on the pref read would re-introduce the
+ * bug, so a pref-lookup error propagates to the caller (poll resolves this once per
+ * run; a failure there fails the run visibly rather than mailing everyone).
+ */
+export async function apNewRequestEmails(prisma: PrismaClient = defaultPrisma): Promise<string[]> {
+  const ids = await activeApproverUserIds(prisma);
+  if (ids.length === 0) return [];
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids }, is_active: true, email: { not: null } },
+    select: { id: true, email: true },
+  });
+  const out: string[] = [];
+  for (const u of users) {
+    if (u.email && (await wantsEvent(prisma, u.id, 'new_invoice'))) out.push(u.email);
+  }
+  return out;
 }
 
 /** True when `userId` is an active approver (roster membership, expiry-aware). */
