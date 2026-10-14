@@ -4,8 +4,8 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const notifyStaff = vi.fn(async (..._a: unknown[]) => undefined);
-vi.mock('@/lib/notify/notify-staff', () => ({ notifyStaff: (...a: unknown[]) => notifyStaff(...a) }));
+const notifyStaff = vi.fn<(arg: unknown) => Promise<undefined>>(async () => undefined);
+vi.mock('@/lib/notify/notify-staff', () => ({ notifyStaff: (a: unknown) => notifyStaff(a) }));
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: vi.fn(async () => ({ ok: true })) }));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
