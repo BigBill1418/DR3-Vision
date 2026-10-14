@@ -19,6 +19,7 @@ import {
   autoRejectIfDuplicate,
   hasCorrectionLanguage,
 } from './auto-reject-duplicate';
+import { decideRequest } from './approvals';
 import { AP_DUPLICATE_GUARD_ACTOR } from './duplicate-invoice';
 
 const writeAudit = vi.fn();
@@ -30,6 +31,7 @@ const sendSystemEmail = vi.fn(async () => ({
   lastStatus: 202,
 }));
 const notifyStaffSpy = vi.fn();
+const mailFault = { throwOnce: false };
 const stamp = vi.hoisted(() => ({
   stampApproval: vi.fn(async () => ({ pdf: Buffer.from('%PDF-stub'), sha256: 'deadbeef' })),
   stampOntoOriginalPdf: vi.fn(async () => ({ pdf: Buffer.from('%PDF-o'), sha256: 'pdfsha' })),
@@ -48,6 +50,10 @@ vi.mock('@/lib/r2', () => r2);
 vi.mock('@/lib/notify/notify-staff', () => ({
   notifyStaff: async (args: { recipients: ReadonlyArray<string | { address: string }> }) => {
     notifyStaffSpy(args);
+    if (mailFault.throwOnce) {
+      mailFault.throwOnce = false;
+      throw new Error('graph 503 after commit');
+    }
     const recips = args.recipients.map((r) => (typeof r === 'string' ? r : r.address));
     for (let i = 0; i < recips.length; i++) await sendSystemEmail();
     return {
@@ -151,6 +157,7 @@ const audits = (): Array<Record<string, unknown>> =>
   writeAudit.mock.calls.map((c) => c[0] as Record<string, unknown>);
 
 beforeEach(() => {
+  mailFault.throwOnce = false;
   writeAudit.mockClear();
   sendSystemEmail.mockClear();
   notifyStaffSpy.mockClear();
@@ -202,7 +209,9 @@ describe('autoRejectIfDuplicate', () => {
     expect(mail.htmlBody).toContain('Auto-rejected: duplicate of already-approved request sept');
   });
 
-  it('rejects a re-forward carrying the byte-identical invoice file', async () => {
+  // One PDF can legitimately be two approvals (a statement covering several
+  // invoices — ADR-0136 addendum), so the file key alone never rejects at intake.
+  it('a same-FILE match with no number stays pending (file_only_match)', async () => {
     const subject = 'FW: Invoice(s) Posted';
     const db = setup(
       [approvedOriginal({ subject: 'FW: Invoice(s) Posted-Ramos' }), req({ id: 'new', subject })],
@@ -213,19 +222,157 @@ describe('autoRejectIfDuplicate', () => {
     );
     const v = await autoRejectIfDuplicate(
       fp(db),
+      { requestId: 'new', subject, bodyText: null, vendors: ['United'] },
+      ON,
+    );
+    expect(v).toEqual({ rejected: false, skip: 'file_only_match' });
+    expect(db.requests.find((r) => r.id === 'new')!.status).toBe('pending');
+    expect(sendSystemEmail).not.toHaveBeenCalled();
+  });
+
+  it('same file, DIFFERENT invoice number → stays pending (statement case)', async () => {
+    const subject = 'FW: Invoice: 7001 | United Fleet Maintenance';
+    const db = setup(
+      [approvedOriginal(), req({ id: 'new', subject })],
+      [
+        att({ id: 'f-old', request_id: 'sept', sha256: PDF }),
+        att({ id: 'f-new', request_id: 'new', sha256: PDF }),
+      ],
+    );
+    const v = await autoRejectIfDuplicate(
+      fp(db),
+      { requestId: 'new', subject, bodyText: null, vendors: ['United'] },
+      ON,
+    );
+    expect(v).toEqual({ rejected: false, skip: 'file_only_match' });
+    expect(db.requests.find((r) => r.id === 'new')!.status).toBe('pending');
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it('same file AND same invoice number rejects even with a blank intake vendor', async () => {
+    const db = setup(
+      [approvedOriginal(), req({ id: 'new', subject: SUBJECT })],
+      [
+        att({ id: 'f-old', request_id: 'sept', sha256: PDF }),
+        att({ id: 'f-new', request_id: 'new', sha256: PDF }),
+      ],
+    );
+    const v = await autoRejectIfDuplicate(
+      fp(db),
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: [] },
+      ON,
+    );
+    expect(v.rejected).toBe(true);
+    expect(db.requests.find((r) => r.id === 'new')!.decision_note).toContain('(invoice 6652,');
+  });
+
+  it('number match with a BLANK intake vendor and no file → stays pending', async () => {
+    const db = setup([approvedOriginal(), req({ id: 'new', subject: SUBJECT })]);
+    for (const vendors of [[], [null], ['  ']]) {
+      const v = await autoRejectIfDuplicate(
+        fp(db),
+        { requestId: 'new', subject: SUBJECT, bodyText: null, vendors },
+        ON,
+      );
+      expect(v).toEqual({ rejected: false, skip: 'vendor_unconfirmed' });
+    }
+    expect(db.requests.find((r) => r.id === 'new')!.status).toBe('pending');
+    expect(writeAudit).not.toHaveBeenCalled();
+  });
+
+  it('number match where the ORIGINAL has no vendor on record → stays pending', async () => {
+    const db = setup([
+      approvedOriginal({ vendor_freeform: null } as Partial<FakeApRequest>),
+      req({ id: 'new', subject: SUBJECT }),
+    ]);
+    const v = await autoRejectIfDuplicate(
+      fp(db),
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: ['United'] },
+      ON,
+    );
+    expect(v).toEqual({ rejected: false, skip: 'vendor_unconfirmed' });
+  });
+
+  it('number match with a DIFFERENT vendor → no match at all', async () => {
+    const db = setup([approvedOriginal(), req({ id: 'new', subject: SUBJECT })]);
+    const v = await autoRejectIfDuplicate(
+      fp(db),
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: ['Kelliher Propane'] },
+      ON,
+    );
+    expect(v).toEqual({ rejected: false, skip: 'no_match' });
+  });
+
+  it('rejects Vision’s own approval mail forwarded back (no vendor needed)', async () => {
+    const subject = `FW: DR3-Vision AP decision (approved — Woodland) — ${SUBJECT} Woodland, CA`;
+    const db = setup([approvedOriginal(), req({ id: 'new', subject })]);
+    const v = await autoRejectIfDuplicate(
+      fp(db),
       { requestId: 'new', subject, bodyText: null, vendors: [] },
       ON,
     );
     expect(v.rejected).toBe(true);
+    expect(audits()).toContainEqual(
+      expect.objectContaining({
+        after: expect.objectContaining({
+          outcome: 'auto_rejected_duplicate',
+          rejected_on: 'forwarded_approval',
+        }),
+      }),
+    );
+  });
+
+  it('a throw AFTER the rejection committed is still reported as rejected', async () => {
+    mailFault.throwOnce = true;
+    const db = setup([approvedOriginal(), req({ id: 'new', subject: SUBJECT })]);
+    const logs: string[] = [];
+    const v = await autoRejectIfDuplicate(
+      fp(db),
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: ['United'] },
+      { env: {}, log: (_l, m) => logs.push(m) },
+    );
+    // The exception really escaped decideRequest (post-commit) and was caught here.
+    expect(logs.some((m) => m.includes('threw') && m.includes('graph 503 after commit'))).toBe(
+      true,
+    );
     const row = db.requests.find((r) => r.id === 'new')!;
     expect(row.status).toBe('rejected');
-    expect(row.decision_note).toContain('(the same invoice file, approved');
+    expect(v).toEqual({ rejected: true, matchedRequestIds: ['sept'], mail: 'failed' });
+    expect(row.decision_mail_sent_at).toBeNull();
+    expect(audits()).toContainEqual(
+      expect.objectContaining({
+        after: expect.objectContaining({ outcome: 'auto_rejected_duplicate', mail: 'failed' }),
+      }),
+    );
+  });
+
+  it('a throw BEFORE anything committed stays decide_failed (pending)', async () => {
+    const db = setup([approvedOriginal(), req({ id: 'new', subject: SUBJECT })]);
+    const prisma = fp(db);
+    const realUpdate = prisma.apRequest.updateMany.bind(prisma.apRequest);
+    (prisma.apRequest as { updateMany: unknown }).updateMany = async () => {
+      throw new Error('db down');
+    };
+    const logs: string[] = [];
+    const v = await autoRejectIfDuplicate(
+      prisma,
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: ['United'] },
+      { env: {}, log: (_l, m) => logs.push(m) },
+    );
+    void realUpdate;
+    expect(logs.some((m) => m.includes('db down'))).toBe(true);
+    expect(v).toEqual({ rejected: false, skip: 'decide_failed' });
+    expect(db.requests.find((r) => r.id === 'new')!.status).toBe('pending');
   });
 
   it.each([
     ['subject', `${SUBJECT} -Note Correction`, null],
     ['body', SUBJECT, 'Please re-submit, the amount was revised.'],
     ['body', SUBJECT, 'Attached is the updated invoice.'],
+    ['subject', `${SUBJECT} AMENDED`, null],
+    ['body', SUBJECT, 'Credit memo attached against this one.'],
+    ['subject', `${SUBJECT} - Reissued`, null],
+    ['body', SUBJECT, 'This is a replacement for the earlier copy.'],
   ])(
     'leaves correction/resubmission wording (%s) pending for a person',
     async (_w, subject, body) => {
@@ -283,7 +430,7 @@ describe('autoRejectIfDuplicate', () => {
     const db = setup([approvedOriginal({ status }), req({ id: 'new', subject: SUBJECT })]);
     const v = await autoRejectIfDuplicate(
       fp(db),
-      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: [] },
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: ['United'] },
       ON,
     );
     expect(v).toEqual({ rejected: false, skip });
@@ -297,10 +444,30 @@ describe('autoRejectIfDuplicate', () => {
     ]);
     const v = await autoRejectIfDuplicate(
       fp(db),
-      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: [] },
+      { requestId: 'new', subject: SUBJECT, bodyText: null, vendors: ['United'] },
       ON,
     );
     expect(v).toEqual({ rejected: false, skip: 'original_not_terminal' });
+  });
+});
+
+describe('decideRequest — human actors are unchanged', () => {
+  it('a person’s decision still writes actor_user_id (never actor_label)', async () => {
+    const db = setup([req({ id: 'new', subject: 'FW: Invoice 7001' })]);
+    await decideRequest({
+      prisma: fp(db),
+      requestId: 'new',
+      decision: 'rejected',
+      actorUserId: 'u-morena',
+      siteId: 'site-w',
+      note: 'not ours',
+    });
+    const won = audits().find(
+      (a) => (a['after'] as Record<string, unknown>)?.['outcome'] === 'won',
+    );
+    expect(won).toMatchObject({ actor_user_id: 'u-morena' });
+    expect(won).not.toHaveProperty('actor_label');
+    expect(db.requests.find((r) => r.id === 'new')!.decided_by).toBe('u-morena');
   });
 });
 
@@ -314,5 +481,17 @@ describe('helpers', () => {
     expect(hasCorrectionLanguage('Corrected invoice 6646')).toBe(true);
     expect(hasCorrectionLanguage(null, 'resubmission attached')).toBe(true);
     expect(hasCorrectionLanguage('FW: Invoice: 6652 | United Fleet Maintenance')).toBe(false);
+    for (const t of [
+      'Amended invoice',
+      'CREDIT MEMO 44',
+      'creditmemo',
+      'reissued',
+      'Re-issue',
+      'replacement copy',
+    ]) {
+      expect(hasCorrectionLanguage(t)).toBe(true);
+    }
+    // Word-bounded: these must not trip it.
+    expect(hasCorrectionLanguage('Amendola Tire', 'Credit card receipt')).toBe(false);
   });
 });

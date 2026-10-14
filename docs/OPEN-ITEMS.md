@@ -19,6 +19,21 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CG — 2026-10-14 AP intake auto-reject of already-approved invoices (ADR-0136 Am. 2, PR #307) — **IN REVIEW (not merged)**
+
+- **CG-1 — PR #307 open.** Revised after Ryan's independent review: rejects only on invoice number + confirmed
+  vendor (or + identical file) or a forwarded approval mail; never on the file alone; capped at 10 per poll; a
+  post-commit mail throw is reported as rejected. Merge/deploy is Bill's call.
+- **CG-2 — FOR BILL / AP (do not change data): invoice 6761 has now been approved THREE times.** Request
+  `f05b98dc-88aa-4c84-9ef0-e50973ea69c7` (received 2026-10-13 3:50 PM PT in the re-forward batch, approved
+  2026-10-14 2:12 PM PT, decision mail sent) matches the two earlier approvals of 6761 already listed under BX-8,
+  `041a0316-c927-4d4e-9f89-9f306703a2de` (2026-09-09) and `751027e4-e79e-4a5a-bb3a-29dbeabbd8ae` (2026-09-17).
+  The guard refused it twice (2:00 and 2:11 PM PT), then the approver overrode it with a duplicate-override reason
+  (audit `outcome: won`, `duplicate_override.matched_request_ids` = both). Accounting holds a third stamped copy:
+  confirm with AP that 6761 was paid once.
+
+---
+
 ## 0.CF — 2026-10-09 tunnel token moved to a secret file (fleet audit #13) — **DONE (2026-10-09)**
 
 - **CF-1 — CLOSED 2026-10-09.** `dr3-vision-cloudflared` reads its token via `TUNNEL_TOKEN_FILE` from

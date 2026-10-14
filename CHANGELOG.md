@@ -22,6 +22,16 @@ pending; only a terminal `approved`, site-filed original counts. Intake now reco
 key). `decideRequest` writes `system:` actors as `actor_label` (audit FK). New tests: `auto-reject-duplicate.test.ts`,
 `poll-auto-reject.test.ts`, plus ingest cases.
 
+Revised after independent review (same PR): (1) auto-reject acts only on the invoice number with the vendor confirmed
+on both sides (or corroborated by the identical file), or on Vision's own approval mail forwarded back. A same-file-only
+match, including the same file under a different invoice number (a statement), stays pending (`file_only_match`), and
+a number match with a blank vendor stays pending (`vendor_unconfirmed`). (2) A throw after `decideRequest` committed
+the rejection (from decision-mail work) is reported as rejected (mail `failed`) after reading the row back, so it is no
+longer announced as new work. (3) At most 10 auto-rejections per poll (`AUTO_REJECT_CAP_PER_POLL`). The rest stay in the
+source folder with the delta token unsaved, and the next poll handles them, so a big batch cannot outrun the cron's
+300 s deadline. (4) Correction wording now also includes amended, credit memo, reissued and replacement. Measured
+2026-10-14: the 22 hand-rejected requests received 2026-10-13 PT would all still auto-reject under the narrower rule.
+
 ## 2026-10-13 — AP new-request email honours the approver's pref and is batched per poll (ADR-0066 Am.)
 
 Shannon (Eugene, `notify_new_invoice=false` since 2026-08-07) received 27 new-request emails on 10/13, ~25 of them

@@ -7,7 +7,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import { makeFakePrisma, newFakeDb, type FakeApRequest } from './__testutils__/fake-prisma';
 import { mockTransport, type MockMessageSpec } from '@/lib/msgraph-mail';
-import { runApPoll } from './poll';
+import { AUTO_REJECT_CAP_PER_POLL, runApPoll } from './poll';
 
 const notifyStaffSpy = vi.fn();
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
@@ -38,6 +38,18 @@ vi.mock('@/lib/notify/notify-staff', () => ({
   },
 }));
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: vi.fn(async () => ({ ok: true })) }));
+// Production extraction names the vendor on these (22 of 22 in the 2026-10-13 batch
+// carried extraction.best_vendor); the auto-reject needs a confirmed vendor.
+vi.mock('./extraction/pipeline', () => ({
+  extractFromRequest: vi.fn(async () => ({
+    best_amount_cents: null,
+    best_vendor: 'United Fleet Maintenance',
+    confidence: 'high',
+    source: 'claude_api',
+    candidates: [],
+    attempted_at: '2026-10-13T22:30:00.000Z',
+  })),
+}));
 vi.mock('@/lib/observability/logger', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -58,6 +70,7 @@ function approved(n: number): FakeApRequest {
     body_html_sanitized: null,
     body_text: null,
     vendor: null,
+    vendor_freeform: 'United Fleet Maintenance',
     amount_cents: null,
     decided_by: 'u-morena',
     decided_at: new Date('2026-09-09T17:05:00Z'),
@@ -73,7 +86,7 @@ function approved(n: number): FakeApRequest {
     held_by: null,
     held_at: null,
     hold_note: null,
-  };
+  } as FakeApRequest;
 }
 
 function reforward(id: string, subject: string): MockMessageSpec {
@@ -123,19 +136,65 @@ beforeEach(() => {
 });
 
 describe('runApPoll — a batch of already-approved re-forwards', () => {
-  it('25 duplicates → 25 auto-rejected, ZERO new-request notices', async () => {
+  it('25 duplicates → auto-rejected 10 per poll over 3 polls, ZERO new-request notices', async () => {
     const db = seed();
+    const prisma = fp(db);
     const transport = mockTransport({
       messages: Array.from({ length: 25 }, (_, i) => reforward(`dup-${i}`, subjectFor(i))),
     });
-    const res = await runApPoll({ prisma: fp(db), transport });
-    expect(res.status).toBe('ok');
-    expect(res.requestsCreated).toBe(25);
-    expect(res.autoRejected).toBe(25);
-    const fresh = db.requests.filter((r) => r.id.startsWith('sept-') === false);
-    expect(fresh).toHaveLength(25);
-    expect(fresh.every((r) => r.status === 'rejected')).toBe(true);
+    const fresh = (): FakeApRequest[] => db.requests.filter((r) => !r.id.startsWith('sept-'));
+
+    const first = await runApPoll({ prisma, transport });
+    expect(first.status).toBe('ok');
+    expect(first.autoRejected).toBe(AUTO_REJECT_CAP_PER_POLL);
+    expect(first.deferredToNextPoll).toBe(15);
+    expect(fresh()).toHaveLength(10);
+
+    const second = await runApPoll({ prisma, transport });
+    expect(second.autoRejected).toBe(10);
+    expect(second.deferredToNextPoll).toBe(5);
+
+    const third = await runApPoll({ prisma, transport });
+    expect(third.autoRejected).toBe(5);
+    expect(third.deferredToNextPoll).toBe(0);
+
+    expect(fresh()).toHaveLength(25);
+    expect(fresh().every((r) => r.status === 'rejected')).toBe(true);
     expect(newRequestNotices()).toEqual([]);
+  });
+
+  it('the cap counts auto-rejections only; ordinary requests before it still ingest', async () => {
+    const db = seed();
+    const transport = mockTransport({
+      messages: [
+        reforward('new-1', 'FW: Invoice: 9001 | United Fleet Maintenance'),
+        ...Array.from({ length: 3 }, (_, i) => reforward(`dup-${i}`, subjectFor(i))),
+        reforward('new-2', 'FW: Invoice: 9002 | United Fleet Maintenance'),
+      ],
+    });
+    const res = await runApPoll({ prisma: fp(db), transport, autoRejectCap: 2 });
+    expect(res.requestsCreated).toBe(3); // new-1 + 2 auto-rejected
+    expect(res.autoRejected).toBe(2);
+    expect(res.deferredToNextPoll).toBe(2); // dup-2 + new-2 wait for the next poll
+    const next = await runApPoll({ prisma: fp(db), transport, autoRejectCap: 2 });
+    expect(next.autoRejected).toBe(1);
+    expect(next.deferredToNextPoll).toBe(0);
+    expect(db.requests.filter((r) => !r.id.startsWith('sept-'))).toHaveLength(5);
+  });
+
+  it('correction wording end to end: stays pending and IS announced', async () => {
+    const db = seed();
+    const transport = mockTransport({
+      messages: [reforward('corr-1', `${subjectFor(0)} - Amended`)],
+    });
+    const res = await runApPoll({ prisma: fp(db), transport });
+    expect(res.autoRejected).toBe(0);
+    expect(res.requestsCreated).toBe(1);
+    const row = db.requests.find((r) => !r.id.startsWith('sept-'))!;
+    expect(row.status).toBe('pending');
+    expect(newRequestNotices()).toEqual([
+      `DR3-Vision — new AP approval request: ${subjectFor(0)} - Amended`,
+    ]);
   });
 
   it('a genuinely new invoice in the same batch is still announced (alone)', async () => {

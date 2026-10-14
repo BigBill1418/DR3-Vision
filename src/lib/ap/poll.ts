@@ -34,6 +34,16 @@ import {
 
 const DEADMAN_MINUTES = 45;
 
+/**
+ * ADR-0136 Amendment 2 — at most this many intake auto-rejections per poll. Each one
+ * stamps the original, writes R2 and sends a decision mail (seconds each); a batch of
+ * ~28 in one poll could outrun the cron's 300 s fetch deadline, and the cron would
+ * then fire a second, overlapping poll. Past the cap the loop stops BEFORE the next
+ * message: the rest stay unmoved in the source folder and the delta token is not
+ * saved, so the next poll (10 min) re-lists and handles them exactly as this one would.
+ */
+export const AUTO_REJECT_CAP_PER_POLL = 10;
+
 export type ApPollStatus = 'ok' | 'auth_failed' | 'error';
 export type PollLogger = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: PollLogger = () => undefined;
@@ -48,6 +58,8 @@ export interface RunApPollContext {
   processedFolder?: string;
   deadmanMinutes?: number;
   runId?: string;
+  /** Override {@link AUTO_REJECT_CAP_PER_POLL} (tests). */
+  autoRejectCap?: number;
 }
 
 export interface ApPollResult {
@@ -61,6 +73,8 @@ export interface ApPollResult {
    * duplicates (also counted in requestsCreated: a request row exists). Log only;
    * the ap_poll_runs ledger has no column for it. */
   autoRejected: number;
+  /** Messages left unprocessed for the next poll because the auto-reject cap was hit. */
+  deferredToNextPoll: number;
   moved: number;
   duplicates: number;
   resynced: boolean;
@@ -89,6 +103,8 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
   let followupsCreated = 0;
   let quarantined = 0;
   let autoRejected = 0;
+  let deferredToNextPoll = 0;
+  const autoRejectCap = ctx.autoRejectCap ?? AUTO_REJECT_CAP_PER_POLL;
   let duplicates = 0;
   let moved = 0;
   let resynced = false;
@@ -129,7 +145,11 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
         },
       },
     };
-    for (const msg of delta.messages) {
+    for (const [index, msg] of delta.messages.entries()) {
+      if (autoRejected >= autoRejectCap) {
+        deferredToNextPoll = delta.messages.length - index;
+        break;
+      }
       let outcome: IngestOutcome;
       try {
         // The delta $select carries bodyPreview only (no `body`); hydrate the FULL
@@ -178,11 +198,21 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
       }
     }
 
-    // Persist the new delta token only after a fully successful pass.
-    await saveDeltaToken(mailbox, sourceFolder, delta.deltaToken, prisma);
+    // Persist the new delta token only after a fully successful pass. A pass cut
+    // short by the auto-reject cap is not complete: keep the old token so the
+    // unprocessed messages re-list next poll (processed ones were moved, and the
+    // internet_message_id UNIQUE key makes any re-listed one a cheap duplicate).
+    if (deferredToNextPoll === 0) {
+      await saveDeltaToken(mailbox, sourceFolder, delta.deltaToken, prisma);
+    } else {
+      log(
+        'info',
+        `[ap-poll] ${tag} auto-reject cap ${autoRejectCap} reached — ${deferredToNextPoll} message(s) left for the next poll`,
+      );
+    }
     log(
       'info',
-      `[ap-poll] ${tag} ok — listed=${messagesListed} created=${requestsCreated} followups=${followupsCreated} quarantined=${quarantined} autoRejected=${autoRejected} dup=${duplicates} moved=${moved}`,
+      `[ap-poll] ${tag} ok — listed=${messagesListed} created=${requestsCreated} followups=${followupsCreated} quarantined=${quarantined} autoRejected=${autoRejected} deferred=${deferredToNextPoll} dup=${duplicates} moved=${moved}`,
     );
   } catch (err) {
     if (err instanceof AuthFailedError) {
@@ -213,6 +243,7 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     followupsCreated,
     quarantined,
     autoRejected,
+    deferredToNextPoll,
     duplicates,
     moved,
     resynced,
