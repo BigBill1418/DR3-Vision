@@ -9,6 +9,14 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-13 — AP new-request email honours the approver's pref and is batched per poll (ADR-0066 Am.)
+
+Shannon (Eugene, `notify_new_invoice=false` since 2026-08-07) received 27 new-request emails on 10/13, ~25 of them
+from one forwarded batch of United Fleet Maintenance invoices. The pref was never read on the send path
+(`newInvoiceRecipients` unused; poll/team-submit used the full roster). Now: `apNewRequestEmails` filters by the
+pref, and `poll.ts` sends one notice per poll (single request unchanged; 2+ → one summary email). Tests:
+`approvers.test.ts`, new `notify-batch.test.ts`.
+
 ## 2026-10-13 — Bonus auto-override moves to 09:00 PT; payroll deadline 09:30 PT (ADR-0019.1 Am. 3)
 
 Operator-directed (Bill, 09:25 PDT): give signers more time. t3 auto-override 08:30 → 09:00 PT, t4

@@ -403,3 +403,16 @@ staff notification is email.
 - ADR-0046 Amendment 5 D-M5-3 — the superseded site-based routing
 - ADR-0047 — the `notifyStaff()` chokepoint and rollout gate
 - ADR-0065 — the Pacific-day helpers reused by the weekday clock
+
+## Amendment — the new-invoice pref is now enforced on the send path; one email per poll (2026-10-13)
+
+Found 2026-10-13: Shannon Rockwell (pref `notify_new_invoice=false`, set 2026-08-07 on Bill's instruction that she
+receive only the Eugene production report) got 27 "new AP approval request" emails in one day. Cause:
+`newInvoiceRecipients()` honoured the pref but nothing called it; the poll and team-submit paths used
+`apApproverEmails()` (the whole roster), so the pref was dead for `new_invoice`.
+
+- `apNewRequestEmails()` (approvers.ts) = roster minus anyone with `notify_new_invoice` off; used by `poll.ts` and
+  `team-submit.ts`. Missing row keeps the default (notify).
+- `poll.ts` buffers created requests and sends ONE notice per poll (`notifyNewRequestBatch`): a single request keeps
+  its per-request email and deep link; two or more become one summary email listing up to 30. A forwarded batch of 25
+  invoices had mailed every approver 25 times.

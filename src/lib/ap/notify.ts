@@ -163,6 +163,61 @@ export async function notifyNewRequest(args: {
   }).catch(() => undefined);
 }
 
+export interface NewRequestItem {
+  requestId: string;
+  subject: string | null;
+  senderAddress?: string | null;
+  receivedAt?: Date | null;
+  attachmentCount?: number;
+}
+
+/** Most requests listed in one batch email; the rest are counted, not listed. */
+const BATCH_LIST_MAX = 30;
+
+/**
+ * New-request notification for everything one poll created. ONE request keeps the
+ * per-request email (tier-1 deep link, unchanged). TWO OR MORE collapse into a single
+ * email listing them with a link to the queue — a forwarded batch of 25 invoices
+ * mailed every approver 25 times on 2026-10-13. Same gated chokepoint (notifyStaff,
+ * surface ap_notify), same fail-soft contract.
+ */
+export async function notifyNewRequestBatch(args: {
+  items: readonly NewRequestItem[];
+  approverEmails: readonly string[];
+}): Promise<void> {
+  if (args.items.length === 0) return;
+  if (args.items.length === 1) {
+    await notifyNewRequest({ ...args.items[0]!, approverEmails: args.approverEmails });
+    return;
+  }
+  if (args.approverEmails.length === 0) {
+    log.warn({ count: args.items.length }, '[ap-notify] no approver addresses — batch email skipped');
+    return;
+  }
+  const shown = args.items.slice(0, BATCH_LIST_MAX);
+  const rows = shown
+    .map((i) => {
+      const when = i.receivedAt ? ` (${escapeHtml(formatPacificDateTime(i.receivedAt))} PT)` : '';
+      return `<li><a href="${apRequestUrl(i.requestId)}">${escapeHtml(i.subject ?? '(no subject)')}</a>${when}</li>`;
+    })
+    .join('');
+  const more =
+    args.items.length > shown.length
+      ? `<p>…and ${args.items.length - shown.length} more in the queue.</p>`
+      : '';
+  const htmlBody = `<p>${args.items.length} new vendor-invoice approval requests are waiting in the DR3-Vision AP queue.</p>
+    <ul>${rows}</ul>${more}
+    <p><a href="${apQueueUrl()}">Open the AP approval queue</a> to review and approve, reject, or place each on hold. First action wins.</p>`;
+  await notifyStaff({
+    surfaceCode: NOTIFY_SURFACE.AP_NOTIFY,
+    site: null,
+    recipients: [...args.approverEmails],
+    subject: `DR3-Vision — ${args.items.length} new AP approval requests`,
+    htmlBody,
+    fromDisplayName: 'DR3-Vision AP',
+  }).catch(() => undefined);
+}
+
 /** Cooldown for the second-approval routing page — per request, so a re-entry can't
  * double-page but a distinct invoice always does. Routine hop, not an incident. */
 const SECOND_APPROVAL_COOLDOWN_MS = 30 * 60 * 1000;

@@ -28,6 +28,7 @@ vi.mock('@/lib/auth', () => ({ auth: vi.fn(async () => mockSession) }));
 import {
   activeApproverUserIds,
   apApproverEmails,
+  apNewRequestEmails,
   canActOnApRequest,
   isActiveApprover,
   requireApApprover,
@@ -113,6 +114,38 @@ describe('activeApproverUserIds / apApproverEmails — expiry-aware', () => {
 
   it('returns no emails when the roster is empty', async () => {
     expect(await apApproverEmails(fp(newFakeDb({ users })))).toEqual([]);
+  });
+});
+
+describe('apNewRequestEmails — honours each approver\'s notify_new_invoice pref', () => {
+  const roster: FakeApApprover[] = [
+    { id: 'a1', user_id: 'u-morena', active_until: null, created_by: null },
+    { id: 'a2', user_id: 'u-rick', active_until: null, created_by: null },
+  ];
+  const pref = (user_id: string, notify_new_invoice: boolean) => ({
+    id: `p-${user_id}`,
+    user_id,
+    notify_new_invoice,
+    notify_second_approval_request: false,
+    notify_daily_digest: false,
+    notify_decision_outcome: false,
+  });
+
+  it('drops an approver whose new-invoice pref is off (Shannon, 2026-08-07) and keeps the rest', async () => {
+    const db = newFakeDb({ users, approvers: roster, notificationPrefs: [pref('u-rick', false)] });
+    expect(await apNewRequestEmails(fp(db))).toEqual(['morena@svdp.us']);
+    // The roster-only resolver is unchanged: Rick is still an approver.
+    expect((await apApproverEmails(fp(db))).sort()).toEqual(['morena@svdp.us', 'rick@svdp.us']);
+  });
+
+  it('a missing prefs row keeps the default (notify)', async () => {
+    const db = newFakeDb({ users, approvers: roster });
+    expect((await apNewRequestEmails(fp(db))).sort()).toEqual(['morena@svdp.us', 'rick@svdp.us']);
+  });
+
+  it('an explicit pref of true keeps the approver', async () => {
+    const db = newFakeDb({ users, approvers: roster, notificationPrefs: [pref('u-rick', true)] });
+    expect((await apNewRequestEmails(fp(db))).sort()).toEqual(['morena@svdp.us', 'rick@svdp.us']);
   });
 });
 

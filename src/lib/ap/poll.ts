@@ -23,9 +23,9 @@ import {
   type MailTransport,
 } from '@/lib/msgraph-mail';
 import { alreadySeen, ingestMessage, quarantineMessage, type IngestOutcome } from './ingest';
-import { apApproverEmails } from './approvals';
+import { apNewRequestEmails } from './approvers';
 import { resolveSenderPolicy } from './senders';
-import { alertDeadman } from './notify';
+import { alertDeadman, alertQuarantine, notifyNewRequestBatch, type NewRequestItem } from './notify';
 
 const DEADMAN_MINUTES = 45;
 
@@ -82,6 +82,8 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
   let duplicates = 0;
   let moved = 0;
   let resynced = false;
+  let pendingNew: NewRequestItem[] = [];
+  let pendingEmails: readonly string[] = [];
 
   // Deadman runs regardless of this tick's outcome (catches a wedged daemon).
   await checkApDeadman(prisma, deadmanMinutes, nowFn()).catch(() => undefined);
@@ -89,7 +91,7 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
   try {
     const [policy, approverEmails] = await Promise.all([
       resolveSenderPolicy(prisma),
-      apApproverEmails(prisma),
+      apNewRequestEmails(prisma),
     ]);
     const token = await loadDeltaToken(mailbox, sourceFolder, prisma);
     const delta = await transport.listDelta(sourceFolder, token);
@@ -97,7 +99,26 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     resynced = delta.resynced;
     if (resynced) log('info', `[ap-poll] ${tag} full resync (no/expired delta token)`);
 
-    const ingestCtx = { prisma, transport, policy, approverEmails, log };
+    // ONE new-request email per poll, not one per invoice: a forwarded batch of 25
+    // invoices used to mail every approver 25 times. Buffer the created requests and
+    // flush after the loop (see flush below, which runs even if the loop throws).
+    pendingNew = [];
+    pendingEmails = approverEmails;
+    const ingestCtx = {
+      prisma,
+      transport,
+      policy,
+      approverEmails,
+      log,
+      notifier: {
+        quarantine: alertQuarantine,
+        newRequest: async (a: NewRequestItem & { approverEmails: readonly string[] }) => {
+          const { approverEmails: _unused, ...item } = a;
+          void _unused;
+          pendingNew.push(item);
+        },
+      },
+    };
     for (const msg of delta.messages) {
       let outcome: IngestOutcome;
       try {
@@ -160,6 +181,14 @@ export async function runApPoll(ctx: RunApPollContext = {}): Promise<ApPollResul
     }
     log('error', `[ap-poll] ${tag} FAILED (${status}) — ${error}`);
     await pageRunFailure(status, error).catch(() => undefined);
+  }
+
+  // Flush the buffered new-request notice(s) whatever the run's outcome: requests
+  // created before a later failure are already committed and must still be announced.
+  if (pendingNew.length > 0) {
+    await notifyNewRequestBatch({ items: pendingNew, approverEmails: pendingEmails }).catch(
+      (e) => log('warn', `[ap-poll] ${tag} new-request notice failed (non-fatal): ${describe(e)}`),
+    );
   }
 
   await finalizeLedger();
