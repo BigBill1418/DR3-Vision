@@ -17,6 +17,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '@/lib/prisma';
 import { normalizeVendorName } from './variance';
+import { systemActorName } from './duplicate-invoice';
 
 export type HistorySource = 'vision' | 'import';
 
@@ -158,10 +159,16 @@ export async function searchApHistory(
 
   const [sites, approvers] = await Promise.all([
     siteIds.size
-      ? prisma.site.findMany({ where: { id: { in: [...siteIds] } }, select: { id: true, code: true } })
+      ? prisma.site.findMany({
+          where: { id: { in: [...siteIds] } },
+          select: { id: true, code: true },
+        })
       : Promise.resolve([]),
     approverIds.size
-      ? prisma.user.findMany({ where: { id: { in: [...approverIds] } }, select: { id: true, name: true } })
+      ? prisma.user.findMany({
+          where: { id: { in: [...approverIds] } },
+          select: { id: true, name: true },
+        })
       : Promise.resolve([]),
   ]);
   const codeById = new Map(sites.map((s) => [s.id, s.code]));
@@ -180,7 +187,9 @@ export async function searchApHistory(
       siteCode: r.filed_not_dr3 ? 'not_dr3' : r.site_id ? (codeById.get(r.site_id) ?? null) : null,
       status: r.status,
       approverId: r.decided_by,
-      approverName: r.decided_by ? (nameById.get(r.decided_by) ?? null) : null,
+      approverName: r.decided_by
+        ? (systemActorName(r.decided_by) ?? nameById.get(r.decided_by) ?? null)
+        : null,
       explanation: r.explanation,
       decisionNote: r.decision_note,
       decisionPdfR2Key: r.decision_pdf_r2_key,

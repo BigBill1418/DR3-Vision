@@ -27,7 +27,9 @@
 // is compared with the files of every approved request. Signature/logo images are
 // never a key (signature-images.ts): the forwarder's logo rides on every forward.
 // One file CAN legitimately be two approvals (a statement, one PDF covering several
-// invoices) — the audited override is the way through, as for the other keys.
+// invoices) — the audited override is the way through, as for the other keys. For
+// that reason the intake auto-reject (Amendment 2, auto-reject-duplicate.ts) NEVER
+// acts on this key alone: a file-only match stays pending for a person.
 //
 // WHAT IT STILL DOES NOT SEE: the same invoice re-scanned or re-exported (different
 // bytes) under a subject with no number. The decision mail's duplicate line
@@ -115,6 +117,20 @@ export function vendorsCompatible(a: readonly string[], b: readonly string[]): b
   const as = a.map((v) => v.trim()).filter(Boolean);
   const bs = b.map((v) => v.trim()).filter(Boolean);
   if (as.length === 0 || bs.length === 0) return true;
+  return namesAgree(as, bs);
+}
+
+/**
+ * Strict form of {@link vendorsCompatible}: blank on either side is NOT a match.
+ * Used where Vision acts without a person (ADR-0136 Amendment 2 auto-reject).
+ */
+export function vendorsConfirmed(a: readonly string[], b: readonly string[]): boolean {
+  const as = a.map((v) => v.trim()).filter(Boolean);
+  const bs = b.map((v) => v.trim()).filter(Boolean);
+  return as.length > 0 && bs.length > 0 && namesAgree(as, bs);
+}
+
+function namesAgree(as: readonly string[], bs: readonly string[]): boolean {
   return as.some((x) =>
     bs.some((y) => {
       const px = vendorPrefix(x);
@@ -123,6 +139,21 @@ export function vendorsCompatible(a: readonly string[], b: readonly string[]): b
       return vendorWords(x).some((w) => wy.has(w));
     }),
   );
+}
+
+/**
+ * The decided_by / audit actor_label of a request the intake duplicate guard
+ * rejected on its own (ADR-0136 Amendment 2). `decided_by` is a bare text column;
+ * `audit_log.actor_user_id` is a users FK, so this id rides `actor_label` there.
+ */
+export const AP_DUPLICATE_GUARD_ACTOR = 'system:ap-duplicate-guard';
+
+/** The display name for a `system:` actor id, or null for a person's user id. */
+export function systemActorName(id: string | null | undefined): string | null {
+  if (!id?.startsWith('system:')) return null;
+  return id === AP_DUPLICATE_GUARD_ACTOR
+    ? 'DR3-Vision duplicate check (automatic)'
+    : 'DR3-Vision (automatic)';
 }
 
 /** Statuses that mean "accounting has been, or is about to be, told to pay this". */
@@ -134,6 +165,15 @@ export interface DuplicateApproval {
   sameInvoiceNumber: boolean;
   /** Carries a byte-identical invoice file. */
   sameFile: boolean;
+  /** THIS request is Vision's own approval mail for that request, forwarded back. */
+  forwardedApproval: boolean;
+  /**
+   * Invoice-number match where BOTH sides name a vendor and the names agree. The
+   * loose `sameInvoiceNumber` lets a blank vendor match anything (right for the
+   * Approve-time prompt, where a person reads it); the intake auto-reject
+   * (ADR-0136 Amendment 2) acts on its own, so it needs the vendor confirmed.
+   */
+  vendorConfirmed: boolean;
   status: string;
   subject: string | null;
   vendor: string | null;
@@ -141,6 +181,8 @@ export interface DuplicateApproval {
   /** Terminal decision time, or the first approval of a >= $1,000 in flight. */
   approvedAt: Date | null;
   approvedBy: string | null;
+  /** The site the approval was filed against (null for a NOT-DR3 filing). */
+  siteId: string | null;
 }
 
 export interface DuplicateCheck {
@@ -282,6 +324,8 @@ export async function findApprovedDuplicates(
       first_approved_at: true,
       first_approver_id: true,
       original_attachment_sha256: true,
+      site_id: true,
+      filed_not_dr3: true,
       attachments: {
         where: { sha256: { in: fileHashes } },
         select: {
@@ -295,14 +339,15 @@ export async function findApprovedDuplicates(
       },
     },
   });
+  const theirs = (r: (typeof candidates)[number]): string[] => [
+    r.vendor_freeform ?? '',
+    r.vendor ?? '',
+    extractionVendor(r.extraction) ?? '',
+  ];
+  const sameNumber = (r: (typeof candidates)[number]): boolean =>
+    !!invoiceNumber && extractInvoiceNumber(r.subject) === invoiceNumber;
   const sameInvoice = (r: (typeof candidates)[number]): boolean =>
-    !!invoiceNumber &&
-    extractInvoiceNumber(r.subject) === invoiceNumber &&
-    vendorsCompatible(mine, [
-      r.vendor_freeform ?? '',
-      r.vendor ?? '',
-      extractionVendor(r.extraction) ?? '',
-    ]);
+    sameNumber(r) && vendorsCompatible(mine, theirs(r));
   // The echoed subject may be cut short (the decision subject is capped at 200
   // characters), so the original need only START with it.
   const approvedHere = (r: (typeof candidates)[number]): boolean =>
@@ -317,12 +362,15 @@ export async function findApprovedDuplicates(
       requestId: r.id,
       sameInvoiceNumber: sameInvoice(r),
       sameFile: sameFile(r),
+      forwardedApproval: approvedHere(r),
+      vendorConfirmed: sameNumber(r) && vendorsConfirmed(mine, theirs(r)),
       status: r.status,
       subject: r.subject,
       vendor: r.vendor_freeform ?? r.vendor ?? extractionVendor(r.extraction),
       amountCents: r.confirmed_amount_cents ?? r.amount_cents,
       approvedAt: r.decided_at ?? r.first_approved_at,
       approvedBy: r.decided_by ?? r.first_approver_id,
+      siteId: r.filed_not_dr3 ? null : r.site_id,
     }));
   return { invoiceNumber, forwardedApproval: !!echoed, matches };
 }

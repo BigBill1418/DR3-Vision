@@ -10,6 +10,7 @@
 // recorded, NEVER fetched. Body HTML is sanitized at ingest (C10.2) — raw HTML is
 // never stored.
 
+import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { writeAudit } from '@/lib/audit';
 import { putApAttachment } from '@/lib/r2';
@@ -17,9 +18,18 @@ import { sanitizeEmailHtml } from './sanitize';
 import { domainOf, validateSender, type QuarantineReason, type SenderPolicy } from './senders';
 import { alertQuarantine, notifyNewRequest } from './notify';
 import { extractFromRequest } from './extraction/pipeline';
+import { autoRejectIfDuplicate } from './auto-reject-duplicate';
+import { extractionVendor } from './duplicate-invoice';
 import type { MailMessage, MailTransport, NormAttachment } from '@/lib/msgraph-mail';
 
-export type IngestOutcomeKind = 'created' | 'followup' | 'quarantined' | 'duplicate';
+// `auto_rejected` (ADR-0136 Amendment 2): a request WAS created, and the intake
+// duplicate guard rejected it as an already-approved invoice. It is not announced.
+export type IngestOutcomeKind =
+  | 'created'
+  | 'auto_rejected'
+  | 'followup'
+  | 'quarantined'
+  | 'duplicate';
 
 export interface IngestOutcome {
   kind: IngestOutcomeKind;
@@ -57,6 +67,8 @@ export interface IngestContext {
   now?: () => Date;
   log?: IngestLogger;
   notifier?: IngestNotifier;
+  /** Intake duplicate guard seam (tests). Production: {@link autoRejectIfDuplicate}. */
+  duplicateGuard?: typeof autoRejectIfDuplicate;
 }
 
 function isUniqueViolation(e: unknown): boolean {
@@ -189,8 +201,12 @@ async function persistFile(
   contentBytesBase64: string | null,
 ): Promise<void> {
   let storageKey: string | null = null;
+  let sha256: string | null = null;
   if (contentBytesBase64) {
     const bytes = Buffer.from(contentBytesBase64, 'base64');
+    // ADR-0136 Amendment 2 — the same-file key, recorded while the bytes are in hand
+    // (it used to be computed lazily at Approve time, too late for the intake guard).
+    sha256 = createHash('sha256').update(bytes).digest('hex');
     // Fail-soft: null when R2 unconfigured → non-fetchable placeholder key so the
     // request still forms (operator provisions R2 later).
     storageKey =
@@ -205,6 +221,7 @@ async function persistFile(
       content_type: contentType,
       byte_size: size,
       storage_key: storageKey,
+      sha256,
     },
   });
 }
@@ -349,6 +366,32 @@ export async function ingestMessage(ctx: IngestContext, msg: MailMessage): Promi
       attachment_count: attachments.length,
     },
   });
+
+  // ADR-0136 Amendment 2 — an invoice already approved is rejected here, through the
+  // normal decision path, and is never announced to the approvers as new work.
+  // The guard never throws; anything but a rejection leaves an ordinary pending request.
+  const guard = ctx.duplicateGuard ?? autoRejectIfDuplicate;
+  const dupVerdict = await guard(
+    ctx.prisma,
+    {
+      requestId,
+      subject: msg.subject,
+      bodyText: msg.bodyText,
+      vendors: [extractionVendor(extraction)],
+    },
+    { log },
+  );
+  if (dupVerdict.rejected) {
+    log(
+      'info',
+      `[ap-ingest] ${requestId} auto-rejected as a duplicate of ${dupVerdict.matchedRequestIds.join(',')} (mail=${dupVerdict.mail})`,
+    );
+    return { kind: 'auto_rejected', requestId };
+  }
+  if (dupVerdict.skip !== 'no_key' && dupVerdict.skip !== 'no_match') {
+    log('info', `[ap-ingest] ${requestId} duplicate guard: left pending (${dupVerdict.skip})`);
+  }
+
   await notifier.newRequest({
     requestId,
     subject: msg.subject,
