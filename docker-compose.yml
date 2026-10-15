@@ -1386,7 +1386,7 @@ services:
     # nothing here self-heals: this literal is the only thing that decides what
     # runs. Raised by the monthly supervised bump (ADR-0212); drift from the
     # upstream release is watched by cloudflared-version-drift-check.
-    image: cloudflare/cloudflared:2026.8.2
+    image: cloudflare/cloudflared:2026.10.0
     container_name: dr3-vision-cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run

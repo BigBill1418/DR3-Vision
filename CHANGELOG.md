@@ -9,6 +9,12 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-14 — cloudflared 2026.8.2 -> 2026.10.0 (infra only)
+
+- Tunnel image bumped for VULN-141859 (Access path normalisation) and the 2026.9.2 auth hardening; no app change.
+  Recreated alone after 17:00 PT, verified from HSH and BOS. Rollback: re-pin 2026.8.2 (image kept on the host) and
+  `docker compose up -d --no-deps` the tunnel service. Context: InfraWatch ADR-0058 / ROADMAP 26b.
+
 ## 2026-10-14 — AP: an invoice that is already approved is rejected at intake (ADR-0136 Am. 2)
 
 On 2026-10-13, 3:27–4:13 PM PT, AP re-forwarded ~28 United Fleet Maintenance invoices that had already been approved in
