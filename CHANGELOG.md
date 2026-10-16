@@ -9,6 +9,24 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-16 — PG backup freshness metric (deadman)
+
+Operator decision 2026-10-16: routine backup "OK" pushes become metrics (ADR-0037). In the
+12 h to 11:33 PDT that day the fleet sent 12 success pushes, 9 of them inside quiet hours. One
+was `[DR3-Vision] PG backup OK` (03:49, `chad-hq-backup`).
+
+- `scripts/dr3-pg-backup.sh` now writes `dr3_vision_backup_last_success_timestamp_seconds`
+  (`dr3_vision_backup.prom`, node_exporter textfile dir on CHAD-HQ), only after the
+  snapshot-age self-check passes. The helper has the same shape as VLM `vlm-pg-backup.sh`:
+  atomic tmp + rename, mode 0644, non-fatal.
+- This lane had no freshness metric before. The CHAD `chad_pg_offsite` lane does not cover
+  it, because this script uses its own restic repo. The in-script deadman only runs when the
+  script runs. The new InfraWatch `obs-rule-dr3-vision-backup-stale` (>28 h plus an `absent()`
+  arm, high, routed to `infrawatch-alerts`) catches the timer not firing at all. Failure
+  pushes are unchanged.
+- Verified: `bash -n` passes and shellcheck shows no new warnings. The simulated success
+  tail writes a `.prom` that passes `promtool check metrics`.
+
 ## 2026-10-14 — cloudflared 2026.8.2 -> 2026.10.0 (infra only)
 
 - Tunnel image bumped for VULN-141859 (Access path normalisation) and the 2026.9.2 auth hardening; no app change.

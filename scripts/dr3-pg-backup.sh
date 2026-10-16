@@ -37,6 +37,31 @@ MAX_SNAPSHOT_AGE_H="${MAX_SNAPSHOT_AGE_H:-26}"
 
 log()  { echo "[dr3-pg-backup $(date -u +%FT%TZ)] $*"; }
 
+
+# node-exporter textfile-collector freshness metric (2026-10-16, same shape as
+# VLM services/cdc/ops/vlm-pg-backup.sh). Stamped on success; the InfraWatch
+# deadman pages when it goes stale (>28h) or is absent. This catches the one
+# failure the ntfy fail-push cannot: the timer silently NOT firing.
+TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
+TEXTFILE_METRIC="${TEXTFILE_METRIC:-dr3_vision_backup_last_success_timestamp_seconds}"
+write_backup_metric() {  # stamp last-success epoch into the node-exporter textfile dir
+  # Non-fatal: a missing/unwritable textfile dir must never fail the backup.
+  [ -d "$TEXTFILE_DIR" ] || { log "textfile: dir $TEXTFILE_DIR absent, skip metric"; return 0; }
+  local now tmp out
+  now="$(date +%s)"
+  out="${TEXTFILE_DIR}/dr3_vision_backup.prom"
+  tmp="${out}.$$"
+  # Atomic write (.tmp -> rename) so node-exporter never reads a half-written file;
+  # 0644 so the collector can read it whatever the unit's umask.
+  {
+    printf "# HELP %s Unix epoch of the last successful DR3-Vision pg_dump restic->R2 backup (snapshot-age deadman passed).\n" "$TEXTFILE_METRIC"
+    printf "# TYPE %s gauge\n" "$TEXTFILE_METRIC"
+    printf "%s %s\n" "$TEXTFILE_METRIC" "$now"
+  } > "$tmp" 2>/dev/null && chmod 0644 "$tmp" 2>/dev/null && mv -f "$tmp" "$out" 2>/dev/null \
+    && log "textfile: wrote ${TEXTFILE_METRIC}=${now} -> $out" \
+    || { log "textfile: write failed (non-fatal)"; rm -f "$tmp" 2>/dev/null; }
+}
+
 # ntfy <title> <priority> — ADR-0036 flag contract. A publish failure must
 # never mask the backup result, but it is logged instead of swallowed.
 ntfy() {
@@ -121,5 +146,6 @@ if [ "$SNAP_EPOCH" -eq 0 ] || [ "$AGE_H" -ge "$MAX_SNAPSHOT_AGE_H" ]; then
 fi
 log "deadman ok: latest snapshot ${AGE_H}h old"
 
+write_backup_metric
 ntfy "[DR3-Vision] PG backup OK" default
 log "done"; exit 0
