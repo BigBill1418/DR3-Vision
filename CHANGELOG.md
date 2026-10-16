@@ -26,6 +26,11 @@ was `[DR3-Vision] PG backup OK` (03:49, `chad-hq-backup`).
   pushes are unchanged.
 - Verified: `bash -n` passes and shellcheck shows no new warnings. The simulated success
   tail writes a `.prom` that passes `promtool check metrics`.
+- **Success-push gate, default ON.** The script reads `NTFY_OK` (default `1`). With
+  `NTFY_OK=0`, `[DR3-Vision] PG backup OK` is suppressed (the log line stays). Every failure push still sends.
+  The default stays ON until the first live metric is confirmed on CHAD-HQ; then the operator
+  sets `Environment=NTFY_OK=0` in a `dr3-vision-pg-backup.service` drop-in. Simulated with `NTFY_OK`
+  unset: push sent. With `NTFY_OK=0`: suppressed, metric still written.
 
 ## 2026-10-14 — cloudflared 2026.8.2 -> 2026.10.0 (infra only)
 

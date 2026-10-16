@@ -37,6 +37,9 @@ MAX_SNAPSHOT_AGE_H="${MAX_SNAPSHOT_AGE_H:-26}"
 
 log()  { echo "[dr3-pg-backup $(date -u +%FT%TZ)] $*"; }
 
+# Success push gate (ADR-0037, 2026-10-16): 1 = send "[DR3-Vision] PG backup OK"; 0 = success is visible only as the freshness metric below. Default stays 1 until the
+# first live metric is confirmed, then the unit sets NTFY_OK=0. Failures always send.
+NTFY_OK="${NTFY_OK:-1}"
 
 # node-exporter textfile-collector freshness metric (2026-10-16, same shape as
 # VLM services/cdc/ops/vlm-pg-backup.sh). Stamped on success; the InfraWatch
@@ -147,5 +150,9 @@ fi
 log "deadman ok: latest snapshot ${AGE_H}h old"
 
 write_backup_metric
-ntfy "[DR3-Vision] PG backup OK" default
+if [ "$NTFY_OK" = "1" ]; then
+  ntfy "[DR3-Vision] PG backup OK" default
+else
+  log "ntfy: PG backup OK suppressed (NTFY_OK=$NTFY_OK; freshness metric is the signal)"
+fi
 log "done"; exit 0
