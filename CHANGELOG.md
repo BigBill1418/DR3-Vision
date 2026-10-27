@@ -8049,6 +8049,8 @@ ADR-0068 Amendment 1 corrects documentation-only contradictions between the reco
 
 ## Unreleased
 
+- 2026-10-26: cloudflared connector raised 2026.10.0 -> 2026.10.4 (security: Cloudflare eMudhra intermediate-certificate compromise, blog 2026-10-20, fixed in 2026.10.2+; fleet sweep noc-master ADR-0212). Pin-only commit, connector recreated out of band with a canary; see noc-master CHANGELOG 2026-10-26 for verification.
+
 ### Added — 2026-07-30 (reimbursements: primary-dashboard tile, digest, escalation, stamped PDF — ADR-0068 Amendment 2)
 
 - **The tile is now on the PRIMARY dashboard.** Operator directive: _"the reimbursement tile is
