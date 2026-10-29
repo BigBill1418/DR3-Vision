@@ -49,6 +49,7 @@ import { formatCountAttribution } from '@/lib/inventory/count-attribution';
 import { businessDaysBetween } from '@/lib/mymrc/business-days';
 import { DEFAULT_MAX_BUSINESS_DAYS, fleetWideHolidays } from '@/lib/mymrc/freshness';
 import { dayISO, dayKeyUTCFromISO, pacificDayKeyUTC } from '@/lib/time';
+import { openExceptionForPresenter } from '@/lib/inventory/exception-service';
 
 /** Spec §4 default freshness window, in days, for a `measured` physical anchor. */
 export const DEFAULT_EOD_INVENTORY_STALE_DAYS = 14;
@@ -163,6 +164,12 @@ export interface EodAnchorInfo {
 
 export interface EodInventorySnapshot {
   siteId: string;
+  /**
+   * ADR-0143 CH-12 (Bill, 2026-10-29): the site's OPEN inventory exception, if any.
+   * While one is open the report hides both pool figures (and the split %) and
+   * keeps the total, whatever the day's live sign.
+   */
+  openExceptionId: string | null;
   /** @db.Date-shaped key of the Pacific calendar day this report covers. */
   reportDate: Date;
   state: EodInventoryState;
@@ -332,7 +339,9 @@ export function eodInventorySignature(eod: EodInventorySnapshot | undefined): st
   // and a report that renders the flag but never re-sends has not told anyone.
   // (`state` already covers the healthy→negative flip, which changes the panel
   // wholesale.)
-  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}:${eod.inboundProvisional ? 'p' : 'c'}:${eod.inboundStale ? 's' : 'f'}`;
+  // ADR-0143 CH-12 — an exception opening or resolving changes what the panel shows
+  // (pools hidden / back), so it is part of the identity too.
+  return `${eod.state}:${eod.programOnHand}:${eod.nonProgramOnHand}:${eod.flowThrough?.getTime() ?? ''}:${eod.inboundProvisional ? 'p' : 'c'}:${eod.inboundStale ? 's' : 'f'}:${eod.openExceptionId ? 'x' : 'n'}`;
 }
 
 /** Percent of `total` represented by `part`, one decimal. Null when total ≤ 0. */
@@ -557,8 +566,12 @@ export async function getEodInventorySnapshot(
     },
   });
 
+  // CH-12 — site-scoped open-exception lookup.
+  const openException = await openExceptionForPresenter(siteId);
+
   return {
     siteId,
+    openExceptionId: openException?.id ?? null,
     reportDate,
     state: classifyEodInventory({
       anchor,

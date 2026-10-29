@@ -68,6 +68,8 @@ vi.mock('@/lib/prisma', () => ({
       },
     },
     outboundMaterial: { aggregate: async (): Promise<Agg> => ({ _sum: store.wholeUnitsSold }) },
+    // ADR-0143 CH-12 — no open inventory exception in this fixture.
+    inventoryException: { findFirst: async () => null },
     // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
     inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: { aggregate: async (): Promise<Agg> => ({ _sum: store.landfilled }) },

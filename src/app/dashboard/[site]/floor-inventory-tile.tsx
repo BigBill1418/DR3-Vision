@@ -59,6 +59,38 @@ function NegativeBanner({ tile }: { tile: FloorInventoryTileData }) {
   );
 }
 
+/**
+ * ADR-0143 CH-12 (Bill, 2026-10-29): "hide both pools, keep the total". The total
+ * renders only when the presenter kept it (total >= 0); a negative total stays out.
+ */
+function TotalOnly({ tile }: { tile: FloorInventoryTileData }) {
+  if (tile.presented.total == null) return null;
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-dr3-mist-dim">Total</div>
+      <div className="text-3xl font-bold tabular-nums text-dr3-mist" data-testid="floor-pool-total">
+        {tile.presented.total}
+      </div>
+    </div>
+  );
+}
+
+/** CH-12 — live pools are not negative, but an inventory exception is open. */
+function SplitHiddenBanner({ tile }: { tile: FloorInventoryTileData }) {
+  const n = tile.presented.notice;
+  if (!n) return null;
+  return (
+    <div
+      className="rounded border border-amber-500/60 bg-amber-500/10 p-3 text-sm leading-relaxed text-amber-100"
+      data-testid="floor-split-hidden-banner"
+      role="status"
+    >
+      <strong className="block text-amber-200">{n.headline}</strong>
+      {n.reason} {n.remedy}
+    </div>
+  );
+}
+
 export function FloorInventoryTile({
   tile,
   siteCode,
@@ -68,7 +100,12 @@ export function FloorInventoryTile({
 }) {
   return (
     <Link
-      href={`/dashboard/${siteCode}/loads-inventory`}
+      href={
+        // CH-12 — with an exception open, the tile opens the exception itself.
+        tile.presented.openExceptionId
+          ? `/dashboard/${siteCode}/inventory-exceptions/${tile.presented.openExceptionId}`
+          : `/dashboard/${siteCode}/loads-inventory`
+      }
       className="flex flex-col gap-3 rounded-lg border border-dr3-steel-light/25 bg-dr3-space-2 p-4 transition-colors hover:border-dr3-cyan/50"
       data-testid="floor-inventory-tile"
       aria-label="Floor inventory"
@@ -108,7 +145,15 @@ export function FloorInventoryTile({
         processing ahead of inbound) instead of always blaming intake.
       */}
       {tile.negative ? (
-        <NegativeBanner tile={tile} />
+        <>
+          <NegativeBanner tile={tile} />
+          <TotalOnly tile={tile} />
+        </>
+      ) : !tile.presented.poolsShown ? (
+        <>
+          <SplitHiddenBanner tile={tile} />
+          <TotalOnly tile={tile} />
+        </>
       ) : (
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
           <Pool label="Program" value={tile.programOnFloor} emphasize />
@@ -145,7 +190,7 @@ export function FloorInventoryTile({
           the legs since the last physical count before this figure is used for a COR or an invoice.
         </div>
       )}
-      {!tile.negative && (
+      {!tile.negative && tile.presented.poolsShown && (
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-dr3-mist-dim">
           <span data-testid="floor-program-days">
             Program pool{' '}

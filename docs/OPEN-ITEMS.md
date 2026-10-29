@@ -74,9 +74,10 @@ Jesse checks visibility).
   guard stamped `computed_at` only on changed rows, so a quiet site looked stale no matter how often the sweep
   ran. Every guard run now stamps the window. After that deploy, CH-5's dry run should print 247 and
   `measuredOnClosedDay` = yesterday.
-- **CH-13 — open, for Bill:** the dashboard floor tile, the overview card and the daily report are not
-  `presentOnHand` consumers, so they still follow the live sign mid-day. Same rule there? Recommended yes, as one
-  follow-up through the tile loader (`computeFloorInventoryTile`).
+- **CH-13 — DECIDED 2026-10-29 (Bill: the CH-12 rule applies wherever the split is shown), built on
+  `fix/adr0143-ch13-split-hidden-everywhere`:** the floor tile, the overview card and the daily report hide both
+  pools while a pool is negative or an exception is open, keep the total, and link the exception (tile / card;
+  the report is staff mail and does not link the pilot page). Case 1 now keeps the total on those surfaces.
 - **CH-10 — residual, not fixed here:** `dr3-vision-workbook-sync` is still hand-managed (profile-gated, never
   recreated by the deployer), so its daemon script can drift from `main` again. The workbook-sync engine itself
   runs inside the app and is current; only the thin daemon is stale-prone. Bill decides whether `workbook-sync`

@@ -154,16 +154,27 @@ export function OpsOverviewPanel({ data }: { data: OpsOverview }) {
             Negative suppresses the figure entirely (it measures nothing).
             Over-capacity keeps it and marks it (it may be a real emergency).
           */}
-          {data.floor && data.floor.negative ? (
+          {data.floor && !data.floor.presented.poolsShown ? (
+            // ADR-0143 D1 + CH-12: no pool figure while a pool is negative or an
+            // inventory exception is open; the total stays when it is >= 0.
             <StatCard
               label="On the floor"
-              value="—"
-              sub={`Computing negative — ${
-                data.floor.negativeCause
-                  ? negativeFloorCopy(data.floor.negativeCause).short
-                  : 'not reliable'
-              }`}
-              href={`/dashboard/${siteCode}/loads-inventory`}
+              value={data.floor.presented.total ?? '—'}
+              {...(data.floor.presented.total != null ? { unit: 'units total' } : {})}
+              sub={
+                data.floor.negative
+                  ? `Computing negative — ${
+                      data.floor.negativeCause
+                        ? negativeFloorCopy(data.floor.negativeCause).short
+                        : 'not reliable'
+                    }`
+                  : 'Program / non-program split being corrected'
+              }
+              href={
+                data.floor.presented.openExceptionId
+                  ? `/dashboard/${siteCode}/inventory-exceptions/${data.floor.presented.openExceptionId}`
+                  : `/dashboard/${siteCode}/loads-inventory`
+              }
               testId="ov-floor-total"
             />
           ) : data.floor ? (

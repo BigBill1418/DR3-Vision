@@ -242,6 +242,7 @@ const REPORT_DAY = utc(2026, 7, 22);
 function makeEod(overrides: Partial<EodInventorySnapshot> = {}): EodInventorySnapshot {
   return {
     siteId: 'site-wld',
+    openExceptionId: null,
     reportDate: REPORT_DAY,
     state: 'healthy',
     programOnHand: 3748,
@@ -435,8 +436,9 @@ describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
     );
     expect(panel).not.toContain('Intake data is incomplete');
     expect(panel).not.toContain('days old');
-    // §4a intent survives: neither the negative nor the positive total renders as a figure.
-    expect(panel).not.toContain('1,603');
+    // §4a intent survives for the POOLS. ADR-0143 B2 / CH-12 (Bill, 2026-10-29): the
+    // total is kept ("hide both pools, keep the total").
+    expect(panel).toContain('Total on hand: 1,603 units');
     expect(panel).not.toContain('1,750');
     expect(panel).toContain('This figure is not reliable and is not shown');
     expect(panel).toContain('Last physical count');
@@ -762,5 +764,36 @@ describe('renderHtmlBody — processor headcount (ADR-0076)', () => {
     const m = html.match(/Month-to-date \(([^)]+)\)/);
     expect(m).not.toBeNull();
     expect(html).toContain(`Distinct processors month-to-date (${m?.[1]})`);
+  });
+});
+
+// ── ADR-0143 CH-12 (Bill, 2026-10-29) — the report hides the split while an exception is open ──
+describe('renderEodInventoryHtml — open inventory exception (CH-12)', () => {
+  it('healthy day + open exception → no pool rows, no split %, total kept, a plain line why', () => {
+    const panel = renderEodInventoryHtml(
+      makeEod({
+        openExceptionId: 'ex-1',
+        programOnHand: 138,
+        nonProgramOnHand: 644,
+        totalOnHand: 782,
+      }),
+      'Woodland',
+    );
+    expect(panel).not.toContain('Program units on hand');
+    expect(panel).not.toContain('Non-program units on hand');
+    expect(panel).not.toContain('Program / non-program split</td>');
+    expect(panel).not.toMatch(/>138<|>644</);
+    expect(panel).toContain('Total on hand');
+    expect(panel).toContain('782');
+    expect(panel).toContain('Program / non-program split hidden');
+  });
+
+  it('no exception → the pool rows are back (control)', () => {
+    const panel = renderEodInventoryHtml(
+      makeEod({ programOnHand: 138, nonProgramOnHand: 644, totalOnHand: 782 }),
+      'Woodland',
+    );
+    expect(panel).toContain('Program units on hand');
+    expect(panel).not.toContain('Program / non-program split hidden');
   });
 });

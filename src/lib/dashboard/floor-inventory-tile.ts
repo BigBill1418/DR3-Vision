@@ -26,7 +26,13 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { onHand } from '@/lib/inventory/running-balance';
 import { floorCapacityState } from '@/lib/dashboard/floor-capacity';
-import { classifyNegativeFloor, type NegativeFloorCause } from '@/lib/inventory/negative-floor';
+import {
+  classifyNegativeFloor,
+  presentOnHand,
+  type NegativeFloorCause,
+  type PresentedOnHand,
+} from '@/lib/inventory/negative-floor';
+import { openExceptionForPresenter } from '@/lib/inventory/exception-service';
 import { assessInboundRecency, latestVerifiedInboundDay } from '@/lib/loads/eod-inventory';
 import { fleetWideHolidays } from '@/lib/mymrc/freshness';
 import { appTodayISO, dayKeyUTCFromISO } from '@/lib/time';
@@ -92,6 +98,13 @@ export interface FloorInventoryTileData {
   trailingUnitsPerDay: number | null;
   programDaysRemaining: number | null;
   asOfISO: string;
+  /**
+   * ADR-0143 D1 + Bill's CH-12 (2026-10-29): what a person may SEE. Every surface
+   * that renders this tile's pools (the floor tile, the overview card) reads this,
+   * not the raw numbers: both pools hidden while a pool is negative OR an inventory
+   * exception is open (whatever the live sign), the total kept when it is >= 0.
+   */
+  presented: PresentedOnHand;
 }
 
 /**
@@ -137,7 +150,7 @@ export async function computeFloorInventoryTile(
   const endKey = dayKeyUTCFromISO(asOfISO);
   const startKey = new Date(endKey.getTime() - 6 * 86_400_000); // trailing 7 days inclusive
 
-  const [balance, closes, site] = await Promise.all([
+  const [balance, closes, site, openException] = await Promise.all([
     onHand(siteId, now),
     prisma.processedUnitsDaily.findMany({
       where: { site_id: siteId, production_date: { gte: startKey, lte: endKey } },
@@ -150,6 +163,8 @@ export async function computeFloorInventoryTile(
       where: { id: siteId },
       select: { max_units_indoor: true, max_units_total_on_site: true },
     }),
+    // CH-12 — the site's open exception (site-scoped), if any.
+    openExceptionForPresenter(siteId),
   ]);
 
   const projection = computeProgramPoolProjection(balance.program, closes);
@@ -165,6 +180,10 @@ export async function computeFloorInventoryTile(
 
   const negative = programOnFloor < 0 || nonProgramOnFloor < 0 || totalOnFloor < 0;
   let negativeCause: NegativeFloorCause | null = null;
+  let recencyCtx: { inboundStale: boolean; inboundDaysSince: number | null } = {
+    inboundStale: false,
+    inboundDaysSince: 0,
+  };
   if (negative) {
     const recency =
       totalOnFloor < 0
@@ -174,6 +193,7 @@ export async function computeFloorInventoryTile(
             await fleetWideHolidays(prisma),
           )
         : { stale: false, calendarDaysSince: null };
+    recencyCtx = { inboundStale: recency.stale, inboundDaysSince: recency.calendarDaysSince };
     negativeCause = classifyNegativeFloor({
       total: totalOnFloor,
       program: programOnFloor,
@@ -196,5 +216,9 @@ export async function computeFloorInventoryTile(
     trailingUnitsPerDay: projection.trailingUnitsPerDay,
     programDaysRemaining: projection.programDaysRemaining,
     asOfISO,
+    presented: presentOnHand(
+      { program: programOnFloor, nonProgram: nonProgramOnFloor, total: totalOnFloor },
+      { ...recencyCtx, openException },
+    ),
   };
 }

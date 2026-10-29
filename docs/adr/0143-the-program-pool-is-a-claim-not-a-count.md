@@ -317,3 +317,10 @@ The repair script's freshness gate read `max(inventory_position_daily.computed_a
 only when its inputs changed. On a quiet afternoon every sweep wrote 0 rows, so the live dry run refused with
 "positions are 33 min old" two minutes after a sweep. Every guard run now stamps `computed_at` on the whole
 window it verified, in one statement, so the gate measures "a sweep completed recently".
+
+### CH-13 — the rule applies wherever the split is shown (Bill, 2026-10-29)
+
+The floor tile, the overview card and the daily report did not go through `presentOnHand`. They now do:
+`computeFloorInventoryTile` attaches `presented` with the open exception, and the EOD snapshot carries
+`openExceptionId`. In ADR-0110 Am.1 case 1 these surfaces used to hide the total as well. They now keep it,
+which matches the presenter (B2) and CH-12.

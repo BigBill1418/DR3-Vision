@@ -9,6 +9,25 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-29 — CH-13: the same rule on the floor tile, overview card and daily report (ADR-0143)
+
+- **Bill, 2026-10-29:** the CH-12 rule applies wherever the pool split is shown.
+- **Floor tile + overview card:** `computeFloorInventoryTile` now attaches `presented`, from `presentOnHand`
+  with the site's open exception. Both surfaces render from it.
+  - While a pool is negative OR an exception is open: both pools are hidden, the total is kept, the projection
+    is suppressed, and the tile / card open the exception.
+  - Resolved → the split is back.
+- **Daily report:** the EOD snapshot carries `openExceptionId`. A healthy day with an open exception drops both
+  pool rows and the split %, and keeps the total with a plain line why. A negative-pool day now states the
+  total when it is ≥ 0. The resend fingerprint includes the exception flag.
+- **Changed, deliberately:** in ADR-0110 Am.1 case 1 (one pool negative, total positive), the tile, the card
+  and the report used to hide the total too. They now keep it (B2 "the total is what matters"; CH-12 "keep the
+  total"). Tests updated with that reason.
+- **i18n:** no new iPad copy. These three are English manager / office surfaces (the report is English staff
+  mail today); the iPad hub's EN/ES/UR line was done in CH-12.
+- **Tests:** tile, card and report for an open exception and the resolved control; the signature carries the
+  flag. Unit suites: 1,961 passed. Postgres: 200 / 200.
+
 ## 2026-10-29 — Pool split hidden while an inventory exception is open (ADR-0143, Bill's CH-12 decision)
 
 - **Why:** mid-day the live program pool can read positive (10-29 ~10 AM: program 138 / total 782, with today's
