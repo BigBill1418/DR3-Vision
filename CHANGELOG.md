@@ -9,6 +9,19 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-29 — Negative inventory root cause and permanent-fix plan (ADR-0143, docs only)
+
+- Diagnosis, read-only against prod:
+  - Woodland: program −247, non-program +644, total +397. Every input leg matches MyMRC.
+  - Cause: non-program units were processed as program 09-15 → 10-08, and since 10-09 the daily split has been
+    derived from intake.
+  - Why earlier fixes did not hold: the only write-time guard is bypassed at Woodland; two pages still print raw
+    negatives; the alert remedy contradicts the screen; there is no way to correct a split.
+- Proposed: a pool check on every write, a DB trigger against unexplained negatives, total-preserving pool
+  adjustments, and one on-hand presenter. No code change yet.
+- Files: `docs/adr/0143-…`, `docs/plans/2026-10-29-inventory-negative-permanent-fix.md`,
+  `docs/queries/2026-10-29-inventory-pool-diagnosis.sql`, OPEN-ITEMS 0.CH.
+
 ## 2026-10-14 — cloudflared 2026.8.2 -> 2026.10.0 (infra only)
 
 - Tunnel image bumped for VULN-141859 (Access path normalisation) and the 2026.9.2 auth hardening; no app change.
@@ -77,7 +90,7 @@ tunnel.env, so the two never disagree). Register: OPEN-ITEMS 0.CF.
 
 ## 2026-10-08 — AP team-submitted invoices go LIVE at both sites (ADR-0141)
 
-Bill, 1:54 PM PDT: *"no not pilot go live and make sure this is ready to go"*. At 1:55 PM PDT
+Bill, 1:54 PM PDT: _"no not pilot go live and make sure this is ready to go"_. At 1:55 PM PDT
 `ap_team_submit` (the manager submit screen) and `ap_team_outcome` (the decision mail to the chosen
 accountant) were flipped `pilot → live` together at Woodland and Eugene, by
 `scripts/one-off/2026-10-08-ap-team-submit-flip-live.mjs`. That script is the file that ran, inside
@@ -87,6 +100,7 @@ never submit while accountant mail is still diverted to admins. The gate reads t
 request, so the flip took effect with no deploy.
 
 Readiness checked before the flip:
+
 - Woodland managers: 2 (Morena, Janette). Eugene managers: 4 (Kelsey, Patrick, Rick, Shannon).
 - 5 active AP approvers.
 - 3 active accounting contacts.

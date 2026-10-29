@@ -19,6 +19,38 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.CH — 2026-10-29 negative inventory, again: root cause + permanent fix (ADR-0143) — **PROPOSED; waiting on Bill B1–B6**
+
+Bill: _"this can't be a recurring issue - we have tried to make this right way too many times."_ Measured
+2026-10-29 8:10–8:55 AM PDT, read-only:
+
+- **Woodland: program −247, non-program +644, total +397.** Eugene is not negative (751, but static: no feed).
+- **Every input leg matches MyMRC.** Inbound equals the hauls mirror exactly; stripped equals the MyMRC
+  processed mirror week by week.
+- **What happened:** non-program units were processed as program 09-15 → 10-08 (17 of 19 days had
+  non-program processed = 0). Since 10-09 the daily split equals intake, so the −247 is frozen.
+- **Why the earlier fixes did not stop it:**
+  - the only write-time guard (`closeProcessedUnitsDay`) never runs at Woodland (0 of 33 days closed in Vision);
+  - two pages still print the raw pool (`loads-inventory`, iPad Today);
+  - the daily `INV-POOL-NON-NEGATIVE` page says "do not count" while the tile says "a count resets the floor",
+    and there is no way to correct a split.
+
+Plan: `docs/plans/2026-10-29-inventory-negative-permanent-fix.md` (items 0–11; Mercer builds, Ryan verifies,
+Jesse checks visibility).
+
+- **CH-1 — FOR BILL:** B1–B6 (plan §6), one at a time. B2 (may non-program units be reported to MRC as
+  program?) goes to Rick / the MRC contract owner first.
+- **CH-2:** plan items 1–2 (presenter, raw surfaces, COR pool guard, single remedy text). No decision is needed
+  to start these. Deploy only after Bill confirms the dock is clear.
+- **CH-3:** plan items 3–6 (exceptions, position table + trigger, adjustments, post-write check, onset page).
+  Needs B4/B5.
+- **CH-4:** repair the Woodland −247 (plan §5: R-A count with a measured split, or R-B adjustment of 247). Needs B3/B6.
+- **CH-5:** 30-day hold, no new exception (Ryan). Close 0.CH only after that.
+- **Side finding:** 0.CG below still reads "IN REVIEW (not merged)", but PR #307 merged as `d4a5e12` on
+  2026-10-14 and is live.
+
+---
+
 ## 0.CG — 2026-10-14 AP intake auto-reject of already-approved invoices (ADR-0136 Am. 2, PR #307) — **IN REVIEW (not merged)**
 
 - **CG-1 — PR #307 open.** Revised after Ryan's independent review: rejects only on invoice number + confirmed
@@ -48,8 +80,8 @@ item below that names Kelsey as a dependency in that light.
 
 ## 0.CE — 2026-10-08 AP team submission (ADR-0141) — **LIVE at both sites (2026-10-08 1:55 PM PDT)**
 
-- **CE-1 — CLOSED 2026-10-08 13:55 PDT.** Bill, 13:54 PDT: *"no not pilot go live and make sure
-  this is ready to go"*. All four rows (`ap_team_submit` + `ap_team_outcome` × Woodland, Eugene)
+- **CE-1 — CLOSED 2026-10-08 13:55 PDT.** Bill, 13:54 PDT: _"no not pilot go live and make sure
+  this is ready to go"_. All four rows (`ap_team_submit` + `ap_team_outcome` × Woodland, Eugene)
   flipped `pilot → live` together by `scripts/one-off/2026-10-08-ap-team-submit-flip-live.mjs`
   (4 audit rows, actor label `system:ap-team-submit-flip`). The admin pilot test submission was
   **skipped** at Bill's direction; the first real team submission is the first end-to-end run, so
