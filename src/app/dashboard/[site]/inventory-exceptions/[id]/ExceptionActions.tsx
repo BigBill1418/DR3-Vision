@@ -13,6 +13,8 @@ const LABEL: Record<Pool, string> = { program: 'Program', non_program: 'Non-prog
 const ERRORS: Record<string, string> = {
   four_eyes: 'A different person must approve. You proposed this.',
   already_decided: 'Someone already decided this. The page has been refreshed.',
+  stale_proposal:
+    'The proposal changed after this page loaded. It has been refreshed: read it again before approving.',
   still_negative: 'The pool is still negative: propose an adjustment instead.',
   reason_too_short: 'Write a reason of at least 10 characters.',
   units_invalid: 'Units must be a positive number (one decimal at most).',
@@ -31,6 +33,7 @@ export function ExceptionActions(props: {
   adjustments: AdjustmentView[];
   resolutionProposedBy: string | null;
   resolutionProposedNote: string | null;
+  resolutionProposedAt: string | null;
 }) {
   const router = useRouter();
   const other: Pool = props.pool === 'program' ? 'non_program' : 'program';
@@ -173,7 +176,10 @@ export function ExceptionActions(props: {
                 type="button"
                 disabled={busy || props.resolutionProposedBy === props.currentUserId}
                 onClick={() =>
-                  call(`${base}/inventory-exceptions/${props.exceptionId}/resolution`, 'PUT')
+                  // Binds the approval to the proposal this page showed.
+                  call(`${base}/inventory-exceptions/${props.exceptionId}/resolution`, 'PUT', {
+                    expectedProposedAt: props.resolutionProposedAt,
+                  })
                 }
                 className="mt-2 rounded bg-dr3-cyan px-3 py-1 font-semibold text-black disabled:opacity-40"
               >

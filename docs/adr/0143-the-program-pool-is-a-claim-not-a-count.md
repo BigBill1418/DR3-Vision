@@ -266,6 +266,10 @@ writer scan). Where the build differs from the design above, the difference and 
   decided adjustment and a resolved exception are final; the opening facts are immutable).
 - **D4 adds a no-adjustment resolution**, four-eyes, allowed only when the pool is ≥ 0 now (for example a
   count already reset it). Without it an exception that cleared on its own would stay open and re-page.
+- **Four-eyes binds to what the approver saw.** A no-adjustment close is approved against the proposal's
+  instant (`expectedProposedAt`); a re-proposal after the page loaded is a 409 `stale_proposal` (security
+  review, 2026-10-29). An adjustment needs no such token: its content is immutable while proposed, and a
+  re-proposal is a new row with a new id.
 - **D5 replaces the daily `INV-POOL-NON-NEGATIVE` page.** A negative WITH an open exception is a note in that
   invariant, a line in a once-a-day `default` digest, and two `high` pages in its life (onset, 7 days). A
   negative WITHOUT an exception still violates the invariant: it means a writer bypassed the guard. The

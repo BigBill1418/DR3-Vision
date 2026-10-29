@@ -216,13 +216,136 @@ describe.skipIf(!REAL_DB)('ADR-0143 exception flow — real Postgres', () => {
       note: 'count on 09-05 reset the pool',
       actorUserId: MGR,
     });
+    // What the approver's page shows: the proposal text and its instant.
+    const seen = (await svc.getInventoryExceptionDetail(site, exceptionId)).exception;
+    expect(seen.resolutionProposedNote).toBe('count on 09-05 reset the pool');
+    expect(seen.resolutionProposedAt).not.toBeNull();
     await expect(
-      svc.approveExceptionResolution({ siteId: site, exceptionId, actorUserId: MGR }),
+      svc.approveExceptionResolution({
+        siteId: site,
+        exceptionId,
+        actorUserId: MGR,
+        expectedProposedAt: seen.resolutionProposedAt!,
+      }),
     ).rejects.toMatchObject({ status: 403 });
-    await svc.approveExceptionResolution({ siteId: site, exceptionId, actorUserId: BILL });
+    await svc.approveExceptionResolution({
+      siteId: site,
+      exceptionId,
+      actorUserId: BILL,
+      expectedProposedAt: seen.resolutionProposedAt!,
+    });
     const ex = await db.inventoryException.findUnique({ where: { id: exceptionId } });
     expect(ex.status).toBe('resolved');
     expect(ex.resolution).toBe('count on 09-05 reset the pool');
+  });
+
+  it('four-eyes TOCTOU: a re-proposal after the approver loaded the page → 409 stale_proposal, nothing resolves', async () => {
+    const { site, exceptionId } = await negativeSite();
+    await db.siteInventorySnapshot.create({
+      data: {
+        site_id: site,
+        snapshot_at: pacificMidnightInstantOfDayISO('2026-09-05'),
+        snapshot_kind: 'physical',
+        source: 'manual',
+        units_total: 60,
+        units_in_processing: 0,
+        program_units: 30,
+        non_program_units: 30,
+        pool_attribution: 'measured',
+      },
+    });
+    await svc.proposeExceptionResolution({
+      siteId: site,
+      exceptionId,
+      note: 'count on 09-05 reset the pool',
+      actorUserId: MGR,
+      now: new Date('2026-10-29T16:00:00.000Z'),
+    });
+    // The approver loads the page and reads the first note...
+    const seen = (await svc.getInventoryExceptionDetail(site, exceptionId)).exception;
+    // ...then the proposer swaps the text before the approver clicks.
+    await svc.proposeExceptionResolution({
+      siteId: site,
+      exceptionId,
+      note: 'a different justification nobody approved',
+      actorUserId: MGR,
+      now: new Date('2026-10-29T16:00:05.000Z'),
+    });
+    await expect(
+      svc.approveExceptionResolution({
+        siteId: site,
+        exceptionId,
+        actorUserId: BILL,
+        expectedProposedAt: seen.resolutionProposedAt!,
+      }),
+    ).rejects.toMatchObject({ status: 409, reason: 'stale_proposal' });
+    const ex = await db.inventoryException.findUnique({ where: { id: exceptionId } });
+    expect(ex.status).toBe('open');
+    expect(ex.resolved_by).toBeNull();
+    // A malformed token is refused before anything is read.
+    await expect(
+      svc.approveExceptionResolution({
+        siteId: site,
+        exceptionId,
+        actorUserId: BILL,
+        expectedProposedAt: 'yesterday',
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+    // Reloading shows the new text; approving THAT works.
+    const reloaded = (await svc.getInventoryExceptionDetail(site, exceptionId)).exception;
+    expect(reloaded.resolutionProposedNote).toBe('a different justification nobody approved');
+    await svc.approveExceptionResolution({
+      siteId: site,
+      exceptionId,
+      actorUserId: BILL,
+      expectedProposedAt: reloaded.resolutionProposedAt!,
+    });
+    expect(
+      (await db.inventoryException.findUnique({ where: { id: exceptionId } })).resolution,
+    ).toBe('a different justification nobody approved');
+  });
+
+  it('adjustments have no TOCTOU: a proposal is immutable, so approving its id approves exactly what was shown', async () => {
+    const { site, exceptionId } = await negativeSite();
+    const first = await svc.proposePoolAdjustment({
+      siteId: site,
+      exceptionId,
+      day: '2026-09-04',
+      fromPool: 'non_program',
+      toPool: 'program',
+      units: 50,
+      reason: 'ADR-0143 test: the proposal the approver saw',
+      actorUserId: MGR,
+    });
+    // The proposer cannot edit it in place (DB trigger)...
+    await expect(
+      db.inventoryPoolAdjustment.update({ where: { id: first.id }, data: { units: new D(5000) } }),
+    ).rejects.toThrow(/only the decision may change/);
+    // ...a "re-proposal" is a NEW row with a new id, which the approver has not seen.
+    const second = await svc.proposePoolAdjustment({
+      siteId: site,
+      exceptionId,
+      day: '2026-09-04',
+      fromPool: 'non_program',
+      toPool: 'program',
+      units: 49,
+      reason: 'ADR-0143 test: a later, different proposal',
+      actorUserId: MGR,
+    });
+    expect(second.id).not.toBe(first.id);
+    await svc.decidePoolAdjustment({
+      siteId: site,
+      adjustmentId: first.id,
+      decision: 'approve',
+      actorUserId: BILL,
+    });
+    const rows = await db.inventoryPoolAdjustment.findMany({
+      where: { exception_id: exceptionId },
+    });
+    const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
+    expect(byId[first.id].status).toBe('approved');
+    expect(byId[first.id].units.toString()).toBe('50');
+    expect(byId[second.id].status).toBe('proposed');
   });
 
   it('site isolation: another site cannot see or act on the exception', async () => {

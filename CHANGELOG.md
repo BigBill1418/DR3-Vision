@@ -42,6 +42,11 @@ ADR-0143. Nothing is pushed, merged or deployed: a deploy rebuilds the app and u
   convention is Bill's (OPEN-ITEMS CH-7).
 - **Item 8.** `scripts/propose-woodland-pool-repair.mjs` proposes the R-B row (247 non-program → program, dated
   10-08) for Bill to approve. Dry run by default. **Not run against production.**
+- **Four-eyes TOCTOU closed (security review, MEDIUM).** Approving a no-adjustment close now carries the
+  proposal instant the approver's page showed (`expectedProposedAt`). If the proposer re-proposes after the page
+  loaded, the approval is refused with 409 `stale_proposal` and nothing resolves; the compare-and-swap also
+  matches the proposer and the text. Adjustments do not have this shape: a proposal is immutable (DB trigger)
+  and a re-proposal is a new id. Tested both ways; the TOCTOU test fails on the previous code.
 - **Found in passing, fixed:** OPEN-ITEMS 0.CG still said PR #307 was unmerged; it merged as `d4a5e12` on
   2026-10-14.
 - **Tests:** see the PR body (unit + Postgres lanes).

@@ -51,6 +51,11 @@ export interface ExceptionSummary {
   resolution: string | null;
   resolutionProposedBy: string | null;
   resolutionProposedNote: string | null;
+  /**
+   * ISO instant of the CURRENT proposal. The approver sends it back, so the approval
+   * binds to the exact text they were shown (a re-proposal changes it → 409).
+   */
+  resolutionProposedAt: string | null;
 }
 
 function summary(e: {
@@ -66,6 +71,7 @@ function summary(e: {
   resolution: string | null;
   resolution_proposed_by: string | null;
   resolution_proposed_note: string | null;
+  resolution_proposed_at: Date | null;
 }): ExceptionSummary {
   return {
     id: e.id,
@@ -80,6 +86,7 @@ function summary(e: {
     resolution: e.resolution,
     resolutionProposedBy: e.resolution_proposed_by,
     resolutionProposedNote: e.resolution_proposed_note,
+    resolutionProposedAt: e.resolution_proposed_at ? e.resolution_proposed_at.toISOString() : null,
   };
 }
 
@@ -96,6 +103,7 @@ const SUMMARY_SELECT = {
   resolution: true,
   resolution_proposed_by: true,
   resolution_proposed_note: true,
+  resolution_proposed_at: true,
 } as const;
 
 /** Open exceptions first, then the 20 most recent resolved ones. Site-scoped. */
@@ -321,7 +329,13 @@ export interface DecisionResult {
 }
 
 /**
- * Approve or reject a proposed adjustment. The approver is never the proposer
+ * Approve or reject a proposed adjustment.
+ *
+ * No proposal-changed-under-the-approver window exists here (the TOCTOU guarded in
+ * approveExceptionResolution): an adjustment's content is immutable while proposed
+ * (migration trigger `adr0143_adjustments_guard` lets only the decision columns
+ * move), and a re-proposal is a NEW row with a new id. Deciding by id therefore
+ * decides exactly the proposal the approver was shown. The approver is never the proposer
  * (403 here; the CHECK refuses it as well). A CAS on `status = 'proposed'` makes a
  * double decision a 409, not a second write.
  */
@@ -484,8 +498,17 @@ export async function approveExceptionResolution(args: {
   siteId: string;
   exceptionId: string;
   actorUserId: string;
+  /**
+   * `resolutionProposedAt` exactly as the approver's page showed it. Four-eyes means
+   * the approver signs off on the text THEY SAW: if the proposer re-proposes after the
+   * page loaded, the timestamp moves and this approval is refused (409
+   * `stale_proposal`), both up front and in the compare-and-swap.
+   */
+  expectedProposedAt: string;
   now?: Date;
 }): Promise<void> {
+  const expected = new Date(args.expectedProposedAt);
+  if (Number.isNaN(expected.getTime())) throw new InventoryExceptionError(422, 'invalid_input');
   const now = args.now ?? new Date();
   await prisma.$transaction(
     async (tx) => {
@@ -493,10 +516,25 @@ export async function approveExceptionResolution(args: {
       const ex = await loadOpenException(tx, args.siteId, args.exceptionId);
       const row = await tx.inventoryException.findUniqueOrThrow({
         where: { id: ex.id },
-        select: { resolution_proposed_by: true, resolution_proposed_note: true },
+        select: {
+          resolution_proposed_by: true,
+          resolution_proposed_note: true,
+          resolution_proposed_at: true,
+        },
       });
-      if (!row.resolution_proposed_by || !row.resolution_proposed_note) {
+      if (
+        !row.resolution_proposed_by ||
+        !row.resolution_proposed_note ||
+        !row.resolution_proposed_at
+      ) {
         throw new InventoryExceptionError(409, 'nothing_proposed');
+      }
+      if (row.resolution_proposed_at.getTime() !== expected.getTime()) {
+        throw new InventoryExceptionError(
+          409,
+          'stale_proposal',
+          'the proposal changed since you loaded the page',
+        );
       }
       if (row.resolution_proposed_by === args.actorUserId) {
         throw new InventoryExceptionError(
@@ -513,7 +551,14 @@ export async function approveExceptionResolution(args: {
       const firstDay = dayISO(ex.first_negative_day);
       const last = state.negativeDays.filter((d) => d >= firstDay).at(-1) ?? firstDay;
       const { count } = await tx.inventoryException.updateMany({
-        where: { id: ex.id, status: 'open', resolution_proposed_by: row.resolution_proposed_by },
+        // CAS on the proposal the approver SAW: proposer, text and instant.
+        where: {
+          id: ex.id,
+          status: 'open',
+          resolution_proposed_by: row.resolution_proposed_by,
+          resolution_proposed_note: row.resolution_proposed_note,
+          resolution_proposed_at: expected,
+        },
         data: {
           status: 'resolved',
           resolved_by: args.actorUserId,
@@ -522,7 +567,7 @@ export async function approveExceptionResolution(args: {
           last_negative_day: dayKeyUTCFromISO(last),
         },
       });
-      if (count !== 1) throw new InventoryExceptionError(409, 'already_decided');
+      if (count !== 1) throw new InventoryExceptionError(409, 'stale_proposal');
       await tx.auditLog.create({
         data: {
           actor_user_id: args.actorUserId,

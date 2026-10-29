@@ -118,6 +118,7 @@ export default async function InventoryExceptionPage({ params }: Props) {
           adjustments={adjustments}
           resolutionProposedBy={ex.resolutionProposedBy}
           resolutionProposedNote={ex.resolutionProposedNote}
+          resolutionProposedAt={ex.resolutionProposedAt}
         />
       </div>
     </main>
