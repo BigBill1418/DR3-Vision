@@ -55,7 +55,24 @@ export interface NegativeFloorCopy {
   reason: string;
   /** A few words for a stat-card subtitle. */
   short: string;
+  /**
+   * ADR-0143 D5 — what a person does about it. THE one remedy: the floor tile, the
+   * daily report, the iPad hub and the `INV-POOL-NON-NEGATIVE` invariant all read
+   * this field, so they can no longer contradict each other (RC4: the invariant said
+   * "do not count", the tile said "a count resets the floor").
+   */
+  remedy: string;
 }
+
+/**
+ * ADR-0143 D5 + Bill B3 (2026-10-29): the Woodland floor is physically MIXED, so a
+ * count cannot measure the split. A pool-split error is corrected by a pool
+ * adjustment (four-eyes), never by a count. A count stays the reset for TOTAL drift.
+ */
+const POOL_SPLIT_REMEDY =
+  'A physical count cannot fix this: the floor is mixed, so a count cannot measure the split. ' +
+  'A site manager records a pool adjustment on the open inventory exception, and a second person approves it. ' +
+  'The total does not change.';
 
 /**
  * Plain-English copy for site managers. Headline assembly is left to each surface
@@ -71,6 +88,7 @@ export function negativeFloorCopy(cause: NegativeFloorCause): NegativeFloorCopy 
         qualifier: ' while the total is positive',
         reason: `The program/non-program split looks mis-recorded — check how ${program ? 'non-program' : 'program'} units are entered in the daily close.`,
         short: 'program/non-program split mis-recorded',
+        remedy: POOL_SPLIT_REMEDY,
       };
     }
     case 'intake-stale': {
@@ -80,6 +98,8 @@ export function negativeFloorCopy(cause: NegativeFloorCause): NegativeFloorCopy 
         qualifier: '',
         reason: `Intake data is incomplete — most recent inbound is ${d} ${d === 1 ? 'day' : 'days'} old.`,
         short: 'intake incomplete',
+        remedy:
+          'Recover the inbound feed first. Once intake is current, a physical count resets the total.',
       };
     }
     case 'processing-exceeds-inbound':
@@ -90,6 +110,105 @@ export function negativeFloorCopy(cause: NegativeFloorCause): NegativeFloorCopy 
           ? 'More units have been processed than were recorded coming in since the last physical count. Inbound is up to date, so check the daily close and inbound entries since that count.'
           : 'More units have been processed than were recorded coming in since the last physical count — no inbound has ever been recorded for this site.',
         short: 'processing exceeds recorded inbound',
+        remedy:
+          'Find the day and the leg on the open inventory exception. Once the cause is recorded, a physical count resets the total.',
       };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ADR-0143 D1 — the ONE presenter for an on-hand figure.
+// ─────────────────────────────────────────────────────────────────────────
+//
+// ADR-0110 D3 said a negative figure is REPLACED, never shown. It was implemented
+// on three of five surfaces (RC3): loads-inventory and the iPad Today hub printed
+// `balance.program.toString()` raw and Woodland's managers read "−247". This is now
+// the only function allowed to turn a running balance into text for a person, and
+// `src/lib/inventory/__tests__/onhand-presenter.guard.test.ts` fails CI when a page
+// or mail module renders a pool any other way.
+
+/** A Prisma.Decimal, or a plain number (mail renderers already hold numbers). */
+export type OnHandNumber = number | { toNumber(): number };
+
+export interface OnHandLike {
+  program: OnHandNumber;
+  nonProgram: OnHandNumber;
+  total: OnHandNumber;
+}
+
+export interface OnHandContext {
+  inboundStale?: boolean;
+  inboundDaysSince?: number | null;
+}
+
+export interface PresentedOnHand {
+  /** False when either POOL is negative: both pool figures are withheld, `notice` set. */
+  poolsShown: boolean;
+  /** en-US grouped, at most one decimal (stripped is Decimal(7,1)); null when withheld. */
+  program: string | null;
+  nonProgram: string | null;
+  /**
+   * The total is withheld ONLY when the total itself is negative. In ADR-0110 Am.1
+   * case 1 (one pool < 0, total ≥ 0) the building's count is not in question — the
+   * split is — and Bill ruled on 2026-10-29 (B2) "the total is what matters". Both
+   * pools are withheld in that case, because the positive pool is wrong by exactly
+   * the same amount as the negative one.
+   */
+  total: string | null;
+  /** The same total as a number, for arithmetic (a count's expected delta); null when withheld. */
+  totalUnits: number | null;
+  cause: NegativeFloorCause | null;
+  notice: { headline: string; reason: string; remedy: string } | null;
+}
+
+function num(v: OnHandNumber): number {
+  return typeof v === 'number' ? v : v.toNumber();
+}
+
+function fmt(v: number): string {
+  return v.toLocaleString('en-US', { maximumFractionDigits: 1 });
+}
+
+/** The single non-negative presentation of an on-hand balance (ADR-0143 D1). */
+export function presentOnHand(balance: OnHandLike, ctx: OnHandContext = {}): PresentedOnHand {
+  const program = num(balance.program);
+  const nonProgram = num(balance.nonProgram);
+  const total = num(balance.total);
+  const cause = classifyNegativeFloor({
+    program,
+    nonProgram,
+    total,
+    inboundStale: ctx.inboundStale ?? false,
+    inboundDaysSince: ctx.inboundDaysSince === undefined ? 0 : ctx.inboundDaysSince,
+  });
+  if (cause == null) {
+    return {
+      poolsShown: true,
+      program: fmt(program),
+      nonProgram: fmt(nonProgram),
+      total: fmt(total),
+      totalUnits: total,
+      cause: null,
+      notice: null,
+    };
+  }
+  const copy = negativeFloorCopy(cause);
+  return {
+    poolsShown: false,
+    program: null,
+    nonProgram: null,
+    total: total >= 0 ? fmt(total) : null,
+    totalUnits: total >= 0 ? total : null,
+    cause,
+    notice: {
+      headline: `${copy.subject} is computing negative${copy.qualifier}.`,
+      reason: copy.reason,
+      remedy: copy.remedy,
+    },
+  };
+}
+
+/** The remedy for a balance, or null when nothing is negative (invariant + report). */
+export function remedyForBalance(balance: OnHandLike, ctx: OnHandContext = {}): string | null {
+  return presentOnHand(balance, ctx).notice?.remedy ?? null;
 }

@@ -69,7 +69,7 @@ function renderCount(): void {
   render(
     <CountClient
       siteCode="woodland"
-      expectedTotal={2483}
+      expectedTotal="2,483"
       jurisdiction="oregon"
       priorTotal={null}
       thresholdPct={20}

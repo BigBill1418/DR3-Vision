@@ -52,6 +52,7 @@ import {
   pacificDayStartInstantPlus,
   pacificMidnightInstantOfDayISO,
 } from '@/lib/time';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'inbound_loads';
 
@@ -261,6 +262,8 @@ export async function confirmFloorInboundDay(args: {
           },
         },
       });
+      // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+      await guardPoolsInTx(tx, args.siteId, 'inbound-floor');
       return updated;
     }
 
@@ -313,6 +316,8 @@ export async function confirmFloorInboundDay(args: {
         },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'inbound-floor');
     return created;
   });
 

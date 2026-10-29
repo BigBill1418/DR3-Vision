@@ -123,6 +123,8 @@ vi.mock('@/lib/prisma', () => {
             .map((d) => ({ ship_date: d, _sum: store.renoByDate.get(d.getTime())! }));
         },
       },
+      // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+      inventoryPoolAdjustment: { groupBy: async () => [] },
       landfilledUnit: {
         aggregate: async (args?: {
           where?: { disposal_date?: Date | Record<string, unknown> };

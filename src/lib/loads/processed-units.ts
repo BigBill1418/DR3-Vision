@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { onHand } from '@/lib/inventory/running-balance';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 export class ProcessedUnitsError extends Error {
   readonly status: number;
@@ -40,14 +41,20 @@ function productionDateUTC(date: Date): Date {
 
 function assertQuantity(name: string, n: number): void {
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 999999.9) {
-    throw new ProcessedUnitsError('invalid', `${name} must be a finite quantity in [0, 999999.9] (got ${String(n)})`);
+    throw new ProcessedUnitsError(
+      'invalid',
+      `${name} must be a finite quantity in [0, 999999.9] (got ${String(n)})`,
+    );
   }
 }
 
 function assertOptionalCount(name: string, n: number | null | undefined): void {
   if (n == null) return;
   if (!Number.isInteger(n) || n < 0 || n > 100000) {
-    throw new ProcessedUnitsError('invalid', `${name} must be a whole number in [0, 100000] (got ${String(n)})`);
+    throw new ProcessedUnitsError(
+      'invalid',
+      `${name} must be a whole number in [0, 100000] (got ${String(n)})`,
+    );
   }
 }
 
@@ -98,7 +105,10 @@ const ZERO_OUTFLOW: DerivedDailyOutflow = {
   landfilled: { program: 0, nonProgram: 0, total: 0 },
 };
 
-function toView(row: ProcessedRow, derived: DerivedDailyOutflow = ZERO_OUTFLOW): ProcessedUnitsView {
+function toView(
+  row: ProcessedRow,
+  derived: DerivedDailyOutflow = ZERO_OUTFLOW,
+): ProcessedUnitsView {
   return {
     id: row.id,
     siteId: row.site_id,
@@ -122,7 +132,10 @@ function toView(row: ProcessedRow, derived: DerivedDailyOutflow = ZERO_OUTFLOW):
  * Derive whole-units-sold (renovation outbound) + landfilled for a single site/day.
  * Read-only; the close surface DISPLAYS this for confirmation (never entered twice).
  */
-export async function deriveDailyOutflow(siteId: string, productionDate: Date): Promise<DerivedDailyOutflow> {
+export async function deriveDailyOutflow(
+  siteId: string,
+  productionDate: Date,
+): Promise<DerivedDailyOutflow> {
   const day = productionDateUTC(productionDate);
   const [reno, land] = await Promise.all([
     prisma.outboundMaterial.aggregate({
@@ -262,6 +275,9 @@ export async function upsertProcessedUnits(args: {
       },
     });
 
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'processed-units-entry');
+
     // Re-read on the SAME transaction to build the view. The RETURNING clause
     // deliberately carries only what the guard needs — every other column is
     // read back from the row that actually landed, so the view can never
@@ -340,6 +356,8 @@ export async function closeProcessedUnitsDay(args: {
         },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'processed-units-close');
     return u;
   });
   const derived = await deriveDailyOutflow(args.siteId, updated.production_date);
@@ -353,7 +371,10 @@ export async function closeProcessedUnitsDay(args: {
  * {@link listProcessedUnits} while preserving EXACT per-day semantics — a day with
  * no outflow maps to {@link ZERO_OUTFLOW}, identical to the single-day path.
  */
-async function deriveDailyOutflowBatch(siteId: string, days: readonly Date[]): Promise<Map<number, DerivedDailyOutflow>> {
+async function deriveDailyOutflowBatch(
+  siteId: string,
+  days: readonly Date[],
+): Promise<Map<number, DerivedDailyOutflow>> {
   const out = new Map<number, DerivedDailyOutflow>();
   if (days.length === 0) return out;
   const uniqueDays = [...new Map(days.map((d) => [d.getTime(), d])).values()];
@@ -387,7 +408,10 @@ async function deriveDailyOutflowBatch(siteId: string, days: readonly Date[]): P
 }
 
 /** List the most recent processed-units rows for a site, each with its derived outflow. */
-export async function listProcessedUnits(siteId: string, limit = 60): Promise<ProcessedUnitsView[]> {
+export async function listProcessedUnits(
+  siteId: string,
+  limit = 60,
+): Promise<ProcessedUnitsView[]> {
   const rows = await prisma.processedUnitsDaily.findMany({
     where: { site_id: siteId },
     orderBy: { production_date: 'desc' },
@@ -397,5 +421,7 @@ export async function listProcessedUnits(siteId: string, limit = 60): Promise<Pr
     siteId,
     rows.map((r) => productionDateUTC(r.production_date)),
   );
-  return rows.map((r) => toView(r, byDate.get(productionDateUTC(r.production_date).getTime()) ?? ZERO_OUTFLOW));
+  return rows.map((r) =>
+    toView(r, byDate.get(productionDateUTC(r.production_date).getTime()) ?? ZERO_OUTFLOW),
+  );
 }

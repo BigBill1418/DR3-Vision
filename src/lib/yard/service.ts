@@ -12,6 +12,7 @@ import type { Prisma, YardTrailerStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { RecordNotFoundError, RecordValidationError } from '@/lib/loads/record-guards';
 import { onHand as computeOnHand } from '@/lib/inventory/running-balance';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
 
 const TABLE = 'yard_trailers';
 
@@ -95,7 +96,8 @@ export async function getYardView(siteId: string): Promise<YardView> {
       active: r.active,
     })),
     trailers,
-    onHand: balance.total.toString(),
+    // ADR-0143 D1 — presented; '—' when the total itself is negative.
+    onHand: presentOnHand(balance).total ?? '—',
   };
 }
 

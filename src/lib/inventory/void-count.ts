@@ -82,6 +82,7 @@ import { prisma } from '@/lib/prisma';
 import { withIdempotency } from '@/lib/idempotency';
 import { currentPacificDayWindow, pacificDayISO } from '@/lib/time';
 import { NOT_VOIDED } from './snapshot-void';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 /** The idempotency scope for a void. NOT a `FloorScope` — see the header. */
 export const VOID_SCOPE = 'operator.count.void';
@@ -417,6 +418,10 @@ async function voidWrite(
       },
     },
   });
+
+  // ADR-0143 D2 — a voided anchor moves the window back; check the pools inside
+  // this transaction (never refuses).
+  await guardPoolsInTx(tx, args.siteId, 'count-void');
 
   return {
     snapshotId,

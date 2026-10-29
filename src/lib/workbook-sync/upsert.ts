@@ -94,6 +94,7 @@
 import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import type { DailyProductionRow } from './daily-adapter';
+import { guardPoolsInTx, type GuardResult } from '@/lib/inventory/pool-guard';
 
 type TxClient = PrismaClient | Prisma.TransactionClient;
 
@@ -315,4 +316,25 @@ function serialize(
     source: data.source,
     import_id: data.import_id,
   };
+}
+
+/**
+ * ADR-0143 D2 — the workbook sync's write AND its pool check, in ONE transaction.
+ *
+ * Woodland's processed days arrive through this door (`source: 'import'`), and until
+ * 2026-10-29 nothing looked at the pools after it wrote: the program pool went
+ * negative on 2026-09-17 and was acted on 38 days later. The engine calls this inside
+ * its `prisma.$transaction`; the guard never refuses the workbook's facts, it opens an
+ * `inventory_exceptions` row when a pool crosses below zero.
+ *
+ * pool-guard: this is the guarded entry for the writes above (see
+ * src/lib/inventory/__tests__/pool-guard-writers.guard.test.ts).
+ */
+export async function upsertDailyProductionGuarded(
+  args: UpsertArgs & { db: Prisma.TransactionClient },
+): Promise<UpsertResult & { guard: GuardResult | null }> {
+  const counts = await upsertDailyProduction(args);
+  const guard =
+    counts.upserted > 0 ? await guardPoolsInTx(args.db, args.siteId, 'workbook-sync') : null;
+  return { ...counts, guard };
 }

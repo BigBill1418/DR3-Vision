@@ -7,6 +7,9 @@ import {
   type PhotoKind,
   type RejectionCategory,
 } from '@prisma/client';
+// pool-guard: non-moving — every inbound_loads write here is a dock-workflow status BEFORE
+// verification (ALLOWED_PRIOR never enters or leaves VERIFIED_INBOUND_STATUSES); a load joins
+// the balance only through verify-gate.ts, which runs the ADR-0143 guard.
 import { prisma } from '@/lib/prisma';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { writeAudit, writeAuditMany } from '@/lib/audit';

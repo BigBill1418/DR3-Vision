@@ -67,6 +67,9 @@
 // atomic upsert is raw SQL run through the injected client's `$queryRawUnsafe` with
 // POSITIONAL parameters (injection-safe — the SQL text is a constant, every value bound).
 
+// pool-guard: post-tick — compiled standalone (tsconfig.mymrc.json) and cannot import the
+// ADR-0143 guard; its writes are checked by /api/internal/inventory/pool-check, which the
+// workbook-sync daemon runs every 10 minutes (exception writer `sweep:inbound=mymrc_haul`).
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 

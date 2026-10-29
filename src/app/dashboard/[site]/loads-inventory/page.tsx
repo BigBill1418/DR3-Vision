@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { onHand } from '@/lib/inventory/running-balance';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { LoadsInventoryClient } from './LoadsInventoryClient';
 
@@ -65,7 +66,10 @@ export default async function LoadsInventoryPage({ params }: Props) {
   );
   const showEventsOrTabs = result.ctx.role === 'admin' || eventsOrTabsLive;
 
-  const balance = await onHand(result.ctx.siteId, new Date());
+  // ADR-0143 D1 — the balance reaches this page only through the presenter. Until
+  // 2026-10-29 the three tiles printed the raw pools and Woodland's
+  // managers read "Program on hand −247" (RC3).
+  const presented = presentOnHand(await onHand(result.ctx.siteId, new Date()));
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
@@ -91,10 +95,24 @@ export default async function LoadsInventoryPage({ params }: Props) {
           Correct a physical count (today / yesterday) →
         </Link>
 
+        {presented.notice && (
+          <div
+            className="mt-6 rounded border border-red-500/60 bg-red-500/10 p-3 text-sm leading-relaxed text-red-200"
+            data-testid="onhand-negative-notice"
+            role="status"
+          >
+            <strong className="block text-red-300">{presented.notice.headline}</strong>
+            {presented.notice.reason} This figure is not reliable and is not shown.{' '}
+            {presented.notice.remedy}{' '}
+            <Link href={`/dashboard/${siteCode}/inventory-exceptions`} className="underline">
+              Open inventory exceptions →
+            </Link>
+          </div>
+        )}
         <div className="mt-6 grid grid-cols-3 gap-4">
-          <BalanceTile label="Program on hand" value={balance.program.toString()} accent />
-          <BalanceTile label="Non-program on hand" value={balance.nonProgram.toString()} />
-          <BalanceTile label="Total on hand" value={balance.total.toString()} />
+          <BalanceTile label="Program on hand" value={presented.program} accent />
+          <BalanceTile label="Non-program on hand" value={presented.nonProgram} />
+          <BalanceTile label="Total on hand" value={presented.total} />
         </div>
         <p className="mt-2 text-xs opacity-70">
           Running balance (D6): End = Start + Inbound − Stripped − Whole units sold − Landfilled.
@@ -106,20 +124,29 @@ export default async function LoadsInventoryPage({ params }: Props) {
         <LoadsInventoryClient
           siteCode={siteCode}
           showEventsOrTabs={showEventsOrTabs}
-          computedTotal={balance.total.toString()}
+          {...(presented.totalUnits == null ? {} : { computedTotal: String(presented.totalUnits) })}
         />
       </div>
     </main>
   );
 }
 
-function BalanceTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function BalanceTile({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  /** null = withheld by the presenter (ADR-0143 D1); never a raw negative. */
+  value: string | null;
+  accent?: boolean;
+}) {
   return (
     <div
       className={`rounded-lg border p-4 ${accent ? 'border-dr3-cyan/50 bg-black/20' : 'border-white/15 bg-black/10'}`}
     >
       <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
-      <div className="mt-1 text-2xl font-bold">{value}</div>
+      <div className="mt-1 text-2xl font-bold">{value ?? 'Not shown'}</div>
     </div>
   );
 }

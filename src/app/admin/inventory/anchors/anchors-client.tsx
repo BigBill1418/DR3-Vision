@@ -52,7 +52,7 @@ export function AnchorsClient({ rows }: { rows: AnchorRow[] }) {
         return;
       }
       setDone(
-        `Restored ${selected.siteName} to ${selected.total.toLocaleString()} units as a new snapshot.`,
+        `Restored ${selected.siteName} to ${selected.total.toLocaleString()} units as a new snapshot.`, // onhand-presenter-ok: a physical count's own total, never computed
       );
       setSelected(null);
       setReason('');
@@ -118,7 +118,9 @@ export function AnchorsClient({ rows }: { rows: AnchorRow[] }) {
                   {/* ADR-0084 — struck through, not hidden. The number stays
                       readable because the history is the point. */}
                   <span className={r.voidedAt === null ? '' : 'line-through'}>
-                    {r.total.toLocaleString()}
+                    {
+                      r.total.toLocaleString() /* onhand-presenter-ok: a physical count's own total, never computed */
+                    }
                   </span>
                   {r.id === currentId && (
                     <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
@@ -178,9 +180,13 @@ export function AnchorsClient({ rows }: { rows: AnchorRow[] }) {
         <div className="mt-5 rounded-lg bg-dr3-steel/20 p-5 ring-1 ring-amber-500/30">
           <p className="text-sm">
             Re-activate <strong>{selected.siteName}</strong>&apos;s anchor of{' '}
-            <strong className="tabular-nums">{selected.total.toLocaleString()}</strong> units from{' '}
-            {selected.at}. This writes a <strong>new</strong> snapshot with those figures. The
-            anchor being replaced stays in the history.
+            <strong className="tabular-nums">
+              {
+                selected.total.toLocaleString() /* onhand-presenter-ok: a physical count's own total, never computed */
+              }
+            </strong>{' '}
+            units from {selected.at}. This writes a <strong>new</strong> snapshot with those
+            figures. The anchor being replaced stays in the history.
           </p>
           <label className="mt-3 block text-xs uppercase tracking-wide text-dr3-mist-dim">
             Why is this being restored?

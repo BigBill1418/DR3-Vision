@@ -21,7 +21,7 @@
 
 import { onHand, snapshotTotalUnits } from '@/lib/inventory/running-balance';
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
-import { assertCorInboundFresh, assertCorInventoryNotNegative } from './inbound-gate';
+import { assertCorInboundFresh, assertCorPoolsNotNegative } from './inbound-gate';
 import { countDistinctProcessors } from '@/lib/bonus/processor-count';
 import { log } from '@/lib/observability/logger';
 import { dayKeyUTCFromISO } from '@/lib/time';
@@ -260,7 +260,9 @@ export async function computeCorPrefill(
   const storedUnits = balance.total.toNearest(1).toNumber();
   // PR #196 §2.3 — a negative balance is a drifted one-sided ledger, never a
   // fileable inventory figure (throws CorLedgerNegativeError, 422).
-  assertCorInventoryNotNegative(storedUnits);
+  // ADR-0143 RC3 — BOTH pools, not only the total: a negative program pool inside a
+  // positive total is the case MRC bills on, and a total-only check waved it through.
+  assertCorPoolsNotNegative(balance);
   const inventorySource: InventorySource = {
     method: 'running_balance_adr0037_d6',
     asOf: monthEndAsOf.toISOString(),

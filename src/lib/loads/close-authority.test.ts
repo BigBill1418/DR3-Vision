@@ -201,6 +201,8 @@ vi.mock('@/lib/prisma', () => {
     prisma: {
       processedUnitsDaily,
       outboundMaterial: { aggregate: async () => zero, groupBy: async () => [] },
+      // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+      inventoryPoolAdjustment: { groupBy: async () => [] },
       landfilledUnit: { aggregate: async () => zero, groupBy: async () => [] },
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     },

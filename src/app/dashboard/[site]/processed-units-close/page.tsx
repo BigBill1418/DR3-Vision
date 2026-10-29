@@ -12,6 +12,7 @@ import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { ProcessedUnitsEntryClient } from './ProcessedUnitsEntryClient';
+import { programAvailableToday } from '@/lib/inventory/split-rule';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,13 +60,36 @@ export default async function ProcessedUnitsClosePage({ params }: Props) {
         </h1>
         <p className="mt-2 max-w-3xl text-sm opacity-80">
           Enter the day&apos;s stripped units, split program vs. non-program. This is the number MRC
-          is billed from, so it stays a two-step record: <strong>you enter and amend it here</strong>
-          , and <strong>Bill reviews, closes and locks it</strong>. Amend a day as many times as you
-          need up until it is closed — after close, edits are blocked and corrections follow the
+          is billed from, so it stays a two-step record:{' '}
+          <strong>you enter and amend it here</strong>, and{' '}
+          <strong>Bill reviews, closes and locks it</strong>. Amend a day as many times as you need
+          up until it is closed — after close, edits are blocked and corrections follow the
           amendment path.
         </p>
+        {/* ADR-0143 D6 — the split is entered here; show what program was there to
+            process today, so a program figure above it is visibly wrong before save. */}
+        <ProgramAvailableLine siteId={result.ctx.siteId} />
         <ProcessedUnitsEntryClient siteCode={siteCode} />
       </div>
     </main>
+  );
+}
+
+async function ProgramAvailableLine({ siteId }: { siteId: string }) {
+  const a = await programAvailableToday(siteId).catch(() => null);
+  if (!a) return null;
+  return (
+    <p
+      className="mt-4 max-w-3xl rounded border border-white/15 bg-black/10 p-3 text-sm"
+      data-testid="program-available"
+    >
+      <strong>Program units available to process today ({a.day}):</strong>{' '}
+      {a.none
+        ? 'none — the program pool is below zero; see the open inventory exception.'
+        : a.units.toLocaleString('en-US')}
+      . Recording more program than this drives the program pool below zero and opens an inventory
+      exception. The floor is mixed, so the split is not counted: a unit received as non-program
+      stays non-program.
+    </p>
   );
 }

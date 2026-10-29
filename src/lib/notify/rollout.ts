@@ -84,6 +84,8 @@ export const UI_SURFACE = {
   // Consulted by `assertLoadsInventoryActivated` (record-guards) and the
   // loads-inventory page gate. Default/unregistered ⇒ admin-only (fail-safe).
   LOADS_INVENTORY: 'loads_inventory',
+  /** ADR-0143 — the negative-pool exception pages + their propose/approve actions (born pilot). */
+  INVENTORY_EXCEPTIONS: 'inventory_exceptions',
 
   // ── ADR-0065 — PER-SURFACE iPad (floor) gates ──────────────────────────────
   // `loads_inventory` is a SHARED master gate: it also fronts the manager

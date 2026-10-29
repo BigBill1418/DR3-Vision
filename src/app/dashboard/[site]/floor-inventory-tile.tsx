@@ -52,7 +52,9 @@ function NegativeBanner({ tile }: { tile: FloorInventoryTileData }) {
       <strong className="block text-red-300">
         {copy.subject} is computing negative{copy.qualifier}.
       </strong>
-      {copy.reason} This figure is not reliable and is not shown. A physical count resets the floor.
+      {/* ADR-0143 D5 — the ONE remedy (it used to say "a physical count resets the
+          floor" here while the invariant said "do not count"). */}
+      {copy.reason} This figure is not reliable and is not shown. {copy.remedy}
     </div>
   );
 }

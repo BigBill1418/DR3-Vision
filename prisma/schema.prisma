@@ -92,6 +92,10 @@ model Site {
   // Tiered anchor-overwrite guardrail (ADR-0072)
   inventory_anchor_config InventoryAnchorConfig?
   inventory_count_holds   InventoryCountHold[]
+  /// ADR-0143 — negative-pool exceptions, pool adjustments, daily positions.
+  inventory_exceptions       InventoryException[]
+  inventory_pool_adjustments InventoryPoolAdjustment[]
+  inventory_position_daily   InventoryPositionDaily[]
 
   // Absorbed trailer-list rows (ADR-0069 Am.1)
   doc_trailer_rows DocTrailerRow[]
@@ -6966,4 +6970,128 @@ model AlertCooldown {
 
   @@index([expires_at])
   @@map("alert_cooldowns")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-0143 — the program pool is a claim, not a count.
+//
+// Three tables (migration 20260870_adr0143_inventory_exceptions):
+//   inventory_exceptions       — a pool that went below zero, opened IN THE SAME
+//                                transaction as the write that drove it there (D2).
+//   inventory_pool_adjustments — a four-eyes correction of the pool SPLIT; the total
+//                                is preserved by construction (D4). Sixth leg of
+//                                computeRunningBalance.
+//   inventory_position_daily   — the materialised daily position per pool. A
+//                                deferred constraint trigger refuses a negative
+//                                `closing` without an exception (D3).
+// CHECKs and triggers are in the migration SQL (Prisma cannot model them).
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum InventoryPool {
+  program
+  non_program
+
+  @@map("InventoryPool")
+}
+
+enum InventoryExceptionStatus {
+  open
+  resolved
+
+  @@map("InventoryExceptionStatus")
+}
+
+enum InventoryAdjustmentStatus {
+  proposed
+  approved
+  rejected
+
+  @@map("InventoryAdjustmentStatus")
+}
+
+model InventoryException {
+  id                       String                    @id @default(uuid())
+  site_id                  String
+  site                     Site                      @relation(fields: [site_id], references: [id])
+  pool                     InventoryPool
+  status                   InventoryExceptionStatus  @default(open)
+  /// The first Pacific day this pool closed below zero (positions table).
+  first_negative_day       DateTime                  @db.Date
+  /// Set at resolution: the last negative day this exception explains.
+  last_negative_day        DateTime?                 @db.Date
+  /// The writer whose write opened it (`workbook-sync`, `mymrc-processed-bridge`, …).
+  opened_by_writer         String
+  opened_at                DateTime                  @default(now()) @db.Timestamptz(3)
+  /// Magnitude of the deepest negative closing when opened (a positive number).
+  shortfall                Decimal                   @db.Decimal(10, 1)
+  /// The first negative day's legs (opening, in, out, closing) — the diagnosis.
+  legs                     Json
+  /// ADR-0143 D5 — stamped only when the onset page actually landed.
+  onset_paged_at           DateTime?                 @db.Timestamptz(3)
+  /// ADR-0143 D5 — the single 7-day re-page.
+  repaged_at               DateTime?                 @db.Timestamptz(3)
+  /// A resolution WITHOUT an adjustment (e.g. a count already reset the pool):
+  /// proposed by one person, approved by another (Bill B4).
+  resolution_proposed_by   String?
+  resolution_proposed_note String?
+  resolution_proposed_at   DateTime?                 @db.Timestamptz(3)
+  resolved_by              String?
+  resolved_at              DateTime?                 @db.Timestamptz(3)
+  resolution               String?
+  adjustments              InventoryPoolAdjustment[]
+  positions                InventoryPositionDaily[]
+
+  @@index([site_id, status])
+  @@map("inventory_exceptions")
+}
+
+model InventoryPoolAdjustment {
+  id            String                    @id @default(uuid())
+  site_id       String
+  site          Site                      @relation(fields: [site_id], references: [id])
+  /// The Pacific day the correction is dated (it moves the pools from this day on).
+  day           DateTime                  @db.Date
+  from_pool     InventoryPool
+  to_pool       InventoryPool
+  units         Decimal                   @db.Decimal(10, 1)
+  reason        String
+  exception_id  String?
+  exception     InventoryException?       @relation(fields: [exception_id], references: [id], onDelete: Restrict)
+  status        InventoryAdjustmentStatus @default(proposed)
+  proposed_by   String
+  proposed_at   DateTime                  @default(now()) @db.Timestamptz(3)
+  approved_by   String?
+  approved_at   DateTime?                 @db.Timestamptz(3)
+  rejected_by   String?
+  rejected_at   DateTime?                 @db.Timestamptz(3)
+  decision_note String?
+
+  @@index([site_id, status, day])
+  @@index([exception_id])
+  @@map("inventory_pool_adjustments")
+}
+
+model InventoryPositionDaily {
+  site_id            String
+  site               Site                @relation(fields: [site_id], references: [id])
+  day                DateTime            @db.Date
+  pool               InventoryPool
+  /// The physical anchor this window was computed forward from (null = no count yet).
+  anchor_snapshot_id String?
+  opening            Decimal             @db.Decimal(10, 1)
+  inbound            Decimal             @db.Decimal(10, 1)
+  dropoffs           Decimal             @db.Decimal(10, 1)
+  stripped           Decimal             @db.Decimal(10, 1)
+  sold               Decimal             @db.Decimal(10, 1)
+  landfilled         Decimal             @db.Decimal(10, 1)
+  adjustments        Decimal             @db.Decimal(10, 1)
+  closing            Decimal             @db.Decimal(10, 1)
+  exception_id       String?
+  exception          InventoryException? @relation(fields: [exception_id], references: [id], onDelete: Restrict)
+  inputs_hash        String
+  computed_at        DateTime            @db.Timestamptz(3)
+
+  @@id([site_id, day, pool])
+  @@index([exception_id])
+  @@map("inventory_position_daily")
 }

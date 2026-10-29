@@ -35,6 +35,9 @@
 // `$queryRawUnsafe` with POSITIONAL parameters (injection-safe — the SQL text is a
 // constant, every value is a bound parameter).
 
+// pool-guard: post-tick — compiled standalone (tsconfig.mymrc.json) and cannot import the
+// ADR-0143 guard; its writes are checked by /api/internal/inventory/pool-check, which the
+// workbook-sync daemon runs every 10 minutes (exception writer `sweep:processed=mymrc`).
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 

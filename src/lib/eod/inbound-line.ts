@@ -45,6 +45,7 @@ import { AGGREGATE_SOURCE_TYPES } from '@/lib/loads/floor-inbound';
 import { assertSplit } from '@/lib/loads/bulk-inbound';
 import { RecordValidationError } from '@/lib/loads/record-guards';
 import { dayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'inbound_loads';
 
@@ -227,6 +228,8 @@ export async function addEodInboundLine(args: EodInboundLineInput): Promise<EodI
           },
         },
       });
+      // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+      await guardPoolsInTx(tx, args.siteId, 'inbound-eod-line');
       return created;
     })
     .catch((e: unknown) => {

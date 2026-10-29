@@ -12,6 +12,7 @@
 
 import { NOT_VOIDED } from '@/lib/inventory/snapshot-void';
 import { onHand, snapshotTotalUnits, type RunningBalance } from '@/lib/inventory/running-balance';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
 import { businessDaysBetween } from '@/lib/mymrc/business-days';
 import { noOnboardedSites, onboardedSites } from '@/lib/invariants/scope';
 import { prisma } from '@/lib/prisma';
@@ -192,7 +193,8 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
       'the billed balance is unreconciled, so eventually. q3 self-heal? no. q4 dedup? per invariant, 24h. ' +
       'q5 /status. -> ADR-0131 D6: Tier A, not directly a money path, so `default`.',
     remedy:
-      'Schedule a floor count at the named site. Until one exists, every number computed forward from the anchor - floor tile, COR, MRC invoice - rests on an unverified base.',
+      'Schedule a floor count at the named site. Until one exists, every number computed forward from the anchor - floor tile, COR, MRC invoice - rests on an unverified base. ' +
+      'A count resets the TOTAL. On a mixed floor (Woodland, Bill 2026-10-29) it cannot measure the program/non-program split; a split error is corrected by a pool adjustment on the inventory exception (ADR-0143 D4), not by this count.',
     async check(ctx): Promise<InvariantOutcome> {
       const all = await sites();
       if (all.length === 0) return noOnboardedSites();
@@ -351,24 +353,36 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
   {
     id: 'INV-POOL-NON-NEGATIVE',
     tier: 'refusal',
-    title: 'No inventory pool is negative at any onboarded site',
-    adr: 'ADR-0037',
+    title: 'No inventory pool is negative at any onboarded site without a recorded exception',
+    adr: 'ADR-0143',
     assumption:
-      'Inventory is two ledgers - program / non-program - because MRC is billed on PROGRAM units only.',
+      'Inventory is two ledgers - program / non-program - because MRC is billed on PROGRAM units only. ' +
+      'Since ADR-0143 every write checks the pools and opens an inventory exception when one crosses below zero.',
     severity: 'default',
     gate:
-      'q1 actionable in 5min? NO - finding the wrong leg is an investigation. q2 customer-visible? ' +
-      'YES, MRC is billed off the program pool. q3 self-heal? no. q4 dedup? per invariant. ' +
-      'q5 /status. -> Tier A, `default` (the money consequence is downstream of an investigation).',
+      'ADR-0143 D5 re-grade (2026-10-29): a negative pool WITH an open exception is not a finding here - the ' +
+      'exception pages once at onset (`high`), once at 7 days, and is a digest line while open. What remains ' +
+      'pageable is a negative pool with NO exception: a writer bypassed the pool guard, which is a code defect. ' +
+      'q1 yes (run /api/internal/inventory/pool-check, then find the writer), q2 yes, q3 the 10-min sweep is ' +
+      'the self-heal, q4 one per pool, q5 /status. -> Tier A, `default`.',
     remedy:
-      'A negative pool means an outflow leg exceeds its inflow since the anchor. Compare the legs against the workbook for the window since the anchor date; do not take a new physical count until the leg is found, because a count would absorb the error into reconciled_delta and hide it.',
+      'Each finding carries the ONE remedy sentence the floor tile and the daily report show ' +
+      '(negativeFloorCopy().remedy, ADR-0143 D5). A finding here also means no inventory exception was ' +
+      'recorded for the negative: a writer bypassed the ADR-0143 pool guard - find it (pool-guard-writers ' +
+      'guard test) and run the pool-check sweep.',
     async check(ctx): Promise<InvariantOutcome> {
       // The 2026-07-30 negative-inventory class. A negative pool is arithmetically
       // possible (the balance subtracts freely) and physically impossible, so it is
       // a pure statement about the data.
+      //
+      // ADR-0143 RC4: the remedy used to be a fixed string that told the reader "do
+      // not take a new physical count" while the tile said "a physical count resets
+      // the floor". Each finding now carries `presentOnHand(b).notice.remedy` — the
+      // same function, so the same words, as every surface.
       const all = await sites();
       if (all.length === 0) return noOnboardedSites();
       const violations: Violation[] = [];
+      const explained: string[] = [];
       let checked = 0;
       for (const s of all) {
         let b: RunningBalance;
@@ -380,16 +394,33 @@ export const INVENTORY_INVARIANTS: readonly Invariant[] = [
           continue;
         }
         checked += 1;
-        for (const [pool, v] of [
-          ['program', b.program],
-          ['non-program', b.nonProgram],
+        const notice = presentOnHand(b).notice;
+        for (const [pool, key, v] of [
+          ['program', 'program', b.program],
+          ['non-program', 'non_program', b.nonProgram],
         ] as const) {
-          if (v.isNegative()) {
-            violations.push({ subject: `${s.code} ${pool}`, detail: `${v.toString()} units` });
+          if (!v.isNegative()) continue;
+          const open = await prisma.inventoryException.findFirst({
+            where: { site_id: s.id, pool: key, status: 'open' },
+            select: { id: true, first_negative_day: true },
+          });
+          if (open) {
+            explained.push(
+              `${s.code} ${pool}: inventory exception ${open.id.slice(0, 8)} open since ` +
+                `${dayISO(open.first_negative_day)} (paged by ADR-0143 D5, not here)`,
+            );
+            continue;
           }
+          violations.push({
+            subject: `${s.code} ${pool}`,
+            detail:
+              `${v.toString()} units, total ${b.total.toString()}, and NO inventory exception recorded. ` +
+              `${notice?.headline ?? ''} remedy: ${notice?.remedy ?? ''}`,
+          });
         }
       }
-      return verdict(checked, violations);
+      const out = verdict(checked, violations);
+      return explained.length > 0 ? { ...out, note: explained.join('; ') } : out;
     },
   },
 

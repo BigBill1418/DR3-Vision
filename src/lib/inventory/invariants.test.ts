@@ -11,6 +11,7 @@ const snapshotFindFirst = vi.fn();
 const snapshotCount = vi.fn(async () => 0);
 const isUiSurfaceLive = vi.fn();
 const onHand = vi.fn();
+const exceptionFindFirst = vi.fn(async (): Promise<unknown> => null);
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -21,6 +22,7 @@ vi.mock('@/lib/prisma', () => ({
       findMany: async () => [],
       count: (...a: unknown[]) => snapshotCount(...(a as [])),
     },
+    inventoryException: { findFirst: (...a: unknown[]) => exceptionFindFirst(...(a as [])) },
   },
 }));
 vi.mock('@/lib/notify/rollout', async (orig) => ({
@@ -164,4 +166,43 @@ describe('the row-scanning invariants stay global, deliberately', () => {
       expect(isUiSurfaceLive).not.toHaveBeenCalled();
     },
   );
+});
+
+// ── ADR-0143 D5 / RC4 — test T4: ONE remedy, and the exception owns the page ──
+describe('INV-POOL-NON-NEGATIVE (ADR-0143)', () => {
+  it('Woodland -247 with NO exception: violated, and the remedy IS the tile remedy (same function)', async () => {
+    const { negativeFloorCopy } = await import('./negative-floor');
+    onHand.mockResolvedValue(balance(-247, 644));
+    exceptionFindFirst.mockResolvedValue(null);
+    const out = await byId('INV-POOL-NON-NEGATIVE').check({
+      now: ctx.now,
+    }); /* fresh ctx: the balance is memoised per run */
+    expect(out.status).toBe('violated');
+    const detail = out.violations[0]!.detail;
+    expect(detail).toContain(negativeFloorCopy({ kind: 'pool-split', pool: 'program' }).remedy);
+    expect(detail).toContain('NO inventory exception recorded');
+    expect(detail).not.toMatch(/do not take a new physical count/i);
+  });
+
+  it('Woodland -247 WITH an open exception: not a finding here (the exception pages), named in the note', async () => {
+    onHand.mockResolvedValue(balance(-247, 644));
+    exceptionFindFirst.mockResolvedValue({
+      id: 'ex-12345678-aaaa',
+      first_negative_day: new Date('2026-09-17T00:00:00Z'),
+    });
+    const out = await byId('INV-POOL-NON-NEGATIVE').check({
+      now: ctx.now,
+    }); /* fresh ctx: the balance is memoised per run */
+    expect(out.status).toBe('ok');
+    expect(out.subjectsChecked).toBe(1);
+    expect(out.note).toContain(
+      'woodland program: inventory exception ex-12345 open since 2026-09-17',
+    );
+  });
+
+  it('the static remedy no longer contradicts the screen (RC4)', () => {
+    const inv = byId('INV-POOL-NON-NEGATIVE');
+    expect(inv.remedy).not.toMatch(/do not take a new physical count/i);
+    expect(inv.remedy).toContain('negativeFloorCopy().remedy');
+  });
 });

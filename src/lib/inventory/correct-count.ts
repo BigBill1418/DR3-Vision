@@ -109,6 +109,7 @@ import {
   type PhysicalCountInput,
 } from './running-balance';
 import { SnapshotNotFoundError, SnapshotNotPhysicalError } from './void-count';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 /**
  * The idempotency scope for a manager correction.
@@ -682,6 +683,10 @@ async function applyCorrection(
   });
 
   await assertCorrectionAudited(tx, original.id, created.id);
+
+  // ADR-0143 D2 — a corrected anchor re-seeds the window; check the pools inside
+  // this transaction (never refuses).
+  await guardPoolsInTx(tx, original.site_id, 'count-correction');
 
   return {
     correctedFromSnapshotId: original.id,

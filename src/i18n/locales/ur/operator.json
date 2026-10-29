@@ -345,6 +345,8 @@
       "heading": "روزانہ جانچ",
       "caption": "{{site}} · {{name}}",
       "on_hand_heading": "اس وقت موجود",
+      "on_hand_split_unavailable": "پروگرام / غیر پروگرام کی تقسیم دفتر درست کر رہا ہے۔",
+      "on_hand_unavailable": "دفتر کی درستگی تک موجود تعداد نہیں دکھائی جاتی۔",
       "card_inbound_title": "موصولہ کی تصدیق",
       "card_inbound_body": "آج موصول ہونے والی کھیپ کی گنتی دیکھیں",
       "card_inbound_badge_one": "{{count}} دن تصدیق طلب",

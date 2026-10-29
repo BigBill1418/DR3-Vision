@@ -81,6 +81,8 @@
 //   custody is reconstructible from `audit_log` even though the row itself only
 //   holds the current holder.
 
+// pool-guard: non-moving — the takeover swaps the claim holder on an in-progress load; it never
+// changes a status in VERIFIED_INBOUND_STATUSES or a unit count (ADR-0143 guard not needed).
 import { prisma } from '@/lib/prisma';
 import { writeAudit } from '@/lib/audit';
 import { withIdempotency } from '@/lib/idempotency';

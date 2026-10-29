@@ -17,8 +17,13 @@
 import { Prisma, type OutboundCommodity, type OutboundSubCategory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
-import { RecordValidationError, RecordNotFoundError, assertUnlocked } from '@/lib/loads/record-guards';
+import {
+  RecordValidationError,
+  RecordNotFoundError,
+  assertUnlocked,
+} from '@/lib/loads/record-guards';
 import { deriveOutboundRecycling, type OutboundRecyclingResult } from '@/lib/loads/recycling-rates';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'outbound_materials';
 
@@ -28,13 +33,17 @@ function shipDateUTC(date: Date): Date {
 
 function assertWeight(lbs: number): void {
   if (!Number.isInteger(lbs) || lbs < 0 || lbs > 10000000) {
-    throw new RecordValidationError(`weight_lbs must be a whole number in [0, 10000000] (got ${String(lbs)})`);
+    throw new RecordValidationError(
+      `weight_lbs must be a whole number in [0, 10000000] (got ${String(lbs)})`,
+    );
   }
 }
 
 function assertUnit(name: string, n: number, min = 0): void {
   if (!Number.isInteger(n) || n < min || n > 100000) {
-    throw new RecordValidationError(`${name} must be a whole number in [${min}, 100000] (got ${String(n)})`);
+    throw new RecordValidationError(
+      `${name} must be a whole number in [${min}, 100000] (got ${String(n)})`,
+    );
   }
 }
 
@@ -74,7 +83,9 @@ export function assertOutboundShape(
   // renovation
   if (whole == null) {
     if (program != null || nonProgram != null) {
-      throw new RecordValidationError('renovation split requires whole_units when program/non-program units are given');
+      throw new RecordValidationError(
+        'renovation split requires whole_units when program/non-program units are given',
+      );
     }
     return { wholeUnits: null, programUnits: null, nonProgramUnits: null };
   }
@@ -219,14 +230,24 @@ export async function createOutbound(args: {
   if (args.baleCount != null && (!Number.isInteger(args.baleCount) || args.baleCount < 0)) {
     throw new RecordValidationError('bale_count must be a non-negative whole number');
   }
-  const shape = assertOutboundShape(args.subCategory, args.wholeUnits, args.programUnits, args.nonProgramUnits);
+  const shape = assertOutboundShape(
+    args.subCategory,
+    args.wholeUnits,
+    args.programUnits,
+    args.nonProgramUnits,
+  );
   const day = shipDateUTC(args.shipDate);
   // ADR-0055 — derive the CalRecycle stewardship split at ENTRY TIME from
   // (vendor_id, commodity, ship_date). Resolved (a read) before the write tx; the
   // percent is snapshotted so the row is reproducible even if the rate later changes.
   const vendorId = args.vendorId ?? null;
   const derived = derivedColumns(
-    await deriveOutboundRecycling({ vendorId, commodity: args.commodity, shipDate: day, weightLbs: args.weightLbs }),
+    await deriveOutboundRecycling({
+      vendorId,
+      commodity: args.commodity,
+      shipDate: day,
+      weightLbs: args.weightLbs,
+    }),
   );
   const row = await prisma.$transaction(async (tx) => {
     // ADR-0120 — serialise against workbook promotion at this site, FIRST
@@ -270,6 +291,8 @@ export async function createOutbound(args: {
         },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'outbound');
     return created;
   });
   return toView(row);
@@ -299,7 +322,8 @@ export async function updateOutbound(args: {
   const subCategory = args.subCategory ?? existing.sub_category;
   const wholeUnits = args.wholeUnits !== undefined ? args.wholeUnits : existing.whole_units;
   const programUnits = args.programUnits !== undefined ? args.programUnits : existing.program_units;
-  const nonProgramUnits = args.nonProgramUnits !== undefined ? args.nonProgramUnits : existing.non_program_units;
+  const nonProgramUnits =
+    args.nonProgramUnits !== undefined ? args.nonProgramUnits : existing.non_program_units;
   const shape = assertOutboundShape(subCategory, wholeUnits, programUnits, nonProgramUnits);
 
   // ADR-0055 — re-derive the stewardship split whenever the vendor or weight changes
@@ -346,6 +370,8 @@ export async function updateOutbound(args: {
         after: { weight_lbs: updated.weight_lbs, whole_units: updated.whole_units },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'outbound');
     return updated;
   });
   return toView(row);

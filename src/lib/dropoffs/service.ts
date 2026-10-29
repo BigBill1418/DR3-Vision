@@ -24,6 +24,7 @@ import {
   RecordNotFoundError,
   assertUnlocked,
 } from '@/lib/loads/record-guards';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'consumer_dropoffs';
 
@@ -410,6 +411,8 @@ export async function createDropoff(args: {
         },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'dropoff');
     return created;
   });
   return toView(row);
@@ -508,6 +511,8 @@ export async function updateDropoff(args: {
         after: { units, kind, incentive_cents: incentiveCents },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'dropoff');
     return updated;
   });
   return toView(row);

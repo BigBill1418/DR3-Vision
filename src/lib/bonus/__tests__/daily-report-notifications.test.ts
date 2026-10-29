@@ -317,7 +317,8 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
   it('renders the LOUD banner instead of the figures', () => {
     const html = bodyWithEod(negativeEod());
     expect(html).toContain('On-hand is computing negative');
-    expect(html).toContain('2,439'); // the magnitude, inside the sentence
+    // ADR-0143 D1 (2026-10-29): not even inside the sentence any more.
+    expect(html).not.toContain('2,439');
     expect(html).toContain('This figure is not reliable');
   });
 
@@ -348,9 +349,11 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
     expect(panel).not.toContain('Change from yesterday');
     expect(panel).not.toContain('Program / non-program split');
 
-    // The magnitude appears EXACTLY ONCE, and it is inside the diagnostic sentence.
-    expect(panel.split('2,439').length - 1).toBe(1);
-    expect(panel).toContain('computing negative (−2,439)');
+    // ADR-0143 D1 (2026-10-29) — the magnitude no longer appears at all, not even
+    // inside the diagnostic sentence. "(−2,439)" in a mail is still a figure a reader
+    // copies into a spreadsheet.
+    expect(panel).not.toContain('2,439');
+    expect(panel).toContain('On-hand is computing negative.');
   });
 
   // Proves the assertion above is not true-by-construction. The SAME renderer,
@@ -370,7 +373,8 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
   it('still names the anchor, so the reader knows how to fix it', () => {
     const html = bodyWithEod(negativeEod());
     expect(html).toContain('Last physical count');
-    expect(html).toContain('A physical count resets the floor');
+    // ADR-0143 D5 — the ONE remedy, for the stale-intake cause.
+    expect(html).toContain('Recover the inbound feed first.');
   });
 
   it('a NEGATIVE PROGRAM pool inside a positive total is still banner-worthy', () => {
@@ -381,7 +385,7 @@ describe('renderHtmlBody — EOD inventory, negative floor (§4a)', () => {
       'Woodland',
     );
     expect(panel).toContain('Program on-hand is computing negative');
-    expect(panel).toContain('(−300)'); // the worst pool, not the positive total
+    expect(panel).not.toMatch(/[−-]300\b|\b300\)/); // ADR-0143 D1: no magnitude anywhere
     expect(panel).not.toContain('Program units on hand');
   });
 
@@ -425,9 +429,7 @@ describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
       }),
       'Woodland',
     );
-    expect(panel).toContain(
-      'Program on-hand is computing negative (−147) while the total is positive.',
-    );
+    expect(panel).toContain('Program on-hand is computing negative while the total is positive.');
     expect(panel).toContain(
       'The program/non-program split looks mis-recorded — check how non-program units are entered in the daily close.',
     );
@@ -438,7 +440,10 @@ describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
     expect(panel).not.toContain('1,750');
     expect(panel).toContain('This figure is not reliable and is not shown');
     expect(panel).toContain('Last physical count');
-    expect(panel).toContain('A physical count resets the floor');
+    expect(panel).not.toMatch(/[−-]147\b|\b147\)/);
+    // ADR-0143 D5 + Bill B3: a split on a mixed floor is an adjustment, not a count.
+    expect(panel).toContain('A physical count cannot fix this: the floor is mixed');
+    expect(panel).not.toContain('A physical count resets the floor');
   });
 
   it('CASE 1 mirrored: a negative NON-program pool names that pool', () => {
@@ -447,7 +452,7 @@ describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
       'Woodland',
     );
     expect(panel).toContain(
-      'Non-program on-hand is computing negative (−40) while the total is positive.',
+      'Non-program on-hand is computing negative while the total is positive.',
     );
     expect(panel).toContain('check how program units are entered in the daily close');
     expect(panel).not.toContain('Intake data is incomplete');
@@ -467,7 +472,8 @@ describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
       }),
       'Woodland',
     );
-    expect(panel).toContain('On-hand is computing negative (−600).');
+    expect(panel).toContain('On-hand is computing negative.');
+    expect(panel).not.toMatch(/[−-]600\b|\b600\)/);
     expect(panel).toContain('Intake data is incomplete — most recent inbound is 9 days old.');
     expect(panel).not.toContain('mis-recorded');
   });
@@ -484,13 +490,14 @@ describe('renderEodInventoryHtml — negative floor cause (2026-10-08)', () => {
       }),
       'Woodland',
     );
-    expect(panel).toContain('On-hand is computing negative (−200).');
+    expect(panel).toContain('On-hand is computing negative.');
+    expect(panel).not.toMatch(/[−-]200\b|\b200\)/);
     expect(panel).toContain(
       'More units have been processed than were recorded coming in since the last physical count.',
     );
     expect(panel).not.toContain('Intake data is incomplete');
     expect(panel).not.toContain('0 days old');
-    expect(panel).toContain('A physical count resets the floor');
+    expect(panel).toContain('Once the cause is recorded, a physical count resets the total.');
   });
 });
 

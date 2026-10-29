@@ -9,6 +9,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// ADR-0143 D2 — the pool guard needs a real transaction; it is exercised against
+// Postgres in src/lib/inventory/pool-guard.db.test.ts. Here it is a recorded no-op.
+vi.mock('@/lib/inventory/pool-guard', () => ({ guardPoolsInTx: vi.fn(async () => null) }));
 vi.mock('@/lib/ntfy', () => ({ publishNtfy: vi.fn(async () => undefined) }));
 
 import { publishNtfy } from '@/lib/ntfy';

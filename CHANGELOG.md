@@ -9,6 +9,61 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-29 — Negative inventory, permanent fix: built on a branch, NOT deployed (ADR-0143 items 1–8)
+
+Branch `fix/adr0143-negative-inventory` (from `origin/main` `3573f74`). Bill's decisions B1–B5 are recorded in
+ADR-0143. Nothing is pushed, merged or deployed: a deploy rebuilds the app and updates the dock iPads.
+
+- **No raw negative anywhere (D1).** One presenter, `presentOnHand()` (`src/lib/inventory/negative-floor.ts`).
+  `loads-inventory` and the iPad Today hub printed `-247`; they, the count screen and the yard page now go
+  through it. In case 1 (a pool negative, total positive) both pools are withheld and the total is kept (B2).
+  The daily report no longer prints the magnitude in its sentence. A CI scan fails on any page or mail module
+  that renders a pool raw (mutation-checked).
+- **COR checks both pools** at prefill and at finalize (`assertCorPoolsNotNegative`); it checked the total only.
+- **One remedy (D5).** Tile, daily report, iPad and `INV-POOL-NON-NEGATIVE` all read
+  `negativeFloorCopy().remedy`. A pool split now says "a pool adjustment, approved by a second person", never
+  "count" (the floor is mixed, B3). `INV-ANCHOR-FRESH` says a count resets the total, not the split.
+- **Migration `20260870_adr0143_inventory_exceptions` (B5).** `inventory_exceptions`,
+  `inventory_pool_adjustments`, `inventory_position_daily`; a deferred trigger refuses a negative closing with no
+  exception; append-only triggers; four-eyes CHECKs; rollout surface `inventory_exceptions` born pilot.
+- **Sixth leg (D4).** Approved adjustments move units between pools in `computeRunningBalance`; the total cannot
+  change. The positions table is built cumulatively through the same function (equivalence tested on Postgres).
+- **Every writer checks the pools (D2).** `guardPoolsInTx()` in 14 writers, inside their transactions, under the
+  site lock; it never refuses a write (SAVEPOINT). The MyMRC bridges, which run in the standalone scraper, are
+  checked by `/api/internal/inventory/pool-check`, which the workbook-sync daemon now calls every 10 minutes. A
+  CI scan fails on any writer of a leg table without the guard or a reasoned note.
+- **Alerting (D5, B4).** Onset: one `high` page on `dr3-vision-system` with a click to the exception. Seven days
+  open: one more. While open: one line in a daily `default` digest (sent with the invariants run). This
+  replaces the daily `INV-POOL-NON-NEGATIVE` page for a negative that has an exception. Pages are stamped only
+  when they land.
+- **In-app exception page** `/dashboard/[site]/inventory-exceptions[/id]`. It has the legs table, propose /
+  approve / reject for adjustments, and a four-eyes close without an adjustment. Born pilot.
+- **Item 7 (partial).** The daily close shows the program units available to process that day. The written
+  convention is Bill's (OPEN-ITEMS CH-7).
+- **Item 8.** `scripts/propose-woodland-pool-repair.mjs` proposes the R-B row (247 non-program → program, dated
+  10-08) for Bill to approve. Dry run by default. **Not run against production.**
+- **Four-eyes TOCTOU closed (security review, MEDIUM).** Approving a no-adjustment close now carries the
+  proposal instant the approver's page showed (`expectedProposedAt`). If the proposer re-proposes after the page
+  loaded, the approval is refused with 409 `stale_proposal` and nothing resolves; the compare-and-swap also
+  matches the proposer and the text. Adjustments do not have this shape: a proposal is immutable (DB trigger)
+  and a re-proposal is a new id. Tested both ways; the TOCTOU test fails on the previous code.
+- **Found in passing, fixed:** OPEN-ITEMS 0.CG still said PR #307 was unmerged; it merged as `d4a5e12` on
+  2026-10-14.
+- **Tests:** see the PR body (unit + Postgres lanes).
+
+## 2026-10-29 — Negative inventory root cause and permanent-fix plan (ADR-0143, docs only)
+
+- Diagnosis, read-only against prod:
+  - Woodland: program −247, non-program +644, total +397. Every input leg matches MyMRC.
+  - Cause: non-program units were processed as program 09-15 → 10-08, and since 10-09 the daily split has been
+    derived from intake.
+  - Why earlier fixes did not hold: the only write-time guard is bypassed at Woodland; two pages still print raw
+    negatives; the alert remedy contradicts the screen; there is no way to correct a split.
+- Proposed: a pool check on every write, a DB trigger against unexplained negatives, total-preserving pool
+  adjustments, and one on-hand presenter. No code change yet.
+- Files: `docs/adr/0143-…`, `docs/plans/2026-10-29-inventory-negative-permanent-fix.md`,
+  `docs/queries/2026-10-29-inventory-pool-diagnosis.sql`, OPEN-ITEMS 0.CH.
+
 ## 2026-10-14 — cloudflared 2026.8.2 -> 2026.10.0 (infra only)
 
 - Tunnel image bumped for VULN-141859 (Access path normalisation) and the 2026.9.2 auth hardening; no app change.
@@ -77,7 +132,7 @@ tunnel.env, so the two never disagree). Register: OPEN-ITEMS 0.CF.
 
 ## 2026-10-08 — AP team-submitted invoices go LIVE at both sites (ADR-0141)
 
-Bill, 1:54 PM PDT: *"no not pilot go live and make sure this is ready to go"*. At 1:55 PM PDT
+Bill, 1:54 PM PDT: _"no not pilot go live and make sure this is ready to go"_. At 1:55 PM PDT
 `ap_team_submit` (the manager submit screen) and `ap_team_outcome` (the decision mail to the chosen
 accountant) were flipped `pilot → live` together at Woodland and Eugene, by
 `scripts/one-off/2026-10-08-ap-team-submit-flip-live.mjs`. That script is the file that ran, inside
@@ -87,6 +142,7 @@ never submit while accountant mail is still diverted to admins. The gate reads t
 request, so the flip took effect with no deploy.
 
 Readiness checked before the flip:
+
 - Woodland managers: 2 (Morena, Janette). Eugene managers: 4 (Kelsey, Patrick, Rick, Shannon).
 - 5 active AP approvers.
 - 3 active accounting contacts.

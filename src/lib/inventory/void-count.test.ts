@@ -266,6 +266,8 @@ function client(): Record<string, unknown> {
     consumerDropoff: { groupBy: async () => [] },
     processedUnitsDaily: { aggregate: async () => EMPTY_SUM, count: async () => 0 },
     outboundMaterial: { aggregate: async () => EMPTY_SUM },
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: { aggregate: async () => EMPTY_SUM },
     invoice: { count: async () => 0 },
     outboundMaterialPayment: { count: async () => 0 },
