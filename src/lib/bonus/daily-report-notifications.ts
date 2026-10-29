@@ -211,6 +211,11 @@ export function renderEodInventoryHtml(
       `<table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding:12px 14px;background:${WARN_BG};border:2px solid ${SVDP_RED};border-radius:6px;font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:${WARN_INK}">` +
         `<strong style="color:${SVDP_RED};font-size:14px">⚠ ${escapeHtml(notice.headline)}</strong><br>` +
         `${escapeHtml(notice.reason)} <strong>This figure is not reliable and is not shown.</strong><br>` +
+        // ADR-0143 B2 / CH-12: "hide both pools, keep the total" — when the total
+        // itself is >= 0 it is not in question and is stated.
+        (presented.total != null
+          ? `<strong>Total on hand: ${escapeHtml(presented.total)} units</strong> (the total is not in question; the split is).<br>`
+          : '') +
         `${anchorLine} ${escapeHtml(notice.remedy)}` +
         `</td></tr></table>`,
     );
@@ -237,13 +242,19 @@ export function renderEodInventoryHtml(
   const counted = eod.anchor
     ? `${fmtCountDayShort(eod.anchor.countedAt)}${eod.anchor.daysSince === 0 ? ' (today)' : ` (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago)`}`
     : '—';
+  // ADR-0143 CH-12 (Bill, 2026-10-29): while an inventory exception is open the
+  // split is known to be wrong, whatever today's sign — both pools and the split %
+  // are hidden, the total stays. They come back once the exception is resolved.
+  const splitHidden = eod.openExceptionId != null;
   const rows =
-    eodRowHtml('Program units on hand', fmtUnits(eod.programOnHand), true) +
-    eodRowHtml('Non-program units on hand', fmtUnits(eod.nonProgramOnHand), true) +
+    (splitHidden
+      ? `<tr><td colspan="2" style="padding:0 0 8px;font-size:12px;color:${WARN_INK};line-height:1.5"><strong>Program / non-program split hidden</strong> — an inventory exception is open and the split is being corrected. The total below is not in question.</td></tr>`
+      : eodRowHtml('Program units on hand', fmtUnits(eod.programOnHand), true) +
+        eodRowHtml('Non-program units on hand', fmtUnits(eod.nonProgramOnHand), true)) +
     eodRowHtml('Total on hand', fmtUnits(eod.totalOnHand), true) +
     `<tr><td colspan="2" style="height:6px;font-size:0;line-height:0">&nbsp;</td></tr>` +
     `<tr><td style="padding:3px 0;font-size:13px;color:${INK}">Change from yesterday</td><td style="padding:3px 0;font-size:13px;color:${INK};text-align:right;white-space:nowrap;padding-left:16px">${eodDeltaHtml(eod.deltaFromYesterday)}</td></tr>` +
-    eodRowHtml('Program / non-program split', split) +
+    (splitHidden ? '' : eodRowHtml('Program / non-program split', split)) +
     eodRowHtml('Latest physical count', counted) +
     // ADR-0138 — who physically counted (free text typed on the count form) and,
     // when different, who keyed it in. Escaped: it is the one untrusted string in

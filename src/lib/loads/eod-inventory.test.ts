@@ -77,6 +77,8 @@ vi.mock('@/lib/prisma', () => ({
       aggregate: async () => ({ _max: { production_date: store.flowMax.productionDate } }),
     },
     outboundMaterial: { aggregate: async () => ({ _max: { ship_date: store.flowMax.shipDate } }) },
+    // ADR-0143 CH-12 — no open inventory exception in this fixture.
+    inventoryException: { findFirst: async () => null },
     // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
     inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: {
@@ -254,13 +256,17 @@ describe('eodInventorySignature (the resend fingerprint)', () => {
     // ADR-0059 — `:c` = confirmed (no provisional inbound); `:p` = provisional.
     // handoff #270 §4b — trailing `:f` = intake fresh; `:s` = intake stale.
     expect(eodInventorySignature(mk({ flowThrough: new Date(t) }))).toBe(
-      `healthy:1597:886:${t}:c:f`,
+      `healthy:1597:886:${t}:c:f:n`,
     );
     expect(eodInventorySignature(mk({ flowThrough: new Date(t), inboundProvisional: true }))).toBe(
-      `healthy:1597:886:${t}:p:f`,
+      `healthy:1597:886:${t}:p:f:n`,
     );
     expect(eodInventorySignature(mk({ flowThrough: new Date(t), inboundStale: true }))).toBe(
-      `healthy:1597:886:${t}:c:s`,
+      `healthy:1597:886:${t}:c:s:n`,
+    );
+    // ADR-0143 CH-12 — an exception opening hides the split: the panel changes, so must the identity.
+    expect(eodInventorySignature(mk({ flowThrough: new Date(t), openExceptionId: 'ex-1' }))).toBe(
+      `healthy:1597:886:${t}:c:f:x`,
     );
   });
 

@@ -24,6 +24,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
 
 const checkManagerForSite = vi.fn();
 const isUiSurfaceLive = vi.fn();
@@ -73,7 +74,7 @@ function review(over: Record<string, unknown> = {}) {
     terex: 'missing',
   };
   const zero = { lines: 0, units: 0 };
-  return {
+  const r = {
     siteId: CTX.siteId,
     siteCode: CTX.siteCode,
     siteName: CTX.siteName,
@@ -169,6 +170,23 @@ function review(over: Record<string, unknown> = {}) {
       landfilled: zero,
     },
     ...over,
+  };
+  // ADR-0143 CH-12 — computeFloorInventoryTile attaches `presented`; derive it from
+  // the fixture's own numbers so the page sees what the loader would give it.
+  const oh = r.onHand as {
+    programOnFloor: number;
+    nonProgramOnFloor: number;
+    totalOnFloor: number;
+  };
+  return {
+    ...r,
+    onHand: {
+      ...oh,
+      presented: presentOnHand(
+        { program: oh.programOnFloor, nonProgram: oh.nonProgramOnFloor, total: oh.totalOnFloor },
+        { inboundStale: false, inboundDaysSince: 0 },
+      ),
+    },
   };
 }
 

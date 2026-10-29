@@ -11,6 +11,29 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OpsOverviewPanel } from './OpsOverviewPanel';
 import type { OpsOverview } from '@/lib/dashboard/ops-overview';
+import type { FloorInventoryTileData } from '@/lib/dashboard/floor-inventory-tile';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
+
+/** ADR-0143 CH-12 — `presented` re-derived from the fixture's own numbers, as the loader does. */
+function presentFloor(
+  f: Omit<FloorInventoryTileData, 'presented'> & {
+    presented?: FloorInventoryTileData['presented'];
+  },
+  openException: { id: string; pool: 'program' | 'non_program' } | null = null,
+): FloorInventoryTileData {
+  return {
+    ...f,
+    presented: presentOnHand(
+      { program: f.programOnFloor, nonProgram: f.nonProgramOnFloor, total: f.totalOnFloor },
+      {
+        inboundStale: f.negativeCause?.kind === 'intake-stale',
+        inboundDaysSince:
+          f.negativeCause?.kind === 'intake-stale' ? f.negativeCause.inboundDaysSince : 0,
+        openException,
+      },
+    ),
+  };
+}
 
 const full: OpsOverview = {
   siteCode: 'eugene',
@@ -20,7 +43,7 @@ const full: OpsOverview = {
   todayISO: '2026-07-22',
   loadsActive: 3,
   loadsArrivedToday: 11,
-  floor: {
+  floor: presentFloor({
     programOnFloor: 137,
     nonProgramOnFloor: 1152,
     totalOnFloor: 1289,
@@ -33,7 +56,7 @@ const full: OpsOverview = {
     trailingUnitsPerDay: 237,
     programDaysRemaining: 0.58,
     asOfISO: '2026-07-22',
-  },
+  }),
   rates: {
     recycling: {
       metric: 'recycling_rate',
@@ -291,8 +314,8 @@ describe('ADR-0092 — the stale-claim panel', () => {
 // 2026-10-08 — the overview card's subtitle names the cause of a negative floor.
 // Pre-fix it read "intake incomplete" for every cause (failed against old code).
 describe('OpsOverviewPanel — negative floor cause', () => {
-  const render = (floor: OpsOverview['floor']) =>
-    renderToStaticMarkup(<OpsOverviewPanel data={{ ...full, floor }} />);
+  const render = (floor: NonNullable<OpsOverview['floor']>) =>
+    renderToStaticMarkup(<OpsOverviewPanel data={{ ...full, floor: presentFloor(floor) }} />);
 
   it('pool split → no intake blame, figure suppressed', () => {
     const html = render({
@@ -305,7 +328,10 @@ describe('OpsOverviewPanel — negative floor cause', () => {
     });
     expect(html).toContain('Computing negative — program/non-program split mis-recorded');
     expect(html).not.toContain('intake incomplete');
-    expect(html).not.toContain('1,603');
+    // ADR-0143 B2 / CH-12: the total is kept, the pools are not shown.
+    expect(html).toContain('1,603');
+    expect(html).not.toContain('1,750');
+    expect(html).not.toContain('147');
   });
 
   it('stale intake keeps the intake subtitle', () => {
@@ -326,5 +352,34 @@ describe('OpsOverviewPanel — negative floor cause', () => {
       negativeCause: { kind: 'processing-exceeds-inbound', inboundRecorded: true },
     });
     expect(html).toContain('Computing negative — processing exceeds recorded inbound');
+  });
+});
+
+// ── CH-12 (Bill, 2026-10-29): an open exception hides the split on the overview card ──
+describe('OpsOverviewPanel — open inventory exception (CH-12)', () => {
+  const midday = { ...full.floor!, programOnFloor: 138, nonProgramOnFloor: 644, totalOnFloor: 782 };
+  const card = (html: string) =>
+    html.slice(html.indexOf('ov-floor-total') - 400, html.indexOf('ov-floor-total') + 600);
+
+  it('mid-day positive pools + open exception → total only, the card opens the exception', () => {
+    const html = renderToStaticMarkup(
+      <OpsOverviewPanel
+        data={{ ...full, floor: presentFloor(midday, { id: 'ex-1', pool: 'program' }) }}
+      />,
+    );
+    const c = card(html);
+    expect(c).toContain('782');
+    expect(c).not.toContain('138 program');
+    expect(c).not.toContain('644 non-program');
+    expect(html).toContain('Program / non-program split being corrected');
+    expect(html).toContain('/dashboard/eugene/inventory-exceptions/ex-1');
+  });
+
+  it('no exception → the split is back on the card', () => {
+    const html = renderToStaticMarkup(
+      <OpsOverviewPanel data={{ ...full, floor: presentFloor(midday) }} />,
+    );
+    expect(html).toContain('138 program');
+    expect(html).toContain('644 non-program');
   });
 });

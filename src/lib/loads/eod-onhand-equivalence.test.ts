@@ -62,6 +62,8 @@ vi.mock('@/lib/prisma', () => ({
     consumerDropoff: { aggregate: async () => ({ _max: { dropoff_date: null } }) },
     processedUnitsDaily: { aggregate: async () => ({ _max: { production_date: null } }) },
     outboundMaterial: { aggregate: async () => ({ _max: { ship_date: null } }) },
+    // ADR-0143 CH-12 — no open inventory exception in this fixture.
+    inventoryException: { findFirst: async () => null },
     // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
     inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: { aggregate: async () => ({ _max: { disposal_date: null } }) },
