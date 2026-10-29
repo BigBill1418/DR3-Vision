@@ -38,7 +38,12 @@ vi.mock('@/lib/notify/rollout', () => ({
 vi.mock('@/lib/inventory/running-balance', () => ({ onHand: (...a: unknown[]) => onHand(...a) }));
 vi.mock('@/lib/loads/floor-inbound', () => ({ countUnconfirmedInboundDays: async () => 0 }));
 vi.mock('@/lib/loads/portal-hauls', () => ({ countPendingPortalHauls: async () => 0 }));
-vi.mock('@/i18n/get-locale', () => ({ getLocale: async () => 'en' }));
+const locale = vi.fn(async () => 'en');
+vi.mock('@/i18n/get-locale', () => ({ getLocale: () => locale() }));
+const openExceptionForPresenter = vi.fn(async (): Promise<unknown> => null);
+vi.mock('@/lib/inventory/exception-service', () => ({
+  openExceptionForPresenter: (...a: unknown[]) => openExceptionForPresenter(...(a as [])),
+}));
 vi.mock('next/navigation', () => ({
   redirect: (url: string) => {
     throw new Error(`REDIRECT:${url}`);
@@ -57,6 +62,9 @@ const WOODLAND = { program: new D(-247), nonProgram: new D(644), total: new D(39
 const params = Promise.resolve({ site: 'woodland' });
 
 beforeEach(() => {
+  locale.mockResolvedValue('en');
+  openExceptionForPresenter.mockReset();
+  openExceptionForPresenter.mockResolvedValue(null);
   onHand.mockReset();
   isUiSurfaceLive.mockReset();
   isUiSurfaceLive.mockResolvedValue(true);
@@ -92,5 +100,58 @@ describe('T2 — manager Loads & inventory page', () => {
     expect(html).toContain('A site manager records a pool adjustment');
     expect(html).toContain('397');
     expect(html).toContain('/dashboard/woodland/inventory-exceptions');
+  });
+});
+
+// ── CH-12 (Bill, 2026-10-29) — mid-day, live pools positive, exception still open ──
+const MIDDAY = { program: new D(138), nonProgram: new D(644), total: new D(782) };
+const OPEN = { id: 'ex-woodland-program', pool: 'program' };
+
+describe('CH-12 — an open exception hides the split on both surfaces', () => {
+  it('iPad hub (en): 782 shown, 138 / 644 hidden, translated line; the lookup is for THIS site', async () => {
+    onHand.mockResolvedValue(MIDDAY);
+    openExceptionForPresenter.mockResolvedValue(OPEN);
+    const html = renderToStaticMarkup(await TodayPage({ params } as never));
+    expect(html).toContain('782');
+    expect(html).not.toContain('138');
+    expect(html).not.toContain('644');
+    expect(html).toContain('The program / non-program split is being corrected by the office.');
+    expect(openExceptionForPresenter).toHaveBeenCalledWith('site-w');
+  });
+
+  it.each([
+    ['es', 'La oficina está corrigiendo la división programa / no programa.'],
+    ['ur', 'پروگرام / غیر پروگرام کی تقسیم دفتر درست کر رہا ہے۔'],
+  ])(
+    'iPad hub (%s): the same line in the operator language, no pool figures',
+    async (loc, line) => {
+      locale.mockResolvedValue(loc);
+      onHand.mockResolvedValue(MIDDAY);
+      openExceptionForPresenter.mockResolvedValue(OPEN);
+      const html = renderToStaticMarkup(await TodayPage({ params } as never));
+      expect(html).toContain(line);
+      expect(html).not.toContain('138');
+    },
+  );
+
+  it('manager page: pools hidden, total kept, the notice links to THE exception', async () => {
+    onHand.mockResolvedValue(MIDDAY);
+    openExceptionForPresenter.mockResolvedValue(OPEN);
+    const html = renderToStaticMarkup(await LoadsInventoryPage({ params } as never));
+    expect(html).not.toContain('138');
+    expect(html).not.toContain('644');
+    expect(html).toContain('782');
+    expect(html).toContain('The program / non-program split is being corrected.');
+    expect(html).toContain('/dashboard/woodland/inventory-exceptions/ex-woodland-program');
+  });
+
+  it('no open exception (resolved): the split reappears on both surfaces', async () => {
+    onHand.mockResolvedValue(MIDDAY);
+    const hub = renderToStaticMarkup(await TodayPage({ params } as never));
+    const mgr = renderToStaticMarkup(await LoadsInventoryPage({ params } as never));
+    for (const html of [hub, mgr]) {
+      expect(html).toContain('138');
+      expect(html).toContain('644');
+    }
   });
 });

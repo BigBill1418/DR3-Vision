@@ -5,6 +5,7 @@ import { checkOperatorForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
 import { presentOnHand } from '@/lib/inventory/negative-floor';
+import { openExceptionForPresenter } from '@/lib/inventory/exception-service';
 import { countUnconfirmedInboundDays } from '@/lib/loads/floor-inbound';
 import { countPendingPortalHauls } from '@/lib/loads/portal-hauls';
 import { getLocale } from '@/i18n/get-locale';
@@ -63,7 +64,13 @@ export default async function FloorTodayPage({ params }: Props) {
     ]);
 
   const now = new Date();
-  const onHandView = summaryLive ? presentOnHand(await onHand(siteId, now)) : null;
+  // CH-12 (Bill, 2026-10-29): an open exception hides the split whatever the live
+  // sign; the operator sees the total and the translated "being corrected" line.
+  const onHandView = summaryLive
+    ? presentOnHand(await onHand(siteId, now), {
+        openException: await openExceptionForPresenter(siteId),
+      })
+    : null;
 
   // ADR-0065 — the badge counted a 14-DAY lookback, which is exactly the
   // historical view Bill ruled out for the floor. Scoped to the current

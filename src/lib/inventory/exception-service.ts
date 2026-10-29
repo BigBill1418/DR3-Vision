@@ -586,3 +586,18 @@ export async function approveExceptionResolution(args: {
     { timeout: 60_000 },
   );
 }
+
+/**
+ * ADR-0143 CH-12 — the site's open exception for the on-hand presenter, or null.
+ * Site-scoped: another site's exception never hides this site's split.
+ */
+export async function openExceptionForPresenter(
+  siteId: string,
+): Promise<{ id: string; pool: PoolKey } | null> {
+  const e = await prisma.inventoryException.findFirst({
+    where: { site_id: siteId, status: 'open' },
+    orderBy: { opened_at: 'asc' },
+    select: { id: true, pool: true },
+  });
+  return e ? { id: e.id, pool: e.pool as PoolKey } : null;
+}

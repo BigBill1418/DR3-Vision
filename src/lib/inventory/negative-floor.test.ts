@@ -113,3 +113,50 @@ describe('one remedy (ADR-0143 D5, test T4)', () => {
     expect(remedyForBalance({ program: 1, nonProgram: 1, total: 2 })).toBeNull();
   });
 });
+
+// ── CH-12 (Bill, 2026-10-29): an OPEN exception hides the split whatever the live sign ──
+describe('presentOnHand with an open exception (CH-12)', () => {
+  const ex = { id: 'ex-1', pool: 'program' as const };
+
+  it('10-29 ~10 AM: live program +138 / 644 / 782 with the program exception open → pools hidden, total kept, link', () => {
+    const p = presentOnHand({ program: 138, nonProgram: 644, total: 782 }, { openException: ex });
+    expect(p.poolsShown).toBe(false);
+    expect(p.program).toBeNull();
+    expect(p.nonProgram).toBeNull();
+    expect(p.total).toBe('782');
+    expect(p.totalUnits).toBe(782);
+    expect(p.openExceptionId).toBe('ex-1');
+    expect(p.notice?.headline).toBe('The program / non-program split is being corrected.');
+    expect(p.notice?.remedy).toBe(
+      negativeFloorCopy({ kind: 'pool-split', pool: 'program' }).remedy,
+    );
+    expect(JSON.stringify(p)).not.toMatch(/138|644/);
+  });
+
+  it('no exception → unchanged: the pools show', () => {
+    const p = presentOnHand({ program: 138, nonProgram: 644, total: 782 }, { openException: null });
+    expect(p).toMatchObject({
+      poolsShown: true,
+      program: '138',
+      nonProgram: '644',
+      total: '782',
+      openExceptionId: null,
+    });
+    expect(presentOnHand({ program: 138, nonProgram: 644, total: 782 })).toEqual(p);
+  });
+
+  it('a negative pool with an open exception keeps the negative wording and carries the link', () => {
+    const p = presentOnHand({ program: -247, nonProgram: 644, total: 397 }, { openException: ex });
+    expect(p.notice?.headline).toBe(
+      'Program on-hand is computing negative while the total is positive.',
+    );
+    expect(p.openExceptionId).toBe('ex-1');
+    expect(p.total).toBe('397');
+  });
+
+  it('a negative TOTAL stays withheld even with an exception open', () => {
+    expect(
+      presentOnHand({ program: -500, nonProgram: 100, total: -400 }, { openException: ex }).total,
+    ).toBeNull();
+  });
+});

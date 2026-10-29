@@ -9,6 +9,22 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-29 — Pool split hidden while an inventory exception is open (ADR-0143, Bill's CH-12 decision)
+
+- **Why:** mid-day the live program pool can read positive (10-29 ~10 AM: program 138 / total 782, with today's
+  intake in and its processing not yet), while every closed day is negative and the exception is open. The
+  pages followed the live sign and contradicted the exception.
+- **Bill, 2026-10-29:** while a pool has an OPEN exception, hide BOTH pool figures, keep the total, and link to
+  the exception; the split reappears once the exception is resolved.
+- **Change:** `presentOnHand(balance, { openException })` hides the pools whatever the live sign and returns
+  `openExceptionId`. The lookup `openExceptionForPresenter(siteId)` is site-scoped. Loads & inventory links to
+  that exception. The iPad Today hub shows the total and its existing translated line (EN/ES/UR, Urdu RTL); no
+  new copy was needed. A negative total stays withheld.
+- **Out of scope, not presenter consumers:** the dashboard floor tile, the overview card and the daily report
+  still decide from the live sign (OPEN-ITEMS CH-13).
+- **Tests:** presenter cases; both pages in en/es/ur; resolved → split back; site-isolated lookup on Postgres.
+  The page tests fail against the previous presenter.
+
 ## 2026-10-29 — Pool-check sweep moved to a service the deployer recreates (ADR-0143 follow-up)
 
 - **What broke:** the 10-minute `/api/internal/inventory/pool-check` call rode the `workbook-sync` daemon, which

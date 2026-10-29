@@ -15,6 +15,7 @@ import { redirect } from 'next/navigation';
 import { checkManagerForSite } from '@/lib/auth-helpers';
 import { onHand } from '@/lib/inventory/running-balance';
 import { presentOnHand } from '@/lib/inventory/negative-floor';
+import { openExceptionForPresenter } from '@/lib/inventory/exception-service';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { LoadsInventoryClient } from './LoadsInventoryClient';
 
@@ -69,7 +70,13 @@ export default async function LoadsInventoryPage({ params }: Props) {
   // ADR-0143 D1 — the balance reaches this page only through the presenter. Until
   // 2026-10-29 the three tiles printed the raw pools and Woodland's
   // managers read "Program on hand −247" (RC3).
-  const presented = presentOnHand(await onHand(result.ctx.siteId, new Date()));
+  // CH-12 (Bill, 2026-10-29): while an exception is open, the split stays hidden
+  // whatever the live sign; the notice links to the exception.
+  const [balance, openException] = await Promise.all([
+    onHand(result.ctx.siteId, new Date()),
+    openExceptionForPresenter(result.ctx.siteId),
+  ]);
+  const presented = presentOnHand(balance, { openException });
 
   return (
     <main className="min-h-screen bg-dr3-space px-6 py-10 text-dr3-mist">
@@ -104,8 +111,17 @@ export default async function LoadsInventoryPage({ params }: Props) {
             <strong className="block text-red-300">{presented.notice.headline}</strong>
             {presented.notice.reason} This figure is not reliable and is not shown.{' '}
             {presented.notice.remedy}{' '}
-            <Link href={`/dashboard/${siteCode}/inventory-exceptions`} className="underline">
-              Open inventory exceptions →
+            <Link
+              href={
+                presented.openExceptionId
+                  ? `/dashboard/${siteCode}/inventory-exceptions/${presented.openExceptionId}`
+                  : `/dashboard/${siteCode}/inventory-exceptions`
+              }
+              className="underline"
+            >
+              {presented.openExceptionId
+                ? 'Open the inventory exception →'
+                : 'Open inventory exceptions →'}
             </Link>
           </div>
         )}

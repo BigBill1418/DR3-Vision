@@ -351,6 +351,16 @@ describe.skipIf(!REAL_DB)('ADR-0143 exception flow — real Postgres', () => {
   it('site isolation: another site cannot see or act on the exception', async () => {
     const a = await negativeSite();
     const b = await negativeSite();
+    // CH-12 presenter lookup is site-scoped (b has its own; a third, clean site has none).
+    expect(await svc.openExceptionForPresenter(a.site)).toEqual({
+      id: a.exceptionId,
+      pool: 'program',
+    });
+    expect(await svc.openExceptionForPresenter(b.site)).toEqual({
+      id: b.exceptionId,
+      pool: 'program',
+    });
+    expect(await svc.openExceptionForPresenter(`${NS}-no-such-site`)).toBeNull();
     await expect(svc.getInventoryExceptionDetail(b.site, a.exceptionId)).rejects.toMatchObject({
       status: 404,
     });

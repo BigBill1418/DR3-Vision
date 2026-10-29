@@ -139,6 +139,14 @@ export interface OnHandLike {
 export interface OnHandContext {
   inboundStale?: boolean;
   inboundDaysSince?: number | null;
+  /**
+   * ADR-0143, Bill's CH-12 decision (2026-10-29): the site's OPEN inventory
+   * exception, if any. While one is open the split is known to be wrong, so both
+   * pool figures are hidden WHATEVER the live sign — mid-day the live program pool
+   * can read positive (today's intake in, today's processing not yet) while every
+   * closed day is negative. The total stays. Resolved → the split reappears.
+   */
+  openException?: { id: string; pool: 'program' | 'non_program' } | null;
 }
 
 export interface PresentedOnHand {
@@ -159,6 +167,8 @@ export interface PresentedOnHand {
   totalUnits: number | null;
   cause: NegativeFloorCause | null;
   notice: { headline: string; reason: string; remedy: string } | null;
+  /** The open exception to link to (CH-12), or null. */
+  openExceptionId: string | null;
 }
 
 function num(v: OnHandNumber): number {
@@ -181,6 +191,27 @@ export function presentOnHand(balance: OnHandLike, ctx: OnHandContext = {}): Pre
     inboundStale: ctx.inboundStale ?? false,
     inboundDaysSince: ctx.inboundDaysSince === undefined ? 0 : ctx.inboundDaysSince,
   });
+  const openExceptionId = ctx.openException?.id ?? null;
+  if (cause == null && ctx.openException) {
+    // CH-12: live pools are not negative, but the split is under correction.
+    const pool = ctx.openException.pool === 'program' ? 'program' : 'non-program';
+    return {
+      poolsShown: false,
+      program: null,
+      nonProgram: null,
+      total: fmt(total),
+      totalUnits: total,
+      cause: null,
+      notice: {
+        headline: 'The program / non-program split is being corrected.',
+        reason:
+          `An inventory exception is open for the ${pool} pool, so both pool figures are hidden until ` +
+          'it is resolved. The total is not in question.',
+        remedy: negativeFloorCopy({ kind: 'pool-split', pool }).remedy,
+      },
+      openExceptionId,
+    };
+  }
   if (cause == null) {
     return {
       poolsShown: true,
@@ -190,6 +221,7 @@ export function presentOnHand(balance: OnHandLike, ctx: OnHandContext = {}): Pre
       totalUnits: total,
       cause: null,
       notice: null,
+      openExceptionId: null,
     };
   }
   const copy = negativeFloorCopy(cause);
@@ -205,6 +237,7 @@ export function presentOnHand(balance: OnHandLike, ctx: OnHandContext = {}): Pre
       reason: copy.reason,
       remedy: copy.remedy,
     },
+    openExceptionId,
   };
 }
 
