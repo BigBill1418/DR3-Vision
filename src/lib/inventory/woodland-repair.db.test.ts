@@ -243,6 +243,34 @@ describe.skipIf(!REAL_DB)('ADR-0143 repair — mid-day: intake posted, processed
     });
   });
 
+  it('freshness = "a sweep ran recently", not "a row changed" (Ryan, 2026-10-29: 33 min old after a quiet sweep)', async () => {
+    const guard = await import('./pool-guard');
+    // Nothing has changed for 45 minutes: every row's computed_at is old.
+    await db.$executeRawUnsafe(
+      `UPDATE inventory_position_daily SET computed_at = now() - interval '45 minutes' WHERE site_id = $1`,
+      SITE2,
+    );
+    // Sweep never ran since → refuse.
+    await expect(readLastClosedDay(db, SITE2)).rejects.toThrowError(/positions are 4\d min old/);
+
+    // The sweep runs and changes NOTHING (rowsWritten 0) — the live 11:38 → 12:11 PDT case...
+    const r = await guard.runPoolCheck(SITE2, 'sweep');
+    expect(r.rowsWritten).toBe(0);
+    expect(r.opened).toEqual([]);
+    // ...and that is enough: the script proceeds and proposes 247 from the last closed day.
+    const plan = await proposeRepair(db, {
+      apply: false,
+      siteCode: CODE2,
+      day: '2026-10-08',
+      expectUnits: 247,
+    });
+    expect(plan).toMatchObject({
+      units: 247,
+      applied: false,
+      after: { program: 0, nonProgram: 397, total: 397 },
+    });
+  });
+
   it('refuses on stale positions instead of guessing', async () => {
     const later = new Date(Date.now() + 2 * 3600_000);
     await expect(readLastClosedDay(db, SITE2, later)).rejects.toThrowError(

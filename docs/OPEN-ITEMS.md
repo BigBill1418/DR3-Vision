@@ -70,6 +70,10 @@ Jesse checks visibility).
   has an OPEN exception, Loads & inventory and the iPad Today hub hide both pool figures, keep the total, and link
   the exception; the split reappears when it is resolved. Mid-day (program 138 / total 782 on 10-29) no longer
   contradicts the exception.
+- **CH-14 — repair dry run refused live ("positions are 33 min old"); fix on the CH-12 branch (PR #311).** The
+  guard stamped `computed_at` only on changed rows, so a quiet site looked stale no matter how often the sweep
+  ran. Every guard run now stamps the window. After that deploy, CH-5's dry run should print 247 and
+  `measuredOnClosedDay` = yesterday.
 - **CH-13 — open, for Bill:** the dashboard floor tile, the overview card and the daily report are not
   `presentOnHand` consumers, so they still follow the live sign mid-day. Same rule there? Recommended yes, as one
   follow-up through the tile loader (`computeFloorInventoryTile`).

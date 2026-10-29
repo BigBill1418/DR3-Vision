@@ -7089,6 +7089,7 @@ model InventoryPositionDaily {
   exception_id       String?
   exception          InventoryException? @relation(fields: [exception_id], references: [id], onDelete: Restrict)
   inputs_hash        String
+  /// Last time a guard run VERIFIED this row (stamped even when nothing changed).
   computed_at        DateTime            @db.Timestamptz(3)
 
   @@id([site_id, day, pool])

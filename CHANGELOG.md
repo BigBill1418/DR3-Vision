@@ -20,6 +20,13 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
   `openExceptionId`. The lookup `openExceptionForPresenter(siteId)` is site-scoped. Loads & inventory links to
   that exception. The iPad Today hub shows the total and its existing translated line (EN/ES/UR, Urdu RTL); no
   new copy was needed. A negative total stays withheld.
+- **Repair dry run refused live on stale positions (Ryan):** `REFUSED: daily positions are 33 min old`. The
+  script's 30-minute gate read `max(computed_at)`, but the guard only rewrote a row when its inputs changed, so
+  after 11:38 PDT every sweep logged `rowsWritten: 0` and `computed_at` never moved; re-running the sweep could
+  not fix it. `computed_at` now means "last verified": every guard run stamps the whole window in one statement.
+  Postgres test: data unchanged for 45 min → refuse; one sweep that changes nothing → the script proceeds and
+  proposes 247 from the last closed day (Woodland-shaped fixture, end to end). That test fails against the
+  previous guard with exactly the live message.
 - **Out of scope, not presenter consumers:** the dashboard floor tile, the overview card and the daily report
   still decide from the live sign (OPEN-ITEMS CH-13).
 - **Tests:** presenter cases; both pages in en/es/ur; resolved → split back; site-isolated lookup on Postgres.

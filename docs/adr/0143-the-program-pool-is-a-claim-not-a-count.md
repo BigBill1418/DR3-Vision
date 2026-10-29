@@ -310,3 +310,10 @@ exception, hide both pool figures whatever the live sign, keep the total, and li
 reappears once it is resolved. Implemented as `presentOnHand(balance, { openException })` with a site-scoped
 lookup. The floor tile, the overview card and the daily report do not go through the presenter and still follow
 the live sign (OPEN-ITEMS CH-13).
+
+### `computed_at` means "last verified" (2026-10-29)
+
+The repair script's freshness gate read `max(inventory_position_daily.computed_at)`, but the guard stamped a row
+only when its inputs changed. On a quiet afternoon every sweep wrote 0 rows, so the live dry run refused with
+"positions are 33 min old" two minutes after a sweep. Every guard run now stamps `computed_at` on the whole
+window it verified, in one statement, so the gate measures "a sweep completed recently".
