@@ -608,6 +608,18 @@ export async function assertPoolsAfterWrite(
     });
   }
 
+  // `computed_at` means "last VERIFIED", not "last changed". Every row of the window
+  // was just recomputed and found equal or rewritten, so stamp them all in one
+  // statement. Without this, a quiet day left computed_at hours old and the repair
+  // script's freshness gate refused even though the sweep had run 2 minutes earlier
+  // (Ryan, 2026-10-29: "daily positions are 33 min old" after a sweep at :x8).
+  if (win.rows.length > 0) {
+    await tx.inventoryPositionDaily.updateMany({
+      where: { site_id: siteId, day: { gte: startKey }, computed_at: { lt: computedAt } },
+      data: { computed_at: computedAt },
+    });
+  }
+
   return { siteId, writer, rowsWritten, opened, negativeDays };
 }
 

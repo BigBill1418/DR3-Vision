@@ -300,3 +300,20 @@ program +138 (the day's intake was in, its processing was not) and refused, whil
 closed negative. It now reads the last CLOSED Pacific day from `inventory_position_daily`, so its answer does
 not depend on the time of day it runs. Open question for Bill (OPEN-ITEMS CH-12): should the on-hand surfaces
 withhold the pools while an exception is open, rather than follow the live sign through the day?
+
+### CH-12 — the split stays hidden while an exception is open (Bill, 2026-10-29)
+
+`presentOnHand` used to hide a pool only when its LIVE value was negative. Mid-day that sign flips: on 10-29 at
+~10 AM the program pool read +138 (total 782) because the day's intake had posted and its processing had not,
+while every closed day was negative and the exception was open. Bill's decision: while a pool has an OPEN
+exception, hide both pool figures whatever the live sign, keep the total, and link to the exception; the split
+reappears once it is resolved. Implemented as `presentOnHand(balance, { openException })` with a site-scoped
+lookup. The floor tile, the overview card and the daily report do not go through the presenter and still follow
+the live sign (OPEN-ITEMS CH-13).
+
+### `computed_at` means "last verified" (2026-10-29)
+
+The repair script's freshness gate read `max(inventory_position_daily.computed_at)`, but the guard stamped a row
+only when its inputs changed. On a quiet afternoon every sweep wrote 0 rows, so the live dry run refused with
+"positions are 33 min old" two minutes after a sweep. Every guard run now stamps `computed_at` on the whole
+window it verified, in one statement, so the gate measures "a sweep completed recently".

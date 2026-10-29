@@ -89,7 +89,11 @@ export function pacificDay(instant) {
   return instant.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 }
 
-/** How fresh the positions must be: two sweeps (the sweep runs every 10 minutes). */
+/**
+ * How fresh the positions must be: two sweeps (the sweep runs every 10 minutes).
+ * `computed_at` is stamped on every row each time a guard run verifies the window,
+ * changed or not, so this measures "a sweep completed recently".
+ */
 export const POSITIONS_MAX_AGE_MS = 30 * 60 * 1000;
 
 /**

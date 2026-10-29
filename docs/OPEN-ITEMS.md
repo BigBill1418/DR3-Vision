@@ -66,11 +66,17 @@ Jesse checks visibility).
 - **CH-11 — repair script fixed to read the last CLOSED day (same branch).** On 10-29 the first version refused
   because it read the live mid-day floor (+138: today's intake in, today's processing not yet). CH-5's command is
   unchanged; it now prints `measuredOnClosedDay`.
-- **CH-12 — FOR BILL (display, not changed):** mid-day, the Loads & inventory page and the iPad hub show the live
-  pools (10-29 ~10 AM: program 138, total 782), because the live program pool is not negative, while the open
-  exception says the split is still wrong by about 247. Recommendation: while a pool has an OPEN exception,
-  withhold both pools on those surfaces (keep the total) and link the exception, whatever the live sign.
-  Tradeoff: a correct-looking mid-day figure disappears until the exception is resolved.
+- **CH-12 — DECIDED 2026-10-29 (Bill), built on `fix/adr0143-hide-split-while-exception-open`:** while a pool
+  has an OPEN exception, Loads & inventory and the iPad Today hub hide both pool figures, keep the total, and link
+  the exception; the split reappears when it is resolved. Mid-day (program 138 / total 782 on 10-29) no longer
+  contradicts the exception.
+- **CH-14 — repair dry run refused live ("positions are 33 min old"); fix on the CH-12 branch (PR #311).** The
+  guard stamped `computed_at` only on changed rows, so a quiet site looked stale no matter how often the sweep
+  ran. Every guard run now stamps the window. After that deploy, CH-5's dry run should print 247 and
+  `measuredOnClosedDay` = yesterday.
+- **CH-13 — open, for Bill:** the dashboard floor tile, the overview card and the daily report are not
+  `presentOnHand` consumers, so they still follow the live sign mid-day. Same rule there? Recommended yes, as one
+  follow-up through the tile loader (`computeFloorInventoryTile`).
 - **CH-10 — residual, not fixed here:** `dr3-vision-workbook-sync` is still hand-managed (profile-gated, never
   recreated by the deployer), so its daemon script can drift from `main` again. The workbook-sync engine itself
   runs inside the app and is current; only the thin daemon is stale-prone. Bill decides whether `workbook-sync`
