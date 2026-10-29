@@ -258,7 +258,8 @@ writer scan). Where the build differs from the design above, the difference and 
 - **D2 for the MyMRC bridges is post-commit, within 10 minutes.** The bridges run in the standalone scraper
   (`tsconfig.mymrc.json`) and cannot import the guard. Giving the hardened Chromium container the internal cron
   token so it could call back was rejected (ADR-0053 addendum strips secrets from it). Instead the
-  workbook-sync daemon calls `/api/internal/inventory/pool-check` every 10 minutes; a negative found there is
+  `inventory-pool-check` daemon (default compose profile, recreated by every deploy) calls
+  `/api/internal/inventory/pool-check` every 10 minutes; a negative found there is
   attributed from the first negative day's own rows (`sweep:processed=mymrc`). That meets the plan's
   "≤ 1 h for the MyMRC bridge".
 - **D3 trigger re-reads the current row at commit** (a deferred trigger's `NEW` is the row as of the event).
@@ -281,3 +282,21 @@ writer scan). Where the build differs from the design above, the difference and 
   would go negative, if there is no open exception, or if one is already proposed. Not run.
 - **D6:** the daily close shows "program units available to process today". The written convention for the
   workbook and MyMRC entry is Bill's to word (OPEN-ITEMS 0.CH, CH-7).
+
+### Post-deploy correction (2026-10-29)
+
+The sweep first rode the `workbook-sync` daemon. That service is profile-gated (`profiles: ['workbook-sync']`)
+and the live `.env` on CHAD has `COMPOSE_PROFILES=ap`, so the deployer neither starts nor recreates it: after
+the `bd8f059` deploy it was still a July image with no pool-check call, and the guarantee "a bridge-driven
+negative is found within 10 minutes" was silently false. Ryan's post-deploy check found it; the container was
+recreated by hand (`docker compose --profile workbook-sync up -d --no-deps workbook-sync`) and the Woodland
+program exception opened at 11:38 PDT. Lasting fix: the call moved to its own `inventory-pool-check` service
+in the DEFAULT profile, and the writer-guard test now fails if that service ever gets a `profiles:` key.
+Rejected: moving `workbook-sync` into the default profile. Its profile gate is a deliberate operator control
+(ADR-0049); the pool check should not depend on whether the workbook feature is enabled.
+
+The repair script first read the live floor, which includes today's partial day. On 10-29 at ~10 AM PDT it read
+program +138 (the day's intake was in, its processing was not) and refused, while every closed day since 10-16
+closed negative. It now reads the last CLOSED Pacific day from `inventory_position_daily`, so its answer does
+not depend on the time of day it runs. Open question for Bill (OPEN-ITEMS CH-12): should the on-hand surfaces
+withhold the pools while an exception is open, rather than follow the live sign through the day?

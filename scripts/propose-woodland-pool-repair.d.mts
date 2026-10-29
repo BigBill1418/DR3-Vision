@@ -21,10 +21,25 @@ export interface RepairPlan {
 export function parseArgs(argv: string[]): RepairOpts;
 export class RepairRefused extends Error {}
 export function planRepair(floor: FloorStrings, expectUnits: number): RepairPlan;
+export const POSITIONS_MAX_AGE_MS: number;
+export function pacificDay(instant: Date): string;
+export function readLastClosedDay(
+  prisma: unknown,
+  siteId: string,
+  now?: Date,
+): Promise<FloorStrings & { day: string }>;
 export function proposeRepair(
   prisma: unknown,
   opts: RepairOpts,
-  probe?: (siteCode: string) => Promise<FloorStrings>,
+  readClosed?: (prisma: unknown, siteId: string, now: Date) => Promise<FloorStrings & { day: string }>,
+  now?: Date,
 ): Promise<
-  RepairPlan & { site: string; exceptionId: string; day: string; applied: boolean; adjustmentId: string | null }
+  RepairPlan & {
+    site: string;
+    exceptionId: string;
+    day: string;
+    measuredOnClosedDay: string;
+    applied: boolean;
+    adjustmentId: string | null;
+  }
 >;

@@ -664,6 +664,42 @@ services:
       com.barnardhq.service: 'survey-reminder'
     logging: *logging
 
+  inventory-pool-check:
+    # ADR-0143 D2/D5 — inventory pool-check cron host. DEFAULT profile, deliberately:
+    # the deployer recreates it on every deploy. Every 10 minutes, around the clock,
+    # it POSTs the app's internal, loopback-guarded `/api/internal/inventory/pool-check`,
+    # which re-checks every site's pools (the only check the standalone MyMRC bridges
+    # get) and sends any due inventory-exception page (onset / 7-day, `high`, Bill only).
+    #
+    # 2026-10-29: this call first rode the profile-gated `workbook-sync` daemon, which
+    # the deployer never starts or recreates (live COMPOSE_PROFILES=ap). After the
+    # ADR-0143 deploy that container was still a July image with no pool-check; the
+    # Woodland exception only opened (11:38 PDT) after a hand recreate. Same shape as
+    # survey-reminder: a thin Node scheduler, no TS, no @prisma/client.
+    image: dr3-vision-app:local
+    container_name: dr3-vision-inventory-pool-check
+    init: true
+    restart: unless-stopped
+    command: ['node', 'scripts/inventory-pool-check-cron.mjs']
+    # Cron daemon, not the web app — disable the inherited HTTP /healthz HEALTHCHECK.
+    healthcheck:
+      disable: true
+    env_file:
+      # INTERNAL_CRON_TOKEN bearer — cron.env (ADR-0053 addendum cron secret split).
+      - /home/bbarnard065/.dr3-vision-secrets/cron.env
+    environment:
+      NODE_ENV: production
+      INTERNAL_BASE_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - dr3net
+    labels:
+      <<: *barnardhq-labels
+      com.barnardhq.service: 'inventory-pool-check'
+    logging: *logging
+
   throughput-gap:
     # Terex throughput-gap watchdog cron host (ADR-0088).
     #

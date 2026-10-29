@@ -51,24 +51,6 @@ async function runFireOnce() {
   return truncateBody(text);
 }
 
-// ADR-0143 D2/D5 — the 10-minute pool-check sweep rides this daemon's tick: it
-// re-checks every site's pools on its own transaction (the backstop for the MyMRC
-// bridges and for any swallowed in-transaction check) and sends any due
-// inventory-exception page. Non-fatal: a failure here never stops the poll.
-async function runPoolCheckOnce() {
-  const headers = { 'content-type': 'application/json' };
-  if (TOKEN) headers.authorization = `Bearer ${TOKEN}`;
-  const res = await fetch(`${BASE}/api/internal/inventory/pool-check`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ writer: 'sweep' }),
-    redirect: 'manual',
-  });
-  const text = await res.text();
-  if (res.status !== 200) throw new Error(`HTTP ${res.status}: ${truncateBody(text)}`);
-  return truncateBody(text);
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -82,11 +64,6 @@ async function main() {
     try {
       const text = await runFireOnce();
       logTs(`poll complete: ${text}`);
-      try {
-        logTs(`pool-check complete: ${await runPoolCheckOnce()}`);
-      } catch (err) {
-        logTs(`pool-check failed (non-fatal): ${err?.message ?? err}`);
-      }
       await sleep(TICK_MS);
     } catch (err) {
       logTs(`poll failed (non-fatal, retry after backoff): ${err?.message ?? err}`);

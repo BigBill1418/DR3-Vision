@@ -7,13 +7,13 @@
 //      MyMRC bridges are checked: they run in the standalone scraper process
 //      (tsconfig.mymrc.json) and cannot import the guard. The scraper is NOT given
 //      the internal cron token (it is the hardened Chromium container, ADR-0053
-//      addendum), so this sweep — every 10 minutes from the workbook-sync daemon —
+//      addendum), so this sweep — every 10 minutes from the inventory-pool-check daemon —
 //      finds a bridge-driven negative within 10 minutes of the hourly bridge and
 //      names the door from the day's rows (`sweep:processed=mymrc`). It is also the
 //      backstop for any writer whose in-transaction check failed and was swallowed
 //      (guardPoolsInTx never refuses a write): here a failure is NOT swallowed.
 //   2. Page every exception that is due (onset `high`, 7-day `high`). Called every
-//      10 minutes by the workbook-sync daemon, so an onset page lands within one
+//      10 minutes by the inventory-pool-check daemon (default compose profile), so an onset page lands within one
 //      sync tick of the write that opened the exception.
 //
 // The response carries counts and exception ids only — never a pool figure.

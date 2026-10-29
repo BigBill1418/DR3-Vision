@@ -9,6 +9,28 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-29 — Pool-check sweep moved to a service the deployer recreates (ADR-0143 follow-up)
+
+- **What broke:** the 10-minute `/api/internal/inventory/pool-check` call rode the `workbook-sync` daemon, which
+  is profile-gated (`profiles: ['workbook-sync']`). The live `.env` sets `COMPOSE_PROFILES=ap`, so the deployer
+  never recreates that container: after the `bd8f059` deploy (11:33 PDT) it still ran a July image with no
+  pool-check. The MyMRC bridges had no check, and no exception page could fire.
+- **Found by:** Ryan's post-deploy check. The container was recreated by hand on CHAD (`docker compose --profile
+workbook-sync up -d --no-deps workbook-sync`); the Woodland program exception then opened at 11:38 PDT.
+- **Lasting fix:** a new default-profile service `inventory-pool-check` (`scripts/inventory-pool-check-cron.mjs`,
+  every 10 minutes, around the clock), so every deploy recreates it. The call was removed from
+  `workbook-sync-cron.mjs`, which is back to its pre-ADR-0143 content. The writer-guard test now fails if the
+  service is missing or gets a `profiles:` key (mutation-checked). Daemon unit tests cover a 307→/login and a
+  500 being failures.
+- **Repair script measured the wrong moment (Ryan):** `propose-woodland-pool-repair.mjs` read the LIVE floor
+  (`onHand(site, now)`), which includes today's partial day. On 10-29 the 385-unit intake posted at ~10:01 PDT
+  before that day's processed figure, so live program read +138 and the script refused, while the last closed
+  day (10-28) closed at -247. It now reads the pools at the close of the last CLOSED Pacific day from
+  `inventory_position_daily`, refuses if those positions are over 30 minutes old, and reports the day it
+  measured. New test: intake posted, processed not yet, must still propose 247. Still not run in production.
+- Migration `20260870` needed no follow-up: every `CREATE TRIGGER` already has `DROP TRIGGER IF EXISTS` before
+  it, and a second run of the file is a no-op (verified 2026-10-29).
+
 ## 2026-10-29 — Negative inventory, permanent fix: built on a branch, NOT deployed (ADR-0143 items 1–8)
 
 Branch `fix/adr0143-negative-inventory` (from `origin/main` `3573f74`). Bill's decisions B1–B5 are recorded in
@@ -30,7 +52,7 @@ ADR-0143. Nothing is pushed, merged or deployed: a deploy rebuilds the app and u
   change. The positions table is built cumulatively through the same function (equivalence tested on Postgres).
 - **Every writer checks the pools (D2).** `guardPoolsInTx()` in 14 writers, inside their transactions, under the
   site lock; it never refuses a write (SAVEPOINT). The MyMRC bridges, which run in the standalone scraper, are
-  checked by `/api/internal/inventory/pool-check`, which the workbook-sync daemon now calls every 10 minutes. A
+  checked by `/api/internal/inventory/pool-check` every 10 minutes (since moved to its own service, see the entry above). A
   CI scan fails on any writer of a leg table without the guard or a reasoned note.
 - **Alerting (D5, B4).** Onset: one `high` page on `dr3-vision-system` with a click to the exception. Seven days
   open: one more. While open: one line in a daily `default` digest (sent with the invariants run). This

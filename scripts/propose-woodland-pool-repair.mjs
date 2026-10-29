@@ -17,7 +17,9 @@
 // below, so Bill — a different identity — can approve; the DB CHECK refuses an
 // approver equal to the proposer).
 //
-// It refuses (exit 2) when: the live program pool is not negative; the shortfall is
+// It reads the pools at the close of the LAST CLOSED Pacific day (see
+// readLastClosedDay), never the live mid-day figure. It refuses (exit 2) when: that
+// day's program pool is not negative; the shortfall is
 // not the expected number (pass --expect-units=N after reading why); the non-program
 // pool would go below zero; there is no open program exception (run the pool-check
 // sweep first); or an adjustment is already proposed/approved for that exception.
@@ -59,7 +61,7 @@ export class RepairRefused extends Error {
 }
 
 /**
- * Pure. From the live floor (Decimal strings from the ONE balance computation),
+ * Pure. From the last closed day's pools (Decimal strings, positions table),
  * the units to move and the resulting pools. The total cannot change: units leave
  * non-program and enter program.
  */
@@ -67,7 +69,7 @@ export function planRepair(floor, expectUnits) {
   const program = Number(floor.program);
   const nonProgram = Number(floor.nonProgram);
   const total = Number(floor.total);
-  if (![program, nonProgram, total].every(Number.isFinite)) throw new RepairRefused('floor probe returned non-numbers');
+  if (![program, nonProgram, total].every(Number.isFinite)) throw new RepairRefused('positions returned non-numbers');
   if (Math.abs(program + nonProgram - total) > 1e-9) throw new RepairRefused('floor pools do not sum to the total');
   if (!(program < 0)) throw new RepairRefused(`program pool is not negative (${program}); nothing to repair`);
   const units = -program;
@@ -82,15 +84,64 @@ export function planRepair(floor, expectUnits) {
   return { units, before: { program, nonProgram, total }, after };
 }
 
+/** The Pacific calendar day (YYYY-MM-DD) of an instant. Pure. */
+export function pacificDay(instant) {
+  return instant.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+
+/** How fresh the positions must be: two sweeps (the sweep runs every 10 minutes). */
+export const POSITIONS_MAX_AGE_MS = 30 * 60 * 1000;
+
 /**
- * Plan (and with apply, propose) the repair. `probe(siteCode)` returns the live floor
- * as Decimal strings from the app's ONE balance computation (default: the loopback
- * floor-probe route). Returns a summary of counts and ids.
+ * The pools at the close of the LAST CLOSED Pacific day (the day before `now`),
+ * read from `inventory_position_daily` — the ADR-0143 materialisation of the ONE
+ * balance computation, bucketed by Pacific day.
+ *
+ * Why not the live floor: `onHand(site, now)` includes TODAY's partial day. On
+ * 2026-10-29 the 385-unit intake posted at ~10:01 PDT before that day's processed
+ * figure, so the live program pool read +138 while every closed day since 10-16
+ * closed negative (10-28: -247) — and the first version of this script refused.
+ * A repair decision must not depend on the time of day it is run.
  */
-export async function proposeRepair(prisma, opts, probe = httpProbe) {
+export async function readLastClosedDay(prisma, siteId, now = new Date()) {
+  const today = pacificDay(now);
+  const rows = await prisma.inventoryPositionDaily.findMany({
+    where: { site_id: siteId, day: { lt: new Date(`${today}T00:00:00.000Z`) } },
+    orderBy: { day: 'desc' },
+    take: 2,
+    select: { day: true, pool: true, closing: true, computed_at: true },
+  });
+  const day = rows[0]?.day.toISOString().slice(0, 10);
+  const program = rows.find((r) => r.pool === 'program' && r.day.toISOString().slice(0, 10) === day);
+  const nonProgram = rows.find((r) => r.pool === 'non_program' && r.day.toISOString().slice(0, 10) === day);
+  if (!day || !program || !nonProgram) {
+    throw new RepairRefused('no daily positions for a closed day; run /api/internal/inventory/pool-check first');
+  }
+  const newest = await prisma.inventoryPositionDaily.aggregate({
+    where: { site_id: siteId },
+    _max: { computed_at: true },
+  });
+  const age = now.getTime() - (newest._max.computed_at?.getTime() ?? 0);
+  if (age > POSITIONS_MAX_AGE_MS) {
+    throw new RepairRefused(
+      `daily positions are ${Math.round(age / 60000)} min old; run /api/internal/inventory/pool-check first`,
+    );
+  }
+  const p = program.closing.toString();
+  const n = nonProgram.closing.toString();
+  // Sum in tenths: the columns are Decimal(10,1), and float addition can drift.
+  const total = (Math.round(Number(p) * 10) + Math.round(Number(n) * 10)) / 10;
+  return { day, program: p, nonProgram: n, total: String(total) };
+}
+
+/**
+ * Plan (and with apply, propose) the repair, from the LAST CLOSED day's pools
+ * (`readLastClosedDay`; injectable for tests). Returns counts and ids only.
+ */
+export async function proposeRepair(prisma, opts, readClosed = readLastClosedDay, now = new Date()) {
   const site = await prisma.site.findFirst({ where: { code: opts.siteCode }, select: { id: true, code: true } });
   if (!site) throw new RepairRefused(`unknown site ${opts.siteCode}`);
-  const floor = await probe(site.code);
+  const floor = await readClosed(prisma, site.id, now);
   const plan = planRepair(floor, opts.expectUnits);
 
   const exception = await prisma.inventoryException.findFirst({
@@ -108,7 +159,15 @@ export async function proposeRepair(prisma, opts, probe = httpProbe) {
   });
   if (existing > 0) throw new RepairRefused(`an adjustment is already proposed or approved for exception ${exception.id}`);
 
-  const summary = { site: site.code, exceptionId: exception.id, day: opts.day, ...plan, applied: false, adjustmentId: null };
+  const summary = {
+    site: site.code,
+    exceptionId: exception.id,
+    day: opts.day,
+    measuredOnClosedDay: floor.day,
+    ...plan,
+    applied: false,
+    adjustmentId: null,
+  };
   if (!opts.apply) return summary;
 
   const adjustmentId = await prisma.$transaction(async (tx) => {
@@ -139,20 +198,6 @@ export async function proposeRepair(prisma, opts, probe = httpProbe) {
     return row.id;
   });
   return { ...summary, applied: true, adjustmentId };
-}
-
-async function httpProbe(siteCode) {
-  const base = process.env.INTERNAL_BASE_URL ?? 'http://127.0.0.1:3000';
-  const token = process.env.INTERNAL_CRON_TOKEN ?? '';
-  const res = await fetch(`${base}/api/internal/inventory/floor-probe`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ siteCode }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!res.ok) throw new Error(`floor-probe HTTP ${res.status}`);
-  const j = await res.json();
-  return { program: j.program, nonProgram: j.nonProgram, total: j.total };
 }
 
 async function main() {

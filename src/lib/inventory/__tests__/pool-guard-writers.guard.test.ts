@@ -83,8 +83,17 @@ describe('ADR-0143 D2 — every inventory-leg writer runs the pool guard', () =>
       (f) => f.path === 'src/app/api/internal/inventory/pool-check/route.ts',
     );
     expect(route?.content).toMatch(/runPoolCheck\(/);
-    const daemon = readFileSync(join(ROOT, 'scripts/workbook-sync-cron.mjs'), 'utf-8');
+    const daemon = readFileSync(join(ROOT, 'scripts/inventory-pool-check-cron.mjs'), 'utf-8');
     expect(daemon).toContain('/api/internal/inventory/pool-check');
+    // 2026-10-29: the sweep must run in a service the deployer RECREATES on every
+    // deploy. It first rode the profile-gated workbook-sync daemon, which the
+    // deployer never starts (live COMPOSE_PROFILES=ap), and shipped dead.
+    const compose = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf-8');
+    const block = compose
+      .split(/\n  (?=[a-z][a-z0-9-]*:\n)/)
+      .find((b) => b.includes("command: ['node', 'scripts/inventory-pool-check-cron.mjs']"));
+    expect(block, 'a compose service runs the pool-check daemon').toBeDefined();
+    expect(block).not.toMatch(/^\s*profiles:/m);
   });
 
   it('test-of-the-test: a new unguarded writer is caught; a bare note does not excuse one', () => {
