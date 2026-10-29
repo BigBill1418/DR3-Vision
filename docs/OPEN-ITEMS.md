@@ -58,6 +58,23 @@ Jesse checks visibility).
   each day. Proposed wording for the Woodland workbook / MyMRC entry, not in force: "record program processed
   only up to the program available that day; anything processed beyond it is non-program". Bill words it; the
   site applies it.
+- **CH-9 — 2026-10-29 post-deploy: the pool-check sweep shipped dead; lasting fix in review.** It rode the
+  profile-gated `workbook-sync` daemon, which the deployer never recreates (live `COMPOSE_PROFILES=ap`), so the
+  container kept a July image. Recreated by hand on CHAD; the Woodland program exception opened at 11:38 PDT.
+  Fix: own default-profile service `inventory-pool-check` (branch `fix/adr0143-pool-check-daemon`). After that
+  deploy, confirm `dr3-vision-inventory-pool-check` exists, is on the new image, and logs `pool-check complete`.
+- **CH-11 — repair script fixed to read the last CLOSED day (same branch).** On 10-29 the first version refused
+  because it read the live mid-day floor (+138: today's intake in, today's processing not yet). CH-5's command is
+  unchanged; it now prints `measuredOnClosedDay`.
+- **CH-12 — FOR BILL (display, not changed):** mid-day, the Loads & inventory page and the iPad hub show the live
+  pools (10-29 ~10 AM: program 138, total 782), because the live program pool is not negative, while the open
+  exception says the split is still wrong by about 247. Recommendation: while a pool has an OPEN exception,
+  withhold both pools on those surfaces (keep the total) and link the exception, whatever the live sign.
+  Tradeoff: a correct-looking mid-day figure disappears until the exception is resolved.
+- **CH-10 — residual, not fixed here:** `dr3-vision-workbook-sync` is still hand-managed (profile-gated, never
+  recreated by the deployer), so its daemon script can drift from `main` again. The workbook-sync engine itself
+  runs inside the app and is current; only the thin daemon is stale-prone. Bill decides whether `workbook-sync`
+  joins `COMPOSE_PROFILES` (ADR-0049 kept it an operator action).
 - **CH-8:** 30-day hold, no new exception at Woodland after CH-5 and CH-7 (Ryan). Close 0.CH only after that.
 - **Side finding — fixed 2026-10-29:** 0.CG below read "IN REVIEW (not merged)" though PR #307 merged as
   `d4a5e12` on 2026-10-14; its header and CG-1 now say so.

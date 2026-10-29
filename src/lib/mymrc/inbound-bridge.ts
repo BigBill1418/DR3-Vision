@@ -69,7 +69,7 @@
 
 // pool-guard: post-tick — compiled standalone (tsconfig.mymrc.json) and cannot import the
 // ADR-0143 guard; its writes are checked by /api/internal/inventory/pool-check, which the
-// workbook-sync daemon runs every 10 minutes (exception writer `sweep:inbound=mymrc_haul`).
+// inventory-pool-check daemon runs every 10 minutes (exception writer `sweep:inbound=mymrc_haul`).
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 
