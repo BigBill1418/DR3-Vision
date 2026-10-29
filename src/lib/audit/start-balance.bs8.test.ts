@@ -79,6 +79,8 @@ function fakeDb(s: Scenario): PrismaClient {
     inboundLoad: { aggregate: vi.fn(async () => emptySum) },
     processedUnitsDaily: { aggregate: vi.fn(async () => emptySum) },
     outboundMaterial: { aggregate: vi.fn(async () => emptySum) },
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: { aggregate: vi.fn(async () => emptySum) },
   } as unknown as PrismaClient;
 }

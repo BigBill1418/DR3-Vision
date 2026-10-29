@@ -31,6 +31,7 @@ import { assessFreshness } from '@/lib/mymrc/freshness';
 import {
   assertCorInboundFresh,
   assertCorInventoryNotNegative,
+  assertCorPoolsNotNegative,
   assertInboundFreshnessForCor,
   CorInboundStaleError,
   CorLedgerNegativeError,
@@ -155,5 +156,40 @@ describe('assertCorInventoryNotNegative', () => {
   it('zero and positive figures pass', () => {
     expect(() => assertCorInventoryNotNegative(0)).not.toThrow();
     expect(() => assertCorInventoryNotNegative(1500)).not.toThrow();
+  });
+});
+
+// ADR-0143 D1 / RC3 — test T3. The COR guard used to check the TOTAL only, so
+// Woodland's program -247 inside a +397 total (ADR-0110 Am.1 case 1, the pool MRC
+// bills on) would have passed it.
+describe('assertCorPoolsNotNegative (ADR-0143, T3)', () => {
+  it('refuses a negative PROGRAM pool inside a positive total (Woodland 2026-10-29)', () => {
+    try {
+      assertCorPoolsNotNegative({ program: -247, nonProgram: 644, total: 397 });
+      expect.unreachable('a negative program pool must refuse the COR');
+    } catch (e) {
+      expect(e).toBeInstanceOf(CorLedgerNegativeError);
+      expect((e as CorLedgerNegativeError).status).toBe(422);
+      expect((e as CorLedgerNegativeError).context).toEqual({ totalUnits: 397, pool: 'program' });
+    }
+  });
+
+  it('refuses a negative non-program pool', () => {
+    expect(() =>
+      assertCorPoolsNotNegative({ program: 900, nonProgram: -1, total: 899 }),
+    ).toThrowError(CorLedgerNegativeError);
+  });
+
+  it('still refuses a negative total', () => {
+    expect(() => assertCorPoolsNotNegative({ program: -5, nonProgram: 1, total: -4 })).toThrowError(
+      CorLedgerNegativeError,
+    );
+  });
+
+  it('accepts Decimals and passes a healthy split', () => {
+    const d = (n: number) => ({ toNumber: () => n });
+    expect(() =>
+      assertCorPoolsNotNegative({ program: d(0), nonProgram: d(397), total: d(397) }),
+    ).not.toThrow();
   });
 });

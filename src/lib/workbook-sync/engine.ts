@@ -37,7 +37,7 @@ import {
   yearMonthKeyFromFileName,
 } from './naming';
 import { billedDaysFor, isGraceWindowOpen, priorMonthAnchor } from './grace';
-import { upsertDailyProduction } from './upsert';
+import { upsertDailyProductionGuarded } from './upsert';
 
 export type SyncStatus = 'ok' | 'forbidden' | 'not_found' | 'error' | 'skipped';
 
@@ -494,8 +494,9 @@ export async function syncOneSource(
             }
           }
 
+          // ADR-0143 D2 — the write and the pool check share one transaction.
           const counts = await prisma.$transaction((tx) =>
-            upsertDailyProduction({
+            upsertDailyProductionGuarded({
               db: tx,
               siteId: source.site_id,
               syncRunId: runId,

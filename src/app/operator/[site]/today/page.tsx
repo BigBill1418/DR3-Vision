@@ -4,6 +4,7 @@ import { auth } from '@/lib/auth';
 import { checkOperatorForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
 import { countUnconfirmedInboundDays } from '@/lib/loads/floor-inbound';
 import { countPendingPortalHauls } from '@/lib/loads/portal-hauls';
 import { getLocale } from '@/i18n/get-locale';
@@ -62,7 +63,7 @@ export default async function FloorTodayPage({ params }: Props) {
     ]);
 
   const now = new Date();
-  const balance = summaryLive ? await onHand(siteId, now) : null;
+  const onHandView = summaryLive ? presentOnHand(await onHand(siteId, now)) : null;
 
   // ADR-0065 — the badge counted a 14-DAY lookback, which is exactly the
   // historical view Bill ruled out for the floor. Scoped to the current
@@ -153,16 +154,26 @@ export default async function FloorTodayPage({ params }: Props) {
           caption={t('floor.hub.caption', { site: siteName, name: operatorName })}
         />
 
-        {summaryLive && balance && (
+        {summaryLive && onHandView && (
           <section className="rounded-xl bg-dr3-green-dark/50 p-6">
             <p className="text-xs uppercase tracking-wide text-dr3-cream/60">
               {t('floor.hub.on_hand_heading')}
             </p>
-            <p className="mt-1 text-5xl font-bold tabular-nums">{balance.total.toString()}</p>
-            <p className="mt-2 text-sm text-dr3-cream/70">
-              {t('floor.common.program')} {balance.program.toString()} ·{' '}
-              {t('floor.common.non_program')} {balance.nonProgram.toString()}
-            </p>
+            {/* ADR-0143 D1 — through the presenter only. Until 2026-10-29 this hub
+                printed both pools raw, so Woodland's iPad read "Program -247". */}
+            <p className="mt-1 text-5xl font-bold tabular-nums">{onHandView?.total ?? '—'}</p>
+            {onHandView?.poolsShown ? (
+              <p className="mt-2 text-sm text-dr3-cream/70">
+                {t('floor.common.program')} {onHandView.program} · {t('floor.common.non_program')}{' '}
+                {onHandView.nonProgram}
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-dr3-cream/70" data-testid="hub-onhand-withheld">
+                {onHandView?.total != null
+                  ? t('floor.hub.on_hand_split_unavailable')
+                  : t('floor.hub.on_hand_unavailable')}
+              </p>
+            )}
           </section>
         )}
 

@@ -135,6 +135,8 @@ function fakeDb(seed: Seed): PrismaClient {
     // C1/C2/C3/C7 wiring assertions (m3's own suite covers it).
     outboundMaterialPayment: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []) },
     mymrcOutboundMirror: table(seed.outboundMirror ?? []),
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: table(seed.landfilled ?? []),
     consumerDropoff: table(seed.dropoffs ?? []),
     siteInventorySnapshot: table(seed.snapshots ?? []),

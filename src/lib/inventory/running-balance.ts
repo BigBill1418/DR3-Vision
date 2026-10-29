@@ -39,12 +39,7 @@
 // All arithmetic uses `Prisma.Decimal` (stripped units are Decimal(7,1); every
 // other count is an Int) so there is zero float drift at any count boundary.
 
-import {
-  Prisma,
-  type LoadStatus,
-  type ConsumerDropoffKind,
-  type PrismaClient,
-} from '@prisma/client';
+import { Prisma, type LoadStatus, type ConsumerDropoffKind } from '@prisma/client';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { prisma } from '@/lib/prisma';
 import {
@@ -194,6 +189,14 @@ export interface BalanceComponents {
    * transfer, so they must not decrement the live floor. Optional/absent → 0.
    */
   savedUnits?: DecimalLike;
+  /**
+   * ADR-0143 D4 — the SIXTH leg: approved `inventory_pool_adjustments` since the
+   * anchor, as the NET change per pool (+ to_pool, − from_pool). An adjustment moves
+   * units between pools and never changes the total, so `program + nonProgram` of
+   * this pair is 0 by construction. Optional/absent → 0, so every existing caller
+   * and fixture is unchanged.
+   */
+  adjustments?: PoolPair;
 }
 
 /** The single pool-aware running balance. `program.plus(nonProgram)` equals `total`. */
@@ -249,14 +252,16 @@ export function computeRunningBalance(c: BalanceComponents): RunningBalance {
     .plus(c.dropoffUnits)
     .minus(c.stripped.program)
     .minus(c.wholeUnitsSold.program)
-    .minus(c.landfilled.program);
+    .minus(c.landfilled.program)
+    .plus(c.adjustments?.program ?? 0);
 
   const nonProgram = new D(c.anchor.nonProgram)
     .plus(c.verifiedInbound.nonProgram)
     .minus(c.stripped.nonProgram)
     .minus(c.wholeUnitsSold.nonProgram)
     .minus(c.landfilled.nonProgram)
-    .minus(c.savedUnits ?? 0);
+    .minus(c.savedUnits ?? 0)
+    .plus(c.adjustments?.nonProgram ?? 0);
 
   return { program, nonProgram, total: program.plus(nonProgram) };
 }
@@ -394,14 +399,60 @@ export type BalanceUpperBound = { lte: Date } | { lt: Date };
  * one), and a narrowed interface here would have to re-declare six Prisma
  * delegate signatures, which is a third place for the shapes to drift.
  */
-export type BalanceDb = PrismaClient;
+//
+// ADR-0143 D2 widened this to the TRANSACTION client: the post-write pool check
+// reads the balance inside the writer's own transaction, so it sees the row the
+// writer just wrote. `PrismaClient` is assignable to `Prisma.TransactionClient`,
+// so every existing caller is unchanged.
+export type BalanceDb = Prisma.TransactionClient;
 
-export async function computePoolBalance(
-  db: BalanceDb,
-  siteId: string,
-  upper: BalanceUpperBound,
-): Promise<RunningBalance> {
-  const anchor = await db.siteInventorySnapshot.findFirst({
+/** One `groupBy(['from_pool','to_pool'])` row of approved adjustments. */
+export interface AdjustmentGroup {
+  from_pool: 'program' | 'non_program';
+  to_pool: 'program' | 'non_program';
+  _sum: { units: Prisma.Decimal | number | string | null };
+}
+
+/**
+ * ADR-0143 D4 — net per-pool change from approved adjustments. Pure. The pair sums
+ * to zero: every unit that enters one pool left the other.
+ */
+export function netAdjustments(groups: readonly AdjustmentGroup[]): {
+  program: Prisma.Decimal;
+  nonProgram: Prisma.Decimal;
+} {
+  let program = new D(0);
+  let nonProgram = new D(0);
+  for (const g of groups) {
+    const u = new D(g._sum.units ?? 0);
+    if (g.from_pool === g.to_pool) continue; // refused by the CHECK; never moves a pool
+    if (g.to_pool === 'program') program = program.plus(u);
+    else nonProgram = nonProgram.plus(u);
+    if (g.from_pool === 'program') program = program.minus(u);
+    else nonProgram = nonProgram.minus(u);
+  }
+  return { program, nonProgram };
+}
+
+/** The anchor-row fields the balance reads (ADR-0143 shares the selector with the positions). */
+export const POOL_ANCHOR_SELECT = {
+  id: true,
+  snapshot_at: true,
+  units_indoor: true,
+  units_total: true,
+  units_in_processing: true,
+  program_units: true,
+  non_program_units: true,
+  pool_attribution: true,
+} as const;
+
+/**
+ * THE anchor selector for a balance window. Shared by `computePoolBalance` and the
+ * ADR-0143 daily positions so the two can never compute forward from different
+ * counts (the ADR-0078 D1 / ADR-0084 lesson).
+ */
+export function selectPoolAnchor(db: BalanceDb, siteId: string, upper: BalanceUpperBound) {
+  return db.siteInventorySnapshot.findFirst({
     // ADR-0084 — `NOT_VOIDED` first, and it is not optional here. This is THE
     // anchor selector: a voided count reaching this query does not produce a
     // slightly wrong list, it recomputes the whole floor from a number an
@@ -425,16 +476,16 @@ export async function computePoolBalance(
     // see a voided anchor while the balance cannot is the same class of defect —
     // two selectors disagreeing about which row is the anchor.
     orderBy: [{ snapshot_at: 'desc' }, { created_at: 'desc' }],
-    select: {
-      snapshot_at: true,
-      units_indoor: true,
-      units_total: true,
-      units_in_processing: true,
-      program_units: true,
-      non_program_units: true,
-      pool_attribution: true,
-    },
+    select: POOL_ANCHOR_SELECT,
   });
+}
+
+export async function computePoolBalance(
+  db: BalanceDb,
+  siteId: string,
+  upper: BalanceUpperBound,
+): Promise<RunningBalance> {
+  const anchor = await selectPoolAnchor(db, siteId, upper);
 
   // ADR-0037 §3 pool split via the shared resolver (D-4): `measured` anchors use
   // their entered split; otherwise the whole count is attributed to the program pool.
@@ -449,7 +500,7 @@ export async function computePoolBalance(
   const dateWindow = { gt: dateSince, ...upper };
   const inboundWindow = { gte: inboundSince, ...upper };
 
-  const [inbound, dropoffs, stripped, wholeUnitsSold, landfilled] = await Promise.all([
+  const [inbound, dropoffs, stripped, wholeUnitsSold, landfilled, adjustments] = await Promise.all([
     db.inboundLoad.aggregate({
       _sum: { program_unit_count: true, non_program_unit_count: true },
       where: {
@@ -482,6 +533,15 @@ export async function computePoolBalance(
       _sum: { program_units: true, non_program_units: true },
       where: { site_id: siteId, disposal_date: dateWindow },
     }),
+    // ADR-0143 D4 — the sixth leg. APPROVED adjustments only: a proposal moves
+    // nothing until a second person approves it. Same Pacific-day window as every
+    // other @db.Date leg, so an adjustment dated on/before the anchor's count day is
+    // already inside that count and does not move the floor again.
+    db.inventoryPoolAdjustment.groupBy({
+      by: ['from_pool', 'to_pool'],
+      _sum: { units: true },
+      where: { site_id: siteId, status: 'approved', day: dateWindow },
+    }),
   ]);
 
   const balance = computeRunningBalance({
@@ -505,6 +565,7 @@ export async function computePoolBalance(
       program: landfilled._sum.program_units ?? 0,
       nonProgram: landfilled._sum.non_program_units ?? 0,
     },
+    adjustments: netAdjustments(adjustments as AdjustmentGroup[]),
     // rollup §5.2 (Rick, 2026-07-19): saved units are NOT removed from inventory until
     // physically transferred to a store, so the LIVE on-hand balance (and the §3 floor
     // tile that reads it) must NOT subtract them — `savedUnits` is deliberately omitted
@@ -667,6 +728,10 @@ export async function reconcilePhysicalCount(args: {
         },
       },
     });
+    // ADR-0143 D2 — a new anchor re-seeds the window; check the pools inside this
+    // transaction (never refuses). Imported lazily: pool-guard imports this module.
+    const { guardPoolsInTx } = await import('./pool-guard');
+    await guardPoolsInTx(tx, args.siteId, 'physical-count');
     return created;
   };
 

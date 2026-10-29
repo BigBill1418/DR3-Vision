@@ -7,7 +7,12 @@
 import { type LandfilledReason } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
-import { RecordValidationError, RecordNotFoundError, assertUnlocked } from '@/lib/loads/record-guards';
+import {
+  RecordValidationError,
+  RecordNotFoundError,
+  assertUnlocked,
+} from '@/lib/loads/record-guards';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'landfilled_units';
 
@@ -17,7 +22,9 @@ function disposalDateUTC(date: Date): Date {
 
 function assertWhole(name: string, n: number, min = 0): void {
   if (!Number.isInteger(n) || n < min || n > 100000) {
-    throw new RecordValidationError(`${name} must be a whole number in [${min}, 100000] (got ${String(n)})`);
+    throw new RecordValidationError(
+      `${name} must be a whole number in [${min}, 100000] (got ${String(n)})`,
+    );
   }
 }
 
@@ -106,9 +113,15 @@ export async function createLandfilledUnit(args: {
         action: 'insert',
         table_name: TABLE,
         row_id: created.id,
-        after: { disposal_date: day.toISOString().slice(0, 10), units: args.units, reason: args.reason },
+        after: {
+          disposal_date: day.toISOString().slice(0, 10),
+          units: args.units,
+          reason: args.reason,
+        },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'landfilled');
     return created;
   });
   return toView(row);
@@ -155,6 +168,8 @@ export async function updateLandfilledUnit(args: {
         after: { units },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'landfilled');
     return updated;
   });
   return toView(row);

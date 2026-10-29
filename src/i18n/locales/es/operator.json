@@ -345,6 +345,8 @@
       "heading": "Revisión diaria",
       "caption": "{{site}} · {{name}}",
       "on_hand_heading": "En existencia ahora",
+      "on_hand_split_unavailable": "La oficina está corrigiendo la división programa / no programa.",
+      "on_hand_unavailable": "La existencia no se muestra hasta que la oficina la corrija.",
       "card_inbound_title": "Confirmar recepción",
       "card_inbound_body": "Revisa los conteos de cargas recibidas hoy",
       "card_inbound_badge_one": "{{count}} día por confirmar",

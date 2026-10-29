@@ -331,6 +331,8 @@
       "heading": "Daily check",
       "caption": "{{site}} · {{name}}",
       "on_hand_heading": "On hand now",
+      "on_hand_split_unavailable": "The program / non-program split is being corrected by the office.",
+      "on_hand_unavailable": "On hand is not shown until the office corrects it.",
       "card_inbound_title": "Confirm inbound",
       "card_inbound_body": "Check today's received haul counts",
       "card_inbound_badge_one": "{{count}} day to confirm",

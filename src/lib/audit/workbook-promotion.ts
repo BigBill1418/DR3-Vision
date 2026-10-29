@@ -46,6 +46,7 @@ import { notVoidedSnapshotWhere } from '@/lib/inventory/snapshot-void';
 import { notVoidedLoadWhere } from '@/lib/loads/not-voided';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import type { SiteAliasResolver } from './types';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const D = Prisma.Decimal;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -1297,6 +1298,8 @@ export async function promoteWorkbookImport(args: PromoteArgs): Promise<Promotio
       }
     }
 
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, scope.siteId, 'workbook-promotion');
     return pid;
   });
 

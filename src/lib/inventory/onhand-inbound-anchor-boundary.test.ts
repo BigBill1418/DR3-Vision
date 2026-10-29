@@ -70,6 +70,8 @@ vi.mock('@/lib/prisma', () => ({
     outboundMaterial: {
       aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }),
     },
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: {
       aggregate: async () => ({ _sum: { program_units: 0, non_program_units: 0 } }),
     },

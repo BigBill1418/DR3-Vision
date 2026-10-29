@@ -35,6 +35,7 @@ import {
   isSourceNonProgram,
   recyclerStateForJurisdiction,
 } from '@/lib/inventory/source-classification';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 /** Split does not reconcile, or the load cannot be verified from its current state. */
 export class VerifyGateError extends Error {
@@ -363,5 +364,8 @@ export async function verifyLoad(args: {
         '[verify-gate] issued Vision DR3 number',
       );
     }
+    // ADR-0143 D2 — a verified load enters the balance; check the pools in this
+    // transaction (never refuses).
+    await guardPoolsInTx(tx, load.site_id, 'inbound-verify');
   });
 }

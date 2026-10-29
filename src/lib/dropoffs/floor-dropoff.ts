@@ -50,6 +50,7 @@ import type { Prisma } from '@prisma/client';
 import { assertWholeUnits } from '@/lib/dropoffs/service';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { RecordValidationError } from '@/lib/loads/record-guards';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'consumer_dropoffs';
 
@@ -208,6 +209,9 @@ export async function createFloorDropoff(
       },
     },
   });
+
+  // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+  await guardPoolsInTx(args.tx, args.siteId, 'floor-dropoff');
 
   return {
     id: created.id,

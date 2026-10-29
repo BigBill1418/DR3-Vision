@@ -76,6 +76,8 @@ vi.mock('@/lib/prisma', () => ({
       findMany: async () => store.closes,
     },
     outboundMaterial: { aggregate: async (): Promise<Agg> => ({ _sum: store.wholeUnitsSold }) },
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: { aggregate: async (): Promise<Agg> => ({ _sum: store.landfilled }) },
     corSiteConfig: { findUnique: async () => store.signer },
     // ADR-0076 follow-up — this mock HONOURS its arguments on purpose.

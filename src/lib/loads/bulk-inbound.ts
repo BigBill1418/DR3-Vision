@@ -35,6 +35,7 @@ import { prisma } from '@/lib/prisma';
 import { lockSiteAgainstPromotion } from '@/lib/audit/promotion-lock';
 import { RecordValidationError } from '@/lib/loads/record-guards';
 import { dayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
+import { guardPoolsInTx } from '@/lib/inventory/pool-guard';
 
 const TABLE = 'inbound_loads';
 
@@ -74,7 +75,11 @@ function assertWhole(name: string, n: number, min = 0): void {
  * Q8 split invariant. MRC is billed on PROGRAM units only, so a split that does not
  * sum to the day's total would silently mis-state the billable pool.
  */
-export function assertSplit(totalUnits: number, programUnits: number, nonProgramUnits: number): void {
+export function assertSplit(
+  totalUnits: number,
+  programUnits: number,
+  nonProgramUnits: number,
+): void {
   assertWhole('total_units', totalUnits, 1);
   assertWhole('program_units', programUnits);
   assertWhole('non_program_units', nonProgramUnits);
@@ -168,7 +173,12 @@ export async function upsertBulkInboundDay(args: {
     // delete-then-write contract the future iPad floor-confirmation endpoint will reuse.
     const provisional = await tx.inboundLoad.findFirst({
       where: { site_id: args.siteId, load_source_type: MYMRC_HAUL_SOURCE_TYPE, arrived_at: day },
-      select: { id: true, total_units: true, program_unit_count: true, non_program_unit_count: true },
+      select: {
+        id: true,
+        total_units: true,
+        program_unit_count: true,
+        non_program_unit_count: true,
+      },
     });
     if (provisional) {
       await tx.inboundLoad.delete({ where: { id: provisional.id } });
@@ -231,6 +241,8 @@ export async function upsertBulkInboundDay(args: {
         },
       },
     });
+    // ADR-0143 D2 — check the pools inside this write's transaction (never refuses).
+    await guardPoolsInTx(tx, args.siteId, 'inbound-bulk');
     return written;
   });
   return toView(row as BulkRow);

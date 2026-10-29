@@ -1,6 +1,8 @@
 # Plan — negative inventory, permanently (ADR-0143)
 
-- **Status:** PROPOSED 2026-10-29 (Pacific). Nothing is built. Phase 0 starts on Bill's answers to §6.
+- **Status:** IN BUILD 2026-10-29 (Pacific). Bill answered B1–B5 (ADR-0143 § Bill's decisions). Items 1–6 built
+  on branch `fix/adr0143-negative-inventory` (Mercer), not deployed; item 7 partly; item 8 script written, not run.
+  See §8.
 - **ADR:** `docs/adr/0143-the-program-pool-is-a-claim-not-a-count.md`. The diagnosis, evidence and root causes
   RC1–RC5 live there and are not repeated here.
 - **Evidence query:** `docs/queries/2026-10-29-inventory-pool-diagnosis.sql` (read-only; run 2026-10-29 and
@@ -146,3 +148,23 @@ counted). Eugene has no flow feed at all, so its 751 is a constant; a feed for E
 - The existing `INV-POOL-NON-NEGATIVE` daily page is folded into this. While an exception is open it becomes a
   digest line, so the same condition never pages twice a day.
 - No staff push. Managers see it in-app, born pilot.
+
+## 8. Build status (2026-10-29, Mercer)
+
+Branch `fix/adr0143-negative-inventory` from `origin/main` `3573f74`. Nothing pushed, merged or deployed.
+
+| #   | Item                                | Status                  | Evidence                                                                                                                                                                                                                                                                  |
+| --- | ----------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Presenter, two raw pages, COR pools | BUILT                   | `presentOnHand()`; loads-inventory, iPad Today, count, yard through it; `assertCorPoolsNotNegative` in prefill + finalize. T1 `onhand-presenter.guard.test.ts` (red on the old page), T2 `today/page.onhand.test.tsx` (red on both old pages), T3 `inbound-gate.test.ts`. |
+| 2   | One remedy                          | BUILT                   | `negativeFloorCopy().remedy` read by tile, daily report, iPad, `INV-POOL-NON-NEGATIVE`. T4 in `negative-floor.test.ts` + `invariants.test.ts`.                                                                                                                            |
+| 3   | Migration + trigger                 | BUILT                   | `20260870_adr0143_inventory_exceptions` (clean replay + re-run no-op). T5/T6 `pool-guard.db.test.ts`.                                                                                                                                                                     |
+| 4   | Sixth leg                           | BUILT                   | `computeRunningBalance.adjustments`, `computePoolBalance` reads approved rows. T6/T7 (`running-balance.test.ts`, `pool-guard.db.test.ts`).                                                                                                                                |
+| 5   | Post-write check on every writer    | BUILT                   | `guardPoolsInTx` in 14 writers; MyMRC bridges via the 10-min `/api/internal/inventory/pool-check` sweep. T8–T11 `pool-guard.db.test.ts`; writer scan `pool-guard-writers.guard.test.ts` (red when a guard is removed).                                                    |
+| 6   | Alerting + in-app page              | BUILT, born pilot       | `exception-alerts.ts` (onset/7-day `high`, daily digest), `/dashboard/[site]/inventory-exceptions[/id]`, four-eyes API. T12 + flow tests `exception-flow.db.test.ts`. Live read-back of a page: NOT done (needs the deploy).                                              |
+| 7   | Split convention                    | PARTIAL                 | Close page shows program available (`split-rule.ts`). The written rule for the workbook / MyMRC entry needs Bill (OPEN-ITEMS CH-7).                                                                                                                                       |
+| 8   | Repair −247                         | SCRIPT + TESTS, NOT RUN | `scripts/propose-woodland-pool-repair.mjs` (proposal only). `woodland-repair.test.ts`, `woodland-repair.db.test.ts` (test site: −247/644/397 → 0/397/397 after a second identity approves).                                                                               |
+| 9   | Verify live                         | NOT STARTED             | Needs the deploy (Ryan).                                                                                                                                                                                                                                                  |
+| 10  | Visibility                          | NOT STARTED             | Jesse, after deploy.                                                                                                                                                                                                                                                      |
+| 11  | 30-day hold                         | NOT STARTED             | Starts when 7 and 8 are in force.                                                                                                                                                                                                                                         |
+
+§5 R-A (a count with a measured split) is withdrawn: Bill B3, the floor is mixed.

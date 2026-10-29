@@ -1,7 +1,9 @@
 # ADR-0143 — The program pool is a claim, not a count: a negative is caught where it is written
 
-- **Status:** Proposed 2026-10-29 (Pacific). Diagnosis is measured; the design waits on Bill's decisions
-  B1–B6 (plan §6). Nothing in this ADR is implemented yet.
+- **Status:** Accepted 2026-10-29 (Pacific) on Bill's decisions B1–B5 (below). D1–D5 implemented on branch
+  `fix/adr0143-negative-inventory`, **not deployed** (a deploy rebuilds the app and the dock iPads; Bill's
+  call). D6 is partly code (the close shows program available); the written convention waits on Bill. The
+  Woodland repair (R-B) is a proposal script, **not run**. See § Implementation at the end.
 - **Context:** Bill, 2026-10-29: _"we have not gotten to where we need to be with the inventory problems...
   this is important and an ongoing important need. This needs to be rectified and repaired - this can't be a
   recurring issue - we have tried to make this right way too many times."_
@@ -194,6 +196,22 @@ landfilled, adjustments, closing, inputs_hash, computed_at)`. A single writer re
 determined. The rule is written into the workbook and the Vision daily close, so the split is a measurement
 or a stated rule, not an undocumented habit.
 
+## Bill's decisions (2026-10-29)
+
+- **B1 — track both pools, separately.** The program / non-program pools stay.
+- **B2 — "a non program unit is always non program - the total is what matters not necessarily that specific
+  unit."** So the correction keeps the total constant and is a bookkeeping correction of the floor split. Units
+  are **not** reclassified for MRC reporting. The MyMRC question for Rick is **not** being sent.
+- **B3 — the Woodland floor is physically MIXED.** A split count is impossible, so the repair is the adjustment
+  path (§5 R-B), not a count (R-A is withdrawn).
+- **B4 — the site manager resolves an exception in the app; a second person approves.** Bill is paged once at
+  onset (`high`, `dr3-vision-system`, click to the exception), gets a digest line while it is open, and one
+  more page at 7 days. Managers see it in-app only.
+- **B5 — approved:** the additive migration with the daily-position, exception and adjustment tables and the
+  trigger refusing a negative day without a recorded exception.
+- **B6 — follows from B3:** R-B, an adjustment of 247 dated 10-08 (program to 0, total stays 397). Bill
+  approves the row before it exists in production.
+
 ## Alternatives considered
 
 - **CHECK (on_hand >= 0) / a stored counter with a guarded decrement.** Rejected. Vision has no stored counter;
@@ -218,3 +236,44 @@ or a stated rule, not an undocumented habit.
   the proposed repair; nothing is written by this ADR.
 - MRC exposure: if non-program units were reported to MRC as program in September, the MyMRC processed records
   carry that too (finding 2). Whether that matters is a business question (B2), not something code can decide.
+
+## Implementation (2026-10-29, branch `fix/adr0143-negative-inventory`, not deployed)
+
+Built test-first; every item has a test that fails on the pre-change code (mutation-checked for T1, T2 and the
+writer scan). Where the build differs from the design above, the difference and its reason:
+
+- **D1 presenter keeps the TOTAL in case 1.** `presentOnHand()` withholds both pools when either is negative,
+  but keeps the total when the total itself is ≥ 0 (B2: "the total is what matters"; the positive pool is wrong
+  by exactly as much as the negative one, the total is not). The iPad hub shows the total and a translated
+  line (EN/ES/UR); the count screen's expected total and the yard page go through it too.
+- **D1 applies to mail.** The daily report used to print the magnitude inside the sentence
+  ("computing negative (−147)"). It no longer does: a negative is never a figure in staff mail either.
+- **D1 has one deliberate exception: the exception page's legs table.** The person resolving an exception has
+  to see the day and the leg, so the computed closings appear there, labelled as a diagnosis, never as an
+  on-hand figure.
+- **D2 never refuses, by construction.** Writers call `guardPoolsInTx()`, which runs the check inside a
+  SAVEPOINT and forces the deferred D3 trigger immediate there; any failure rolls back only the guard's own
+  rows and is logged. The write stands. A scan (`pool-guard-writers.guard.test.ts`) fails CI for any file that
+  writes a leg table without the guard or a reasoned `pool-guard: non-moving` / `post-tick` note.
+- **D2 for the MyMRC bridges is post-commit, within 10 minutes.** The bridges run in the standalone scraper
+  (`tsconfig.mymrc.json`) and cannot import the guard. Giving the hardened Chromium container the internal cron
+  token so it could call back was rejected (ADR-0053 addendum strips secrets from it). Instead the
+  workbook-sync daemon calls `/api/internal/inventory/pool-check` every 10 minutes; a negative found there is
+  attributed from the first negative day's own rows (`sweep:processed=mymrc`). That meets the plan's
+  "≤ 1 h for the MyMRC bridge".
+- **D3 trigger re-reads the current row at commit** (a deferred trigger's `NEW` is the row as of the event).
+  The row's own arithmetic is a CHECK; exceptions and adjustments are append-only by trigger (no DELETE; a
+  decided adjustment and a resolved exception are final; the opening facts are immutable).
+- **D4 adds a no-adjustment resolution**, four-eyes, allowed only when the pool is ≥ 0 now (for example a
+  count already reset it). Without it an exception that cleared on its own would stay open and re-page.
+- **D5 replaces the daily `INV-POOL-NON-NEGATIVE` page.** A negative WITH an open exception is a note in that
+  invariant, a line in a once-a-day `default` digest, and two `high` pages in its life (onset, 7 days). A
+  negative WITHOUT an exception still violates the invariant: it means a writer bypassed the guard. The
+  invariant's remedy, the tile, the report and the iPad all read `negativeFloorCopy().remedy`. Pages are
+  stamped only when they land (`sent`, `fallback-sent`, or `cooldown-suppressed` = another process sent it).
+- **The repair (§5 R-B) is a script that only PROPOSES.** `scripts/propose-woodland-pool-repair.mjs` (dry run
+  by default) writes one `proposed` adjustment, proposer `system:adr0143-repair`, so Bill (a different
+  identity) can approve it in the app. It refuses if the live shortfall is not 247, if the non-program pool
+  would go negative, if there is no open exception, or if one is already proposed. Not run.
+- **D6:** the daily close shows "program units available to process today". The written convention for the
+  workbook and MyMRC entry is Bill's to word (OPEN-ITEMS 0.CH, CH-7).

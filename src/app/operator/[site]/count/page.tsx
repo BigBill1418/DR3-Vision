@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { checkOperatorForSite } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
+import { presentOnHand } from '@/lib/inventory/negative-floor';
 import { loadPriorAnchor, loadSwingThresholdPct } from '@/lib/inventory/anchor-guardrail';
 import { getLocale } from '@/i18n/get-locale';
 import { getDictionary, translate } from '@/i18n/dictionary';
@@ -36,7 +37,8 @@ export default async function FloorCountPage({ params }: Props) {
 
   const live = await isUiSurfaceLive(UI_SURFACE.IPAD_COUNT, siteId);
 
-  let expectedTotal = '0';
+  // ADR-0143 D1 — through the presenter; null when the total itself is negative.
+  let expectedTotal: string | null = null;
   let jurisdiction: 'california' | 'oregon' = 'oregon';
   // ADR-0072 — the anchor this count would REPLACE, and the site's swing
   // threshold. Both are read here only to decide which screen the operator sees;
@@ -57,7 +59,7 @@ export default async function FloorCountPage({ params }: Props) {
       loadSwingThresholdPct(prisma, siteId),
       listTodaysVoidableCountsAtSite(siteId, gate.ctx.userId),
     ]);
-    expectedTotal = balance.total.toString();
+    expectedTotal = presentOnHand(balance).total;
     jurisdiction = site?.jurisdiction === 'california' ? 'california' : 'oregon';
     priorTotal = prior?.total ?? null;
     thresholdPct = threshold;
@@ -108,7 +110,7 @@ export default async function FloorCountPage({ params }: Props) {
           <>
             <CountClient
               siteCode={siteCode}
-              expectedTotal={Number(expectedTotal)}
+              expectedTotal={expectedTotal}
               jurisdiction={jurisdiction}
               priorTotal={priorTotal}
               thresholdPct={thresholdPct}

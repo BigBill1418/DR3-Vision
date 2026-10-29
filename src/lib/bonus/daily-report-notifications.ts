@@ -9,7 +9,7 @@ import { log } from '@/lib/observability/logger';
 import { formatCents } from '@/lib/bonus/calculator';
 import type { DailyReport, ComparisonTotal } from '@/lib/bonus/daily-report';
 import type { EodInventorySnapshot } from '@/lib/loads/eod-inventory';
-import { classifyNegativeFloor, negativeFloorCopy } from '@/lib/inventory/negative-floor';
+import { negativeFloorCopy, presentOnHand } from '@/lib/inventory/negative-floor';
 
 // ─────────────────────────────────────────────────────────────────────
 // Formatting
@@ -77,7 +77,7 @@ function comparisonLineHtml(label: string, c: ComparisonTotal): string {
   if (c.total === null) {
     return `${escapeHtml(label)}: <em>no previous data available</em>`;
   }
-  return `${escapeHtml(label)}: <strong>${c.total.toLocaleString('en-US')}</strong> units`;
+  return `${escapeHtml(label)}: <strong>${c.total.toLocaleString('en-US')}</strong> units`; // onhand-presenter-ok: a production comparison total, not an inventory pool
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -179,33 +179,39 @@ export function renderEodInventoryHtml(
   // 2026-10-07 blamed intake that was 0 days old while the real fault was the pool
   // split (program −147 inside a ≈+1,600 total). `classifyNegativeFloor` tells the
   // three causes apart; see src/lib/inventory/negative-floor.ts.
+  //
+  // 2026-10-29 (ADR-0143 D1/D5) — the magnitude is gone from the sentence too. "A
+  // negative pool renders the sentence, never the number" applies to mail as much
+  // as to a page; "(−247)" in a staff report is the same figure in a value position
+  // a reader copies. The remedy is the ONE remedy (`presentOnHand().notice.remedy`),
+  // so the report, the floor tile and the invariant can no longer contradict each
+  // other (RC4: this panel said "a physical count resets the floor" while the
+  // invariant said "do not count").
   if (eod.state === 'negative') {
-    const cause = classifyNegativeFloor({
-      total: eod.totalOnHand,
-      program: eod.programOnHand,
-      nonProgram: eod.nonProgramOnHand,
-      inboundStale: eod.inboundStale,
-      inboundDaysSince: eod.inboundDaysSince,
-    });
-    // `state === 'negative'` is decided from the same three numbers, so a null
-    // cause cannot happen; the fallback keeps the panel honest if it ever did.
-    const copy = negativeFloorCopy(
-      cause ?? {
-        kind: 'processing-exceeds-inbound',
-        inboundRecorded: eod.inboundDaysSince != null,
-      },
+    const presented = presentOnHand(
+      { program: eod.programOnHand, nonProgram: eod.nonProgramOnHand, total: eod.totalOnHand },
+      { inboundStale: eod.inboundStale, inboundDaysSince: eod.inboundDaysSince },
     );
-    const worst = Math.min(eod.totalOnHand, eod.programOnHand, eod.nonProgramOnHand);
-    const magnitude = fmtUnits(Math.abs(Math.round(worst * 10) / 10));
+    // `state === 'negative'` is decided from the same three numbers, so a null
+    // notice cannot happen; the fallback keeps the panel honest if it ever did.
+    const fallback = negativeFloorCopy({
+      kind: 'processing-exceeds-inbound',
+      inboundRecorded: eod.inboundDaysSince != null,
+    });
+    const notice = presented.notice ?? {
+      headline: `${fallback.subject} is computing negative${fallback.qualifier}.`,
+      reason: fallback.reason,
+      remedy: fallback.remedy,
+    };
     const anchorLine = eod.anchor
       ? `Last physical count: <strong>${escapeHtml(fmtCountDayShort(eod.anchor.countedAt))}</strong> (${eod.anchor.daysSince} ${eod.anchor.daysSince === 1 ? 'day' : 'days'} ago).`
       : 'No physical count on record for this site.';
     return eodPanel(
       siteName,
       `<table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td style="padding:12px 14px;background:${WARN_BG};border:2px solid ${SVDP_RED};border-radius:6px;font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:${WARN_INK}">` +
-        `<strong style="color:${SVDP_RED};font-size:14px">⚠ ${escapeHtml(copy.subject)} is computing negative (−${magnitude})${escapeHtml(copy.qualifier)}.</strong><br>` +
-        `${escapeHtml(copy.reason)} <strong>This figure is not reliable and is not shown.</strong><br>` +
-        `${anchorLine} A physical count resets the floor and closes the gap; the drift is recorded as the count's reconciled delta.` +
+        `<strong style="color:${SVDP_RED};font-size:14px">⚠ ${escapeHtml(notice.headline)}</strong><br>` +
+        `${escapeHtml(notice.reason)} <strong>This figure is not reliable and is not shown.</strong><br>` +
+        `${anchorLine} ${escapeHtml(notice.remedy)}` +
         `</td></tr></table>`,
     );
   }

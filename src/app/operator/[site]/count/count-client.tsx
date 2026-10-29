@@ -33,7 +33,8 @@ import { NumberStepper } from '../number-stepper';
 
 type Props = {
   siteCode: string;
-  expectedTotal: number;
+  /** Presented (ADR-0143 D1): grouped text, or null when the total is negative. */
+  expectedTotal: string | null;
   jurisdiction: 'california' | 'oregon';
   /** Total of the anchor this count would replace; null when there is none. */
   priorTotal: number | null;
@@ -454,12 +455,14 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice
-          refusal={refusal}
-          onRefresh={refreshToToday}
-          siteCode={siteCode}
-          surface="count"
-        />}
+        {refusal && (
+          <WriteRefusalNotice
+            refusal={refusal}
+            onRefresh={refreshToToday}
+            siteCode={siteCode}
+            surface="count"
+          />
+        )}
 
         <label className="flex flex-col gap-2 text-base font-semibold">
           {t('floor.count.hold_manager_label')}
@@ -533,12 +536,14 @@ export function CountClient({
             {error}
           </p>
         )}
-        {refusal && <WriteRefusalNotice
-          refusal={refusal}
-          onRefresh={refreshToToday}
-          siteCode={siteCode}
-          surface="count"
-        />}
+        {refusal && (
+          <WriteRefusalNotice
+            refusal={refusal}
+            onRefresh={refreshToToday}
+            siteCode={siteCode}
+            surface="count"
+          />
+        )}
 
         <button
           type="button"
@@ -573,7 +578,7 @@ export function CountClient({
         <p className="text-xs uppercase tracking-wide text-dr3-cream/60">
           {t('floor.count.expected_heading')}
         </p>
-        <p className="mt-1 text-4xl font-bold tabular-nums">{expectedTotal}</p>
+        <p className="mt-1 text-4xl font-bold tabular-nums">{expectedTotal ?? '—'}</p>
       </section>
 
       {error && (
@@ -584,12 +589,14 @@ export function CountClient({
           {error}
         </p>
       )}
-      {refusal && <WriteRefusalNotice
+      {refusal && (
+        <WriteRefusalNotice
           refusal={refusal}
           onRefresh={refreshToToday}
           siteCode={siteCode}
           surface="count"
-        />}
+        />
+      )}
 
       <NumberStepper label={primaryLabel} value={primary} onChange={setPrimary} />
       <NumberStepper

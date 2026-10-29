@@ -83,11 +83,18 @@ export class CorInboundStaleError extends Error {
 /** The recomputed balance is negative — never a fileable inventory figure. */
 export class CorLedgerNegativeError extends Error {
   readonly status = 422 as const;
-  constructor(readonly context: { totalUnits: number }) {
+  constructor(readonly context: { totalUnits: number; pool?: 'program' | 'non-program' }) {
     super(
-      `COR refused: the on-hand balance is NEGATIVE (${context.totalUnits} units). A negative ` +
-        `floor is a drifted one-sided ledger (inbound missing), not a fileable inventory figure. ` +
-        `Recover inbound or take a fresh physical count, then regenerate the draft (PR #196 §2.3).`,
+      context.pool
+        ? // ADR-0143 RC3 — a negative POOL inside a non-negative total. The magnitude is
+          // deliberately not quoted (ADR-0143 D1: a negative pool is never a figure).
+          `COR refused: the ${context.pool} pool is computing negative while the total is ` +
+            `${context.totalUnits} units. MRC is billed on program units, so the split must be ` +
+            `corrected (a pool adjustment on the open inventory exception, ADR-0143 D4) before ` +
+            `this certificate can be filed.`
+        : `COR refused: the on-hand balance is NEGATIVE (${context.totalUnits} units). A negative ` +
+            `floor is a drifted one-sided ledger (inbound missing), not a fileable inventory figure. ` +
+            `Recover inbound or take a fresh physical count, then regenerate the draft (PR #196 §2.3).`,
     );
     this.name = 'CorLedgerNegativeError';
   }
@@ -128,4 +135,26 @@ export async function assertCorInboundFresh(now: Date = new Date()): Promise<voi
 /** Refuse a negative end-of-month inventory figure. */
 export function assertCorInventoryNotNegative(totalUnits: number): void {
   if (totalUnits < 0) throw new CorLedgerNegativeError({ totalUnits });
+}
+
+type PoolNumber = number | { toNumber(): number };
+
+/**
+ * ADR-0143 RC3 / test T3 — refuse a negative POOL, not only a negative total.
+ *
+ * ADR-0110 D3 calls a negative program pool billing-grade, and this guard checked
+ * the total only, so Woodland's program -247 inside a +397 total would have passed
+ * it. The total check runs first so a negative total keeps its existing message.
+ */
+export function assertCorPoolsNotNegative(b: {
+  program: PoolNumber;
+  nonProgram: PoolNumber;
+  total: PoolNumber;
+}): void {
+  const n = (v: PoolNumber) => (typeof v === 'number' ? v : v.toNumber());
+  const total = Math.round(n(b.total));
+  assertCorInventoryNotNegative(total);
+  if (n(b.program) < 0) throw new CorLedgerNegativeError({ totalUnits: total, pool: 'program' });
+  if (n(b.nonProgram) < 0)
+    throw new CorLedgerNegativeError({ totalUnits: total, pool: 'non-program' });
 }

@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.CH — 2026-10-29 negative inventory, again: root cause + permanent fix (ADR-0143) — **PROPOSED; waiting on Bill B1–B6**
+## 0.CH — 2026-10-29 negative inventory, again: root cause + permanent fix (ADR-0143) — **BUILT ON A BRANCH, NOT DEPLOYED; Bill decides deploy + repair**
 
 Bill: _"this can't be a recurring issue - we have tried to make this right way too many times."_ Measured
 2026-10-29 8:10–8:55 AM PDT, read-only:
@@ -38,22 +38,36 @@ Bill: _"this can't be a recurring issue - we have tried to make this right way t
 Plan: `docs/plans/2026-10-29-inventory-negative-permanent-fix.md` (items 0–11; Mercer builds, Ryan verifies,
 Jesse checks visibility).
 
-- **CH-1 — FOR BILL:** B1–B6 (plan §6), one at a time. B2 (may non-program units be reported to MRC as
-  program?) goes to Rick / the MRC contract owner first.
-- **CH-2:** plan items 1–2 (presenter, raw surfaces, COR pool guard, single remedy text). No decision is needed
-  to start these. Deploy only after Bill confirms the dock is clear.
-- **CH-3:** plan items 3–6 (exceptions, position table + trigger, adjustments, post-write check, onset page).
-  Needs B4/B5.
-- **CH-4:** repair the Woodland −247 (plan §5: R-A count with a measured split, or R-B adjustment of 247). Needs B3/B6.
-- **CH-5:** 30-day hold, no new exception (Ryan). Close 0.CH only after that.
-- **Side finding:** 0.CG below still reads "IN REVIEW (not merged)", but PR #307 merged as `d4a5e12` on
-  2026-10-14 and is live.
+- **CH-1 — DONE 2026-10-29:** Bill answered B1–B5 (ADR-0143 § Bill's decisions). B2: "a non program unit is
+  always non program - the total is what matters". B3: the Woodland floor is mixed, so the repair is an
+  adjustment, not a count. The MyMRC question for Rick is not being sent.
+- **CH-2 — BUILT (branch `fix/adr0143-negative-inventory`, not deployed):** plan items 1–2. One on-hand
+  presenter, both raw pages fixed, COR checks both pools, one remedy everywhere.
+- **CH-3 — BUILT (same branch, not deployed):** plan items 3–6. Migration `20260870_adr0143_inventory_exceptions`,
+  the sixth leg, the pool guard on every writer (MyMRC bridges via the 10-min sweep), onset/7-day pages + digest
+  line, the in-app exception page (born pilot, surface `inventory_exceptions`).
+- **CH-4 — FOR BILL: deploy.** A deploy rebuilds the app and updates the dock iPads; clear the dock first. On the
+  first 10-minute sweep after deploy the Woodland program exception opens and Bill gets ONE `high` page on
+  `dr3-vision-system` (expected, not a new incident).
+- **CH-5 — FOR BILL: the repair.** After deploy and the exception exists:
+  `docker exec dr3-vision-app node scripts/propose-woodland-pool-repair.mjs` (dry run), then `--apply` on Bill's
+  word. It proposes 247 non-program → program dated 10-08; Bill approves it on the exception page. Not run.
+- **CH-6 — FOR BILL: ramp.** The exception page is born pilot (admins only). Ramp `inventory_exceptions` for
+  Woodland from `/admin/rollout` when managers should act on it (B4).
+- **CH-7 — FOR BILL: the split convention (plan item 7).** The close page now shows the program units available
+  each day. Proposed wording for the Woodland workbook / MyMRC entry, not in force: "record program processed
+  only up to the program available that day; anything processed beyond it is non-program". Bill words it; the
+  site applies it.
+- **CH-8:** 30-day hold, no new exception at Woodland after CH-5 and CH-7 (Ryan). Close 0.CH only after that.
+- **Side finding — fixed 2026-10-29:** 0.CG below read "IN REVIEW (not merged)" though PR #307 merged as
+  `d4a5e12` on 2026-10-14; its header and CG-1 now say so.
 
 ---
 
-## 0.CG — 2026-10-14 AP intake auto-reject of already-approved invoices (ADR-0136 Am. 2, PR #307) — **IN REVIEW (not merged)**
+## 0.CG — 2026-10-14 AP intake auto-reject of already-approved invoices (ADR-0136 Am. 2, PR #307) — **MERGED `d4a5e12` 2026-10-14 (status corrected 2026-10-29); CG-2 still open**
 
-- **CG-1 — PR #307 open.** Revised after Ryan's independent review: rejects only on invoice number + confirmed
+- **CG-1 — DONE: PR #307 merged as `d4a5e12` on 2026-10-14** (verified on `origin/main` 2026-10-29; the app image
+  built 2026-10-14 carries it, per ADR-0143's live-bundle check). Revised after Ryan's independent review: rejects only on invoice number + confirmed
   vendor (or + identical file) or a forwarded approval mail; never on the file alone; capped at 10 per poll; a
   post-commit mail throw is reported as rejected. Merge/deploy is Bill's call.
 - **CG-2 — FOR BILL / AP (do not change data): invoice 6761 has now been approved THREE times.** Request

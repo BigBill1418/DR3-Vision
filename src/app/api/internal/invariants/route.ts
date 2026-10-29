@@ -21,6 +21,7 @@ import { INVARIANTS } from '@/lib/invariants/registry';
 import type { Invariant } from '@/lib/invariants/types';
 import { notifyInvariantReport } from '@/lib/invariants/notify';
 import { runInvariants } from '@/lib/invariants/runner';
+import { publishOpenExceptionsDigest } from '@/lib/inventory/exception-alerts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,12 +59,17 @@ export async function POST(req: Request): Promise<Response> {
   // describe a subset, and a subset reported as the whole is a false all-clear.
   const publish = notify && !only;
   const notified = publish ? await notifyInvariantReport(report) : { published: [] };
+  // ADR-0143 D5 — while an inventory exception is open it is one line in a daily
+  // digest (its onset and 7-day pages come from the pool-check sweep). This replaced
+  // the daily INV-POOL-NON-NEGATIVE page for a negative that has an exception.
+  const exceptionsDigest = publish ? await publishOpenExceptionsDigest() : null;
 
   return NextResponse.json({
     ...report,
     // Decimal/Date never reach here — every check returns plain strings — so the
     // JSON is stable enough for an operator to diff between runs.
     notified: notified.published,
+    exceptionsDigest,
     notifySkipped: publish ? null : only ? 'filtered_run' : 'notify=false',
   });
 }

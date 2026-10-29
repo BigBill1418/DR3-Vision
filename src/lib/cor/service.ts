@@ -14,6 +14,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { log } from '@/lib/observability/logger';
 import { onHand } from '@/lib/inventory/running-balance';
+import { assertCorPoolsNotNegative } from './inbound-gate';
 import { dayKeyUTCFromISO } from '@/lib/time';
 import { computeCorPrefill, coverMonthBounds } from './prefill';
 import {
@@ -237,6 +238,9 @@ export async function assertCorInventoryReconciles(certId: string): Promise<CorR
   const { monthEndAsOf } = coverMonthBounds(row.cover_month.toISOString().slice(0, 10));
   const balance = await onHand(row.site_id, monthEndAsOf);
   const recomputedUnits = balance.total.toNearest(1).toNumber();
+  // ADR-0143 RC3 — finalize/render re-check BOTH pools. A draft prefilled before a
+  // backdated write drove a pool negative must not be filed against it.
+  assertCorPoolsNotNegative(balance);
 
   if (recomputedUnits !== row.inventory_units) {
     log.warn(

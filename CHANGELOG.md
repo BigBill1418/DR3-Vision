@@ -9,6 +9,43 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-10-29 — Negative inventory, permanent fix: built on a branch, NOT deployed (ADR-0143 items 1–8)
+
+Branch `fix/adr0143-negative-inventory` (from `origin/main` `3573f74`). Bill's decisions B1–B5 are recorded in
+ADR-0143. Nothing is pushed, merged or deployed: a deploy rebuilds the app and updates the dock iPads.
+
+- **No raw negative anywhere (D1).** One presenter, `presentOnHand()` (`src/lib/inventory/negative-floor.ts`).
+  `loads-inventory` and the iPad Today hub printed `-247`; they, the count screen and the yard page now go
+  through it. In case 1 (a pool negative, total positive) both pools are withheld and the total is kept (B2).
+  The daily report no longer prints the magnitude in its sentence. A CI scan fails on any page or mail module
+  that renders a pool raw (mutation-checked).
+- **COR checks both pools** at prefill and at finalize (`assertCorPoolsNotNegative`); it checked the total only.
+- **One remedy (D5).** Tile, daily report, iPad and `INV-POOL-NON-NEGATIVE` all read
+  `negativeFloorCopy().remedy`. A pool split now says "a pool adjustment, approved by a second person", never
+  "count" (the floor is mixed, B3). `INV-ANCHOR-FRESH` says a count resets the total, not the split.
+- **Migration `20260870_adr0143_inventory_exceptions` (B5).** `inventory_exceptions`,
+  `inventory_pool_adjustments`, `inventory_position_daily`; a deferred trigger refuses a negative closing with no
+  exception; append-only triggers; four-eyes CHECKs; rollout surface `inventory_exceptions` born pilot.
+- **Sixth leg (D4).** Approved adjustments move units between pools in `computeRunningBalance`; the total cannot
+  change. The positions table is built cumulatively through the same function (equivalence tested on Postgres).
+- **Every writer checks the pools (D2).** `guardPoolsInTx()` in 14 writers, inside their transactions, under the
+  site lock; it never refuses a write (SAVEPOINT). The MyMRC bridges, which run in the standalone scraper, are
+  checked by `/api/internal/inventory/pool-check`, which the workbook-sync daemon now calls every 10 minutes. A
+  CI scan fails on any writer of a leg table without the guard or a reasoned note.
+- **Alerting (D5, B4).** Onset: one `high` page on `dr3-vision-system` with a click to the exception. Seven days
+  open: one more. While open: one line in a daily `default` digest (sent with the invariants run). This
+  replaces the daily `INV-POOL-NON-NEGATIVE` page for a negative that has an exception. Pages are stamped only
+  when they land.
+- **In-app exception page** `/dashboard/[site]/inventory-exceptions[/id]`. It has the legs table, propose /
+  approve / reject for adjustments, and a four-eyes close without an adjustment. Born pilot.
+- **Item 7 (partial).** The daily close shows the program units available to process that day. The written
+  convention is Bill's (OPEN-ITEMS CH-7).
+- **Item 8.** `scripts/propose-woodland-pool-repair.mjs` proposes the R-B row (247 non-program → program, dated
+  10-08) for Bill to approve. Dry run by default. **Not run against production.**
+- **Found in passing, fixed:** OPEN-ITEMS 0.CG still said PR #307 was unmerged; it merged as `d4a5e12` on
+  2026-10-14.
+- **Tests:** see the PR body (unit + Postgres lanes).
+
 ## 2026-10-29 — Negative inventory root cause and permanent-fix plan (ADR-0143, docs only)
 
 - Diagnosis, read-only against prod:

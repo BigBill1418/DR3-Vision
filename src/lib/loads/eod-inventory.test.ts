@@ -77,6 +77,8 @@ vi.mock('@/lib/prisma', () => ({
       aggregate: async () => ({ _max: { production_date: store.flowMax.productionDate } }),
     },
     outboundMaterial: { aggregate: async () => ({ _max: { ship_date: store.flowMax.shipDate } }) },
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: {
       aggregate: async () => ({ _max: { disposal_date: store.flowMax.disposalDate } }),
     },

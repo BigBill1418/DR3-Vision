@@ -51,6 +51,8 @@ vi.mock('@/lib/prisma', () => ({
     processedUnitsDaily: { aggregate: async (): Promise<Agg> => ({ _sum: store.stripped }) },
     // WholeUnitsSold reads renovation-sub-category outbound rows.
     outboundMaterial: { aggregate: async (): Promise<Agg> => ({ _sum: store.wholeUnitsSold }) },
+    // ADR-0143 D4 — the sixth leg; no approved adjustments in this fixture.
+    inventoryPoolAdjustment: { groupBy: async () => [] },
     landfilledUnit: { aggregate: async (): Promise<Agg> => ({ _sum: store.landfilled }) },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
       const tx = {
@@ -549,5 +551,44 @@ describe('onHand — anchor pool attribution (ADR-0037 §3)', () => {
     expect(r.program.toString()).toBe('1000');
     expect(r.nonProgram.toString()).toBe('0');
     expect(r.anchorPool).toBe('legacy');
+  });
+});
+
+// ── ADR-0143 D4 — the sixth leg (T6, pure) ─────────────────────────────────────
+describe('ADR-0143 pool adjustments in the one computation', () => {
+  it('netAdjustments: units leave one pool and enter the other; the pair sums to zero', async () => {
+    const { netAdjustments } = await import('./running-balance');
+    const n = netAdjustments([
+      { from_pool: 'non_program', to_pool: 'program', _sum: { units: new Prisma.Decimal(247) } },
+      { from_pool: 'program', to_pool: 'non_program', _sum: { units: new Prisma.Decimal('10.5') } },
+    ]);
+    expect(n.program.toString()).toBe('236.5');
+    expect(n.nonProgram.toString()).toBe('-236.5');
+    expect(n.program.plus(n.nonProgram).toString()).toBe('0');
+  });
+
+  it('computeRunningBalance: Woodland -247 + an adjustment of 247 → program 0, total unchanged to the unit', async () => {
+    const { computeRunningBalance } = await import('./running-balance');
+    const base = {
+      anchor: { program: 128, nonProgram: 757 },
+      verifiedInbound: { program: 26406, nonProgram: 3057 },
+      dropoffUnits: 243,
+      stripped: { program: 27024, nonProgram: 3170 },
+      wholeUnitsSold: { program: 0, nonProgram: 0 },
+      landfilled: { program: 0, nonProgram: 0 },
+    };
+    const before = computeRunningBalance(base);
+    expect([
+      before.program.toString(),
+      before.nonProgram.toString(),
+      before.total.toString(),
+    ]).toEqual(['-247', '644', '397']);
+    const after = computeRunningBalance({
+      ...base,
+      adjustments: { program: 247, nonProgram: -247 },
+    });
+    expect([after.program.toString(), after.nonProgram.toString(), after.total.toString()]).toEqual(
+      ['0', '397', '397'],
+    );
   });
 });
