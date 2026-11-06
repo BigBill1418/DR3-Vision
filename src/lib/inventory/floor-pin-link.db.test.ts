@@ -208,22 +208,22 @@ describe.skipIf(!REAL_DB)('ADR-0072 Am.2 — floor PIN link (real Postgres)', ()
       expect(hold.status).toBe('pending');
     });
 
-    it('a link to a MANAGER account is a wrong PIN (verifyPin stays operator-only)', async () => {
+    it('a link to a MANAGER account is refused as no_floor_pin (never reaches verifyPin)', async () => {
       await db.user.update({ where: { id: JANETTE_MGR }, data: { floor_user_id: ADMIN } });
       const holdId = await pendingHold(OPERATOR);
-      const { releaseHold, BadPinError } = await import('./anchor-holds');
+      const { releaseHold, NoFloorPinError } = await import('./anchor-holds');
       await expect(
         releaseHold(db, { holdId, approverUserId: JANETTE_MGR, path: 'pin', pin: PIN }),
-      ).rejects.toBeInstanceOf(BadPinError);
+      ).rejects.toBeInstanceOf(NoFloorPinError);
     });
 
-    it('a link to an INACTIVE operator is a wrong PIN', async () => {
+    it('a link to an INACTIVE operator is refused as no_floor_pin', async () => {
       await db.user.update({ where: { id: MORENA_OP }, data: { is_active: false } });
       const holdId = await pendingHold(OPERATOR);
-      const { releaseHold, BadPinError } = await import('./anchor-holds');
+      const { releaseHold, NoFloorPinError } = await import('./anchor-holds');
       await expect(
         releaseHold(db, { holdId, approverUserId: MORENA_MGR, path: 'pin', pin: PIN }),
-      ).rejects.toBeInstanceOf(BadPinError);
+      ).rejects.toBeInstanceOf(NoFloorPinError);
     });
 
     it('wrong PINs lock the LINKED operator account; the right PIN then fails too', async () => {
