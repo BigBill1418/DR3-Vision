@@ -9,6 +9,16 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-06 — floor-PIN link follow-ups: lockout message, link voided on role/site change (ADR-0072 Am.2)
+
+- **Locked-out PIN no longer says "wrong PIN":** when the linked floor account is inside its lockout (5 wrong in
+  60s, 15 min), the hold route answers `423 pin_locked` and the iPad says so (en/es/ur). Still decided only after
+  the self-release and eligibility checks, so it is not a probe.
+- **Stale links are refused at use, not erased:** the link stays when a role or site changes (it is also the
+  "same person" record behind the four-eyes rule, so clearing it would let a person's manager login approve their own
+  count). The iPad PIN path now requires the linked account to still be an active operator at the hold's site;
+  otherwise it answers `no_floor_pin` and verifies nothing.
+
 ## 2026-11-06 — managers approve held counts on the iPad with their floor PIN (ADR-0072 Amendment 2)
 
 - **New, additive migration** `20260871_adr0072_am2_floor_pin_link`: `users.floor_user_id` links a manager account
