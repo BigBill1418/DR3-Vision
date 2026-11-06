@@ -98,6 +98,12 @@ export default async function SiteDashboardPage({ params }: Props) {
   // ADR-0077 Am.1 — the nav names the machine where one exists (Woodland reads
   // "Terex"), and stays generic where it does not. Derived, never hardcoded.
   const machineLabel = await siteMachineLabel(site.id);
+  // ADR-0072 Am.1 — held Tier 2 counts wait for a manager. The link is always
+  // present (it is the only working approval path) and carries the pending
+  // count, so a count waiting on someone is visible from the page managers open.
+  const pendingHolds = await prisma.inventoryCountHold.count({
+    where: { site_id: site.id, status: 'pending' },
+  });
 
   // The full operations picture. Every panel degrades to null on read failure —
   // a site with no data renders cleanly rather than throwing (see ops-overview).
@@ -156,6 +162,11 @@ export default async function SiteDashboardPage({ params }: Props) {
                 testId="dashboard-cor-link"
               />
             )}
+            <NavLink
+              href={`/dashboard/${site.code}/held-counts`}
+              label={pendingHolds > 0 ? `Held counts (${pendingHolds} waiting)` : 'Held counts'}
+              testId="dashboard-held-counts-link"
+            />
             <NavLink
               href={`/dashboard/${site.code}/ops`}
               label="Ops ledger"

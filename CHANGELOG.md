@@ -9,6 +9,21 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-06 — held counts could never be approved: manager Held counts screen (ADR-0072 Amendment 1)
+
+- **Found live:** 4 Tier 2 holds pending at Woodland, none ever approved at any site. The iPad PIN path refuses
+  every manager and admin (`verifyPin` is operator-only and none has a PIN), and the remote route had no screen.
+- **New `/dashboard/<site>/held-counts`:** pending holds with on-record, counted, change, swing %, who entered /
+  counted / confirmed, and the Pacific time. **Approve** (tap + confirm) and **Discard** (reason required) call the
+  existing manager routes. Every refusal is named. Large swings (at least 2× the site threshold) get a red warning;
+  same-day, same-total holds are marked as possible duplicates. Linked from the site dashboard nav (with the pending
+  count) and from the admin anchors page.
+- **iPad:** a 401 `bad_pin` at Approve now says the PIN is wrong (or the manager has no floor PIN) instead of
+  "session expired"; the hold screen names the desktop Held counts page.
+- **Security fix found in passing:** both hold routes now refuse a hold id from another site (404), closing a
+  cross-site discard by id.
+- No change to PIN/auth policy or to the four-eyes rule.
+
 ## 2026-10-29 — CH-13: the same rule on the floor tile, overview card and daily report (ADR-0143)
 
 - **Bill, 2026-10-29:** the CH-12 rule applies wherever the pool split is shown.

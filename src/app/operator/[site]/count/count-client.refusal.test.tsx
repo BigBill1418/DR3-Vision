@@ -190,3 +190,63 @@ describe('what the new branch must NOT swallow', () => {
     expect(screen.queryByTestId('write-refusal')).toBeNull();
   });
 });
+
+describe('ADR-0072 Am.1 — a held count refused at Approve', () => {
+  // 2026-11-06 — every 401 was classified `signed_out`, so a manager whose PIN
+  // was wrong, or who has no floor PIN at all (every manager and admin, the day
+  // this was found), was shown "session expired" and `err_bad_pin` never rendered.
+  const HOLD = {
+    error: 'manager_approval_required',
+    holdId: 'hold-1',
+    priorTotal: 2483,
+    newTotal: 100,
+    swingPct: 96,
+    approvers: [{ id: 'u1', name: 'Rick' }],
+  };
+
+  /** Save → Tier 2 hold; then Approve answers `status` / `body`. */
+  async function approveAnswered(status: number, body: string): Promise<void> {
+    const answers = [
+      new Response(JSON.stringify(HOLD), {
+        status: 422,
+        headers: { 'content-type': 'application/json' },
+      }),
+      new Response(body, { status }),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => answers.shift() as Response),
+    );
+    renderCount();
+    save();
+    await waitFor(() => expect(screen.getByTestId('count-hold')).toBeTruthy());
+    fireEvent.change(screen.getByTestId('hold-approver'), { target: { value: 'u1' } });
+    fireEvent.change(screen.getByTestId('hold-pin'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByTestId('hold-approve'));
+  }
+
+  it('401 bad_pin names the PIN and the desktop path, not an expired session', async () => {
+    await approveAnswered(401, JSON.stringify({ error: 'bad_pin' }));
+    await waitFor(() => expect(document.body.textContent).toContain(en.floor.count.err_bad_pin));
+    expect(screen.queryByTestId('write-refusal')).toBeNull();
+    expect(document.body.textContent).not.toContain(en.auth_login.error_session_expired);
+    // Still on the hold screen, so another manager can try.
+    expect(screen.getByTestId('count-hold')).toBeTruthy();
+  });
+
+  it('a reason-free 401 at Approve is still the dead session', async () => {
+    await approveAnswered(401, 'unauthenticated');
+    await waitFor(() => expect(screen.getByTestId('write-refusal')).toBeTruthy());
+    expect(document.body.textContent).toContain(en.auth_login.error_session_expired);
+    expect(document.body.textContent).not.toContain(en.floor.count.err_bad_pin);
+  });
+
+  it('the hold screen points at the desktop Held counts page', async () => {
+    serverAnswers(422, HOLD);
+    renderCount();
+    save();
+    await waitFor(() => expect(screen.getByTestId('count-hold')).toBeTruthy());
+    expect(document.body.textContent).toContain(en.floor.count.hold_remote_note);
+    expect(en.floor.count.hold_remote_note).toContain('Held counts');
+  });
+});

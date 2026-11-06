@@ -21,6 +21,7 @@ import {
   NotAManagerError,
   SelfReleaseRefusedError,
   discardHold,
+  isHoldAtSite,
   releaseHold,
 } from '@/lib/inventory/anchor-holds';
 import { log } from '@/lib/observability/logger';
@@ -52,12 +53,15 @@ function mapError(e: unknown): Response | null {
   return null;
 }
 
+const notFound = () => NextResponse.json({ error: 'hold_not_found' }, { status: 404 });
+
 export async function POST(_req: Request, { params }: Params) {
   const { site, holdId } = await params;
   const gate = await checkManagerForSite(site);
   if (!gate.ok) return NextResponse.json({ error: 'forbidden' }, { status: gate.status });
 
   try {
+    if (!(await isHoldAtSite(prisma, holdId, gate.ctx.siteId))) return notFound();
     const out = await releaseHold(prisma, {
       holdId,
       approverUserId: gate.ctx.userId,
@@ -88,6 +92,7 @@ export async function DELETE(req: Request, { params }: Params) {
   if (!parsed.success) return NextResponse.json({ error: 'reason_required' }, { status: 422 });
 
   try {
+    if (!(await isHoldAtSite(prisma, holdId, gate.ctx.siteId))) return notFound();
     await discardHold(prisma, {
       holdId,
       userId: gate.ctx.userId,

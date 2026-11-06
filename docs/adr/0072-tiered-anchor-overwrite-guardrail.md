@@ -142,3 +142,66 @@ Cases covered from the real numbers: Woodland 2,483 → 2,150 is Tier 1 (13%);
 swing and IS held; re-entering the identical figure is a zero swing and is Tier 1,
 never held; a **zero prior anchor** is Tier 1 rather than an infinite swing, or a
 site that once counted empty would hold every count forever.
+
+## Amendment 1 — 2026-11-06: no held count could ever be approved
+
+**What broke.** Measured live 2026-11-06: 4 Tier 2 holds pending at Woodland,
+and **zero holds ever approved** at any site. Both release paths were dead:
+
+1. **The iPad PIN path** is the only UI that approved anything. `releaseHold`
+   (`path: 'pin'`) calls `verifyPin`, which refuses any user whose role is not
+   `operator` and any user with no `pin_hash`. Approvers are managers and admins
+   (`eligibleApprovers`), and 0 of 7 managers and 0 of 1 admin had a PIN. Every
+   attempt answered 401 `bad_pin`.
+2. **The iPad then mislabelled that refusal.** `classifyWriteRefusal` maps every
+   401 to `signed_out`, and `approve()` called it before its own `bad_pin`
+   branch, so the floor saw "session expired" and `err_bad_pin` was unreachable.
+3. **The remote path had no screen.** `POST/DELETE /api/manager/<site>/count-holds/<id>`
+   (manager session, no PIN, self-release refused, CAS-safe per ADR-0118) was
+   built with this ADR, and §Consequences leaned on it ("the remote approval path
+   exists so that wait is a phone call") — but nothing in `src` called it. The
+   admin anchors page listed pending holds read-only.
+
+**Why it went unseen.** The guardrail's tests proved the rules (self-release,
+recompute, double release) at the service and route. No test asked whether any
+real approver could reach either path, and a hold that is never approved fails
+silently by design — it writes nothing.
+
+**The fix.**
+
+- **Manager screen `/dashboard/<site>/held-counts`** — lists the site's pending
+  holds (on record then, counted, change and swing %, entered-by / counted-by /
+  confirmed-by, entered time in Pacific) with **Approve** (one tap + confirm) and
+  **Discard** (reason required), calling the existing manager routes. Gated by
+  `checkManagerForSite`, the same guard as the route, with no rollout switch in
+  front of the only working approval path. It shows the count on record now
+  (release re-checks against it) and names every refusal the route can answer
+  (`operator_cannot_self_release`, `not_a_manager`, `hold_not_found`, 409 not
+  pending, 401 signed out). Linked from the site dashboard nav with the pending
+  count, and from the admin anchors page.
+- **Flags, not decisions** (`src/lib/inventory/held-count-review.ts`): a
+  prominent warning when the swing is at least **twice the site's threshold**;
+  and a "possible duplicate" mark when several pending holds share the same
+  Pacific day and total, asking the manager to approve one and discard the rest.
+- **iPad:** a 401 whose body is `bad_pin` is no longer treated as a dead
+  session; a reason-free 401 still is. `err_bad_pin` and `hold_remote_note` now
+  name the desktop "Held counts" page.
+- **Found in passing — cross-site hold ids.** Both hold routes authorized the
+  caller for the URL's site but never checked the hold belonged to it;
+  `discardHold` checks status only, so a user of one site could discard another
+  site's held count by id. `isHoldAtSite` now gates both routes (manager and
+  operator) and a foreign hold answers 404 `hold_not_found`, like a missing one.
+
+**Unchanged on purpose.** PIN and auth policy (`verifyPin` stays operator-only;
+no manager was given a PIN), and the four-eyes rule: the person who entered a
+count still cannot release it, on any path.
+
+**Residual.** A pending hold still raises no alert; a manager learns of it from
+the dashboard link count or the iPad operator. Whether managers should hold a
+floor PIN is a policy question for Bill, not decided here.
+
+**Verification.** Route test through the real `checkManagerForSite` (cross-site
+release and discard both 404 and write nothing — falsified by removing the
+check: 2 red). iPad regression: 401 `bad_pin` renders `err_bad_pin`, a
+reason-free 401 still renders session-expired (falsified by restoring the old
+order: 1 red). Screen, page-gate and flag tests alongside.

@@ -27,6 +27,7 @@ import {
   NotAManagerError,
   SelfReleaseRefusedError,
   discardHold,
+  isHoldAtSite,
   releaseHold,
 } from '@/lib/inventory/anchor-holds';
 
@@ -70,9 +71,12 @@ function mapError(e: unknown): Response | null {
 export async function POST(req: Request, { params }: Params) {
   const { site, holdId } = await params;
   try {
-    await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
+    const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
     const parsed = Release.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ error: 'invalid_input' }, { status: 422 });
+    if (!(await isHoldAtSite(prisma, holdId, ctx.siteId))) {
+      return NextResponse.json({ error: 'hold_not_found' }, { status: 404 });
+    }
 
     const out = await releaseHold(prisma, {
       holdId,
@@ -108,6 +112,9 @@ export async function DELETE(req: Request, { params }: Params) {
     const ctx = await requireActivatedOperator(site, UI_SURFACE.IPAD_COUNT);
     const parsed = Discard.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) return NextResponse.json({ error: 'reason_required' }, { status: 422 });
+    if (!(await isHoldAtSite(prisma, holdId, ctx.siteId))) {
+      return NextResponse.json({ error: 'hold_not_found' }, { status: 404 });
+    }
 
     await discardHold(prisma, {
       holdId,

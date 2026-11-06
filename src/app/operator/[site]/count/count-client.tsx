@@ -251,13 +251,20 @@ export function CountClient({
         // Audit D-8 — a hold released behind an expired session read "Couldn't
         // save" and invited the operator to retype a manager's PIN into a screen
         // that cannot answer. Say which thing is wrong.
-        const refused = classifyWriteRefusal(res.status, b['error']);
+        //
+        // 2026-11-06 (ADR-0072 Am.1) — but a 401 `bad_pin` is NOT a dead session.
+        // The hold route answers a wrong (or absent) manager PIN with 401 and a
+        // named code; the classifier maps every 401 to `signed_out`, so a manager
+        // with no floor PIN was told the operator's session had expired and the
+        // `err_bad_pin` branch below was unreachable. Only a 401 that names no
+        // reason is the session.
+        const code = String(b['error'] ?? '');
+        const refused = code === 'bad_pin' ? null : classifyWriteRefusal(res.status, b['error']);
         if (refused) {
           setRefusal(refused);
           setPin('');
           return;
         }
-        const code = String(b['error'] ?? '');
         // Audit D-9 — the hold screen could become UNESCAPABLE. If the hold had
         // already been released or discarded from a manager's desktop, Approve
         // answered 404 `hold_not_found` and Discard answered 409, and BOTH
