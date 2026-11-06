@@ -459,6 +459,7 @@
       "hold_discarded": "Conteo descartado. No se guardó nada.",
       "err_bad_pin": "Ese PIN no es correcto. Revíselo e intente de nuevo, o apruébelo desde la computadora, en la página \"Held counts\" del panel del sitio.",
       "err_no_floor_pin": "Este gerente no tiene PIN de piso. Apruébelo desde la computadora, en la página \"Held counts\" del panel del sitio.",
+      "err_pin_locked": "Demasiados PIN incorrectos. Este PIN está bloqueado por 15 minutos. Espere, o apruébelo desde la computadora, en la página \"Held counts\" del panel del sitio.",
       "err_self_release": "Usted ingresó este conteo, así que no puede aprobarlo. Tiene que hacerlo un gerente.",
       "err_not_manager": "Esa persona no puede aprobar conteos en este sitio.",
       "void_heading": "Conteos registrados hoy",

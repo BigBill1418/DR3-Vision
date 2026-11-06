@@ -63,6 +63,7 @@ vi.mock('@/lib/prisma', () => ({
               capturedUpdateData.push(data);
               return withSite({ ...existing.row, ...(data as Partial<Row>) });
             }),
+            findMany: vi.fn(async () => []),
           },
           auditLog: { create: vi.fn(async () => ({})) },
         }),

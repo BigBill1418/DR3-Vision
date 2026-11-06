@@ -27,6 +27,7 @@ import {
   HoldNotFoundError,
   HoldNotPendingError,
   NoFloorPinError,
+  PinLockedError,
   NotAManagerError,
   SelfReleaseRefusedError,
   discardHold,
@@ -71,6 +72,12 @@ function mapError(e: unknown): Response | null {
       },
       { status: 403 },
     );
+  }
+  // The linked floor account is locked out after repeated wrong PINs. 423, not
+  // 401 (a bare 401 reads as an expired session) — and only reachable after the
+  // PIN path was already chosen for an eligible approver, so it leaks nothing.
+  if (e instanceof PinLockedError) {
+    return NextResponse.json({ error: 'pin_locked' }, { status: 423 });
   }
   // A wrong PIN is 401 and says nothing about whether the name exists.
   if (e instanceof BadPinError) {

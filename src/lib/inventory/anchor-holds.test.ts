@@ -28,6 +28,7 @@ import {
   HoldNotPendingError,
   NoFloorPinError,
   NotAManagerError,
+  PinLockedError,
   SelfReleaseRefusedError,
   countPendingHolds,
   discardHold,
@@ -349,6 +350,24 @@ describe('ADR-0072 Am.2 — floor PIN via a linked operator account', () => {
       }),
     ).rejects.toBeInstanceOf(BadPinError);
     expect(verifyPin).toHaveBeenCalledWith(MANAGER_FLOOR, 'wrong');
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it('a locked-out floor account is pin_locked, not bad_pin, and writes nothing', async () => {
+    vi.mocked(verifyPin).mockResolvedValueOnce({
+      ok: false,
+      reason: 'locked',
+      locked_until: new Date('2026-11-06T23:59:00Z'),
+    });
+    const db = fakeDb();
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'good',
+      }),
+    ).rejects.toBeInstanceOf(PinLockedError);
     expect(db.updates).toHaveLength(0);
   });
 

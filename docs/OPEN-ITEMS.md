@@ -19,15 +19,18 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.HD — 2026-11-06 managers approve held counts with their floor PIN (ADR-0072 Am.2) — **PR open; Bill merges + deploys, then links**
+## 0.HD — 2026-11-06 managers approve held counts with their floor PIN (ADR-0072 Am.2) — **DEPLOYED (e2db898); Morena + Janette linked 2026-11-06; live iPad approval still unverified**
 
-- **After deploy (Bill):** link each manager who also has a floor operator account, by exact user id, dry run first:
+- **Follow-ups PR (2026-11-06):** locked-out PIN now answers `423 pin_locked` (own message); role/site change clears
+  the link both ways. **Still open:** scan for other people holding both an operator and a manager account (a
+  self-approval by Janette's manager login of her own operator count happened 12:50 PM PST before linking).
+- **Link procedure (done for Woodland; repeat for any other pair):** link each manager who also has a floor operator account, by exact user id, dry run first:
   `docker exec dr3-vision-app node scripts/link-floor-pin.mjs --actor=<admin-id> --manager=<manager-id> --operator=<operator-id>`
   then the same with `--apply`. Woodland: Morena Gomez and Janette Tomas. Read the ids from `users`; never link by name.
 - **Then:** one approval on the Woodland iPad with a linked manager's floor PIN, and confirm the audit row's
   `pin_verified_user_id` names their operator account.
 - **Residual:** linkage correctness rests on the admin; five wrong approval PINs also lock that person's floor
-  sign-in (one PIN, one counter). A pending hold still raises no alert.
+  sign-in (one PIN, one counter) — the iPad now says "locked" instead of "wrong PIN". A pending hold still raises no alert.
 
 ---
 

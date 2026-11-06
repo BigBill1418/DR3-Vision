@@ -289,8 +289,10 @@ export function CountClient({
         setError(
           code === 'bad_pin'
             ? t('floor.count.err_bad_pin')
-            : code === 'no_floor_pin'
-              ? t('floor.count.err_no_floor_pin')
+            : code === 'pin_locked'
+              ? t('floor.count.err_pin_locked')
+              : code === 'no_floor_pin'
+                ? t('floor.count.err_no_floor_pin')
               : code === 'operator_cannot_self_release'
                 ? t('floor.count.err_self_release')
                 : code === 'not_a_manager'

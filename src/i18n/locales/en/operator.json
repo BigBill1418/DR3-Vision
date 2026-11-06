@@ -445,6 +445,7 @@
       "hold_discarded": "Count thrown away. Nothing was saved.",
       "err_bad_pin": "That PIN is not right. Check it and try again, or approve it from the computer on the \"Held counts\" page of the site dashboard.",
       "err_no_floor_pin": "This manager has no floor PIN. Approve it from the desktop instead, on the \"Held counts\" page of the site dashboard.",
+      "err_pin_locked": "Too many wrong PINs. This PIN is locked for 15 minutes. Wait, or approve it from the computer on the \"Held counts\" page of the site dashboard.",
       "err_self_release": "You entered this count, so you cannot approve it. A manager has to.",
       "err_not_manager": "That person cannot approve counts at this site.",
       "void_heading": "Counts entered today",
