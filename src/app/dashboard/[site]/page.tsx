@@ -11,6 +11,7 @@ import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { siteMachineLabel } from '@/lib/equipment/terex-ledger';
 import { getManagerDictionary, translate } from '@/i18n/dictionary';
 import { teamSubmitAccess } from '@/lib/ap/team-submit';
+import { countPendingHolds, heldCountsLabel } from '@/lib/inventory/anchor-holds';
 
 // Operations Dashboard — per-site surface (ADR-0020 tile re-enable, 2026-07-22).
 //
@@ -101,9 +102,8 @@ export default async function SiteDashboardPage({ params }: Props) {
   // ADR-0072 Am.1 — held Tier 2 counts wait for a manager. The link is always
   // present (it is the only working approval path) and carries the pending
   // count, so a count waiting on someone is visible from the page managers open.
-  const pendingHolds = await prisma.inventoryCountHold.count({
-    where: { site_id: site.id, status: 'pending' },
-  });
+  // Am.2: a failed read drops the number from the label, never the dashboard.
+  const pendingHolds = await countPendingHolds(prisma, site.id);
 
   // The full operations picture. Every panel degrades to null on read failure —
   // a site with no data renders cleanly rather than throwing (see ops-overview).
@@ -164,7 +164,7 @@ export default async function SiteDashboardPage({ params }: Props) {
             )}
             <NavLink
               href={`/dashboard/${site.code}/held-counts`}
-              label={pendingHolds > 0 ? `Held counts (${pendingHolds} waiting)` : 'Held counts'}
+              label={heldCountsLabel(pendingHolds)}
               testId="dashboard-held-counts-link"
             />
             <NavLink

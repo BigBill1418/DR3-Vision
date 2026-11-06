@@ -1,7 +1,9 @@
 // ADR-0072 — release or discard a held count FROM THE DEVICE.
 //
 // This is the on-floor path: a manager walks over, picks their name, enters
-// their PIN on the same iPad, and the count writes immediately. It reuses the
+// their PIN on the same iPad, and the count writes immediately. ADR-0072 Am.2:
+// the PIN is the floor PIN of the operator account linked to their manager
+// account (`floor_user_id`); a manager with no link is told to use the desktop. It reuses the
 // existing operator-PIN mechanism — no new login surface, no session change, and
 // the operator's session is never elevated.
 //
@@ -24,6 +26,7 @@ import {
   BadPinError,
   HoldNotFoundError,
   HoldNotPendingError,
+  NoFloorPinError,
   NotAManagerError,
   SelfReleaseRefusedError,
   discardHold,
@@ -54,6 +57,20 @@ function mapError(e: unknown): Response | null {
   }
   if (e instanceof NotAManagerError) {
     return NextResponse.json({ error: 'not_a_manager' }, { status: 403 });
+  }
+  // ADR-0072 Am.2 — the picked manager's account has no linked floor (operator)
+  // account, so no PIN can work here. 403, not 401: the client reads a bare 401
+  // as an expired operator session. Decided before any PIN is verified, so it
+  // reveals nothing about the PIN and burns no lockout attempt.
+  if (e instanceof NoFloorPinError) {
+    return NextResponse.json(
+      {
+        error: 'no_floor_pin',
+        message:
+          'This manager has no floor PIN. Approve from the desktop Held counts page instead.',
+      },
+      { status: 403 },
+    );
   }
   // A wrong PIN is 401 and says nothing about whether the name exists.
   if (e instanceof BadPinError) {

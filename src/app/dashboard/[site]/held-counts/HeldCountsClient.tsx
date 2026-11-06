@@ -66,7 +66,7 @@ export function describeRefusal(
   }
   if (code === 'operator_cannot_self_release') {
     return {
-      text: 'You entered this count yourself, so you cannot approve it. Another manager or an admin must approve it.',
+      text: 'You entered this count yourself (on this login or your floor login), so you cannot approve it. Another manager or an admin must approve it.',
       gone: false,
     };
   }

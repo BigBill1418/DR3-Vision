@@ -289,11 +289,13 @@ export function CountClient({
         setError(
           code === 'bad_pin'
             ? t('floor.count.err_bad_pin')
-            : code === 'operator_cannot_self_release'
-              ? t('floor.count.err_self_release')
-              : code === 'not_a_manager'
-                ? t('floor.count.err_not_manager')
-                : t('floor.common.save_failed'),
+            : code === 'no_floor_pin'
+              ? t('floor.count.err_no_floor_pin')
+              : code === 'operator_cannot_self_release'
+                ? t('floor.count.err_self_release')
+                : code === 'not_a_manager'
+                  ? t('floor.count.err_not_manager')
+                  : t('floor.common.save_failed'),
         );
         setPin('');
         return;

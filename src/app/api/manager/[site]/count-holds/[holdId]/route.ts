@@ -9,7 +9,9 @@
 // `releaseHold` applies the same three checks regardless of path: still pending,
 // eligible approver, and never the operator who entered it. A manager who also
 // happens to have entered the count on the floor cannot release it from their
-// desk either — the rule is about the person, not the surface.
+// desk either — the rule is about the person, not the surface. ADR-0072 Am.2:
+// that includes a count entered under the person's OPERATOR login when their
+// manager account is linked to it (`floor_user_id`).
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -36,7 +38,8 @@ function mapError(e: unknown): Response | null {
     return NextResponse.json(
       {
         error: 'operator_cannot_self_release',
-        message: 'You entered this count. Someone else must approve it.',
+        message:
+          'You entered this count (under this login or your floor login). Someone else must approve it.',
       },
       { status: 403 },
     );

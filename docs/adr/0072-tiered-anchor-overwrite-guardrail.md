@@ -205,3 +205,85 @@ release and discard both 404 and write nothing — falsified by removing the
 check: 2 red). iPad regression: 401 `bad_pin` renders `err_bad_pin`, a
 reason-free 401 still renders session-expired (falsified by restoring the old
 order: 1 red). Screen, page-gate and flag tests alongside.
+
+## Amendment 2 — 2026-11-06: managers approve on the iPad with their own floor PIN
+
+**What broke.** Amendment 1 made held counts approvable from the desktop, but the
+on-device path still could not succeed for anyone: approvers are manager/admin
+accounts, which carry no `pin_hash` (ADR-0016: Entra sign-in), and `verifyPin`
+refuses every non-operator. Two Woodland site managers each hold **two** accounts:
+an operator account with a floor PIN they already use, and a manager account
+without one. The iPad told them their PIN was wrong.
+
+**Decision (Bill, 2026-11-06).** Let a manager approve on the iPad with the floor
+PIN they already know, by **explicitly linking** their manager account to the same
+person's operator account. Keep the desktop Held counts page.
+
+- **Schema** (`20260871_adr0072_am2_floor_pin_link`, additive, clean-replay safe):
+  nullable `users.floor_user_id`, FK to `users.id` `ON DELETE SET NULL`, `UNIQUE`
+  (one operator account backs at most one manager account), `CHECK` no self-link.
+  The migration writes no rows.
+- **Release, PIN path** (`releaseHold`): the PIN is verified with
+  `verifyPin(floor_user_id, pin)`, so the existing per-account sliding-window
+  lockout (5 failures / 60 s → 15 min) lands on the linked operator account. No
+  link → `NoFloorPinError`, answered 403 `no_floor_pin`, and the iPad says
+  _"This manager has no floor PIN; approve from the desktop Held counts page"_
+  (en/es/ur) instead of "wrong PIN". It is decided before any PIN is verified, so
+  it burns no attempt and reveals nothing about a PIN. A link to an account that
+  is not an active operator fails inside `verifyPin` → `bad_pin`. The audit row
+  records `pin_verified_user_id`. The approver of record stays the manager account.
+- **Four-eyes by PERSON, both paths.** The self-release check (still before the
+  PIN) now treats an account, the account it links to and the account linking to
+  it as one person. A count entered under someone's operator login cannot be
+  released by their linked manager account on the iPad **or** from the desktop
+  (`path: 'remote'`), and vice versa. The rule compares `created_by` only, as it
+  did before: `counted_by` / `confirmed_by` are free-text names (ADR-0138), not
+  account ids. The DB `CHECK (approved_by <> created_by)` still guards the
+  account-level case.
+- **Link management:** `scripts/link-floor-pin.mjs`, admin-only (`--actor` must be
+  an active admin and is the audit actor), exact user ids only, dry run by
+  default, `--apply` writes the link and its audit row in one guarded
+  transaction. It refuses different primary sites, a target that is not an active
+  operator with a PIN, an operator already linked, and a manager already linked
+  elsewhere (`--clear` first).
+- **Folded in from the PR #313 review:** `discardHold` is now a guarded
+  `updateMany({ id, status: 'pending' })` with its audit row on the same
+  transaction (the ADR-0118 shape), so a discard can no longer overwrite a hold a
+  manager released a moment earlier (`HoldNotPendingError` instead). The site
+  dashboard's held-count read degrades to the plain "Held counts" label on
+  failure instead of failing the page.
+
+**Unchanged on purpose.** `verifyPin` stays operator-only. No manager gets a
+`pin_hash`. A manager cannot sign in as an operator: the link is consulted only by
+`releaseHold`, and the Credentials sign-in provider is untouched. The approver
+list on the iPad still lists every eligible manager/admin, linked or not.
+
+**Security reasoning.** The PIN proves the same thing it proves for a floor
+action: the person who holds that operator account is present. The link is what
+says that person is also this manager, and it is admin-set, per person, by exact
+id, audited. Without a link nothing changes from Amendment 1.
+
+**Residual risk.**
+
+- The linkage is only as right as the admin who sets it. A wrong link lets one
+  person approve on another manager's name with their own floor PIN. Mitigations:
+  exact ids, same-site check, dry run, audit row, and the release audit names whose
+  PIN was used.
+- The PIN lockout is per **operator** account. Five wrong approval PINs lock that
+  person out of floor sign-in for 15 minutes too, and floor PIN failures count
+  toward approval lockout. Shared on purpose: one PIN, one counter.
+- A floor PIN is a 4-digit secret typed on a shared iPad. Approving with it is no
+  stronger than any other floor action; the desktop path remains the stronger one.
+- A successful approval PIN stamps the operator account's `last_login_at`, as any
+  floor PIN use does.
+- A pending hold still raises no alert (Amendment 1 residual).
+
+**Verification.** Unit (`anchor-holds.test.ts`): PIN verified against the linked
+account, `no_floor_pin` before any PIN check, person-level refusal on both paths
+and from both sides of the link (falsified by restoring the id-only check: 3 red),
+discard CAS (falsified: 1 red), dashboard fallback. Real Postgres
+(`floor-pin-link.db.test.ts`): constraints (UNIQUE, CHECK, SET NULL), real Argon2
+`verifyPin` through the link, operator-only rule through the link, lockout lands
+on the operator row, self-release by person on both paths, discard races (the
+two-discards case falsified against the unguarded update: 2 audit rows), and the
+link script's refusals, dry run and audited apply.
