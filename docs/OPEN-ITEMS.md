@@ -19,6 +19,15 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.HC — 2026-11-06 held counts could never be approved (ADR-0072 Am.1) — **PR open; Bill merges + deploys**
+
+- **After deploy:** a Woodland manager opens `/dashboard/woodland/held-counts` and approves or discards the 4 pending
+  holds. Several may be duplicates of one count; the screen marks same-day, same-total holds.
+- **Residual, no owner yet:** a pending hold raises no alert. Whether managers should carry a floor PIN (so the
+  on-device path works) is Bill's policy call; nothing was changed.
+
+---
+
 ## 0.CH — 2026-10-29 negative inventory, again: root cause + permanent fix (ADR-0143) — **BUILT ON A BRANCH, NOT DEPLOYED; Bill decides deploy + repair**
 
 Bill: _"this can't be a recurring issue - we have tried to make this right way too many times."_ Measured

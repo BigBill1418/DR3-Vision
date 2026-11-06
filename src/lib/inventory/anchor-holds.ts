@@ -295,6 +295,28 @@ export async function releaseHold(
   return { snapshotId, classification };
 }
 
+/**
+ * 2026-11-06 — does this hold belong to the site in the route's URL?
+ *
+ * The routes authorize the caller for the URL's site, but `holdId` is a separate
+ * input. `discardHold` checks status only, so without this a user of one site
+ * could discard another site's held count by putting its id under their own
+ * site's URL. Both release/discard routes call it and answer a foreign hold
+ * exactly like a missing one (404 `hold_not_found`), so the response does not
+ * confirm the id exists elsewhere.
+ */
+export async function isHoldAtSite(
+  db: PrismaClient,
+  holdId: string,
+  siteId: string,
+): Promise<boolean> {
+  const row = await db.inventoryCountHold.findUnique({
+    where: { id: holdId },
+    select: { site_id: true },
+  });
+  return row?.site_id === siteId;
+}
+
 /** Explicitly abandon a held count. Nothing is written to inventory. */
 export async function discardHold(
   db: PrismaClient,

@@ -139,7 +139,8 @@ export default async function AnchorsPage() {
           <section className="mt-6">
             <h2 className="text-lg font-semibold">Counts waiting for a manager</h2>
             <p className="mt-1 text-sm text-dr3-mist-dim">
-              Entered on the floor and held. Nothing has been written to inventory.
+              Entered on the floor and held. Nothing has been written to inventory. Open a site to
+              approve or discard its held counts.
             </p>
             <div className="mt-3 overflow-x-auto rounded-lg ring-1 ring-amber-500/30">
               <table className="w-full min-w-[640px] text-left text-sm">
@@ -155,7 +156,12 @@ export default async function AnchorsPage() {
                 <tbody>
                   {holds.map((h) => (
                     <tr key={h.id} className="border-t border-amber-500/20" data-testid="hold-row">
-                      <td className="px-3 py-2">{h.site.name}</td>
+                      <td className="px-3 py-2">
+                        {/* ADR-0072 Am.1 — approve or discard on the site's held-count screen. */}
+                        <Link href={`/dashboard/${h.site.code}/held-counts`} className="underline">
+                          {h.site.name}
+                        </Link>
+                      </td>
                       <td className="px-3 py-2 text-xs text-dr3-mist-dim">
                         {pacific(h.created_at)}
                       </td>
