@@ -16,6 +16,9 @@
 // The rule neither path can bend: **the operator who entered the count can never
 // release it.** That is enforced three times over — here, in the route, and by a
 // CHECK constraint in the database — because it is the whole point of the tier.
+// ADR-0072 Am.2: "operator" means the PERSON. A manager account linked to the
+// creator's operator account (`floor_user_id`) is the same person and is refused
+// on both paths; the DB CHECK still guards the account-level case.
 //
 // ── The swing is RECOMPUTED at release ──────────────────────────────────────
 // The hold stores the swing that caused it, but approval does not trust it. The
@@ -24,6 +27,7 @@
 // becomes theatre. Release recomputes from live state and re-checks the tier.
 
 import type { PrismaClient } from '@prisma/client';
+import { log } from '@/lib/observability/logger';
 import { verifyPin } from '@/lib/pin-service';
 import { reconcilePhysicalCount } from '@/lib/inventory/running-balance';
 import { pacificDayISO, pacificMidnightInstantOfDayISO } from '@/lib/time';
@@ -49,6 +53,14 @@ export class BadPinError extends Error {
 }
 export class HoldNotPendingError extends Error {
   override readonly name = 'HoldNotPendingError';
+}
+/**
+ * ADR-0072 Am.2 — the approver picked on the iPad has no floor PIN: their manager
+ * account is not linked to an operator account. Distinct from `BadPinError` so the
+ * device can send them to the desktop instead of implying they mistyped.
+ */
+export class NoFloorPinError extends Error {
+  override readonly name = 'NoFloorPinError';
 }
 
 export interface HeldCountInput {
@@ -148,6 +160,39 @@ async function assertEligible(db: PrismaClient, userId: string, siteId: string):
 }
 
 /**
+ * ADR-0072 Am.2 — the four-eyes rule is about the PERSON, not the account.
+ *
+ * A person may hold a manager account linked (`floor_user_id`) to their own
+ * operator account. Each account's person is itself, the account it links to, and
+ * the account that links to it. Returns the approver's floor link alongside, since
+ * the same rows answer both questions in one read.
+ */
+async function personLinks(
+  db: PrismaClient,
+  creatorId: string,
+  approverId: string,
+): Promise<{ samePerson: boolean; approverFloorUserId: string | null }> {
+  const ids = [creatorId, approverId];
+  const rows = await db.user.findMany({
+    where: { OR: [{ id: { in: ids } }, { floor_user_id: { in: ids } }] },
+    select: { id: true, floor_user_id: true },
+  });
+  const person = (id: string): Set<string> => {
+    const s = new Set([id]);
+    for (const r of rows) {
+      if (r.id === id && r.floor_user_id) s.add(r.floor_user_id);
+      if (r.floor_user_id === id) s.add(r.id);
+    }
+    return s;
+  };
+  const creator = person(creatorId);
+  return {
+    samePerson: [...person(approverId)].some((id) => creator.has(id)),
+    approverFloorUserId: rows.find((r) => r.id === approverId)?.floor_user_id ?? null,
+  };
+}
+
+/**
  * Release a held count and write the anchor.
  *
  * `path` is recorded, not trusted — both paths land here and both are subject to
@@ -160,7 +205,10 @@ export async function releaseHold(
     holdId: string;
     approverUserId: string;
     path: 'pin' | 'remote';
-    /** Required for the on-device path; verified against `approverUserId`. */
+    /**
+     * Required for the on-device path; verified against the approver's linked
+     * operator account (`floor_user_id`, ADR-0072 Am.2).
+     */
     pin?: string;
   },
 ): Promise<{ snapshotId: string; classification: AnchorClassification }> {
@@ -169,16 +217,27 @@ export async function releaseHold(
   if (hold.status !== 'pending') throw new HoldNotPendingError(`hold_${hold.status}`);
 
   // The rule the whole tier exists for. Checked BEFORE the PIN so a self-release
-  // attempt cannot be used to probe whether a PIN is right.
-  if (hold.created_by === args.approverUserId) {
+  // attempt cannot be used to probe whether a PIN is right. ADR-0072 Am.2: by
+  // PERSON — a count entered under someone's operator login cannot be released by
+  // their linked manager account, on the iPad or from the desktop.
+  const links = await personLinks(db, hold.created_by, args.approverUserId);
+  if (links.samePerson) {
     throw new SelfReleaseRefusedError('operator_cannot_self_release');
   }
   await assertEligible(db, args.approverUserId, hold.site_id);
 
+  // ADR-0072 Am.2 — managers have no PIN of their own. The PIN typed on the iPad
+  // is the one on the person's LINKED operator account, verified there, so that
+  // account's sliding-window lockout applies. `verifyPin` itself refuses a link
+  // that points at a non-operator or inactive account (→ bad_pin). No link: the
+  // device says so instead of "wrong PIN", and nothing is verified or counted.
+  let pinVerifiedAs: string | null = null;
   if (args.path === 'pin') {
+    if (!links.approverFloorUserId) throw new NoFloorPinError('no_floor_pin');
     if (!args.pin) throw new BadPinError('pin_required');
-    const res = await verifyPin(args.approverUserId, args.pin);
+    const res = await verifyPin(links.approverFloorUserId, args.pin);
     if (res.ok !== true) throw new BadPinError('bad_pin');
+    pinVerifiedAs = links.approverFloorUserId;
   }
 
   // Recompute against LIVE state — the anchor may have moved since the hold.
@@ -275,6 +334,9 @@ export async function releaseHold(
           released: true,
           approval_path: args.path,
           approver_user_id: args.approverUserId,
+          // ADR-0072 Am.2 — whose PIN was checked (the approver's linked operator
+          // account); null on the remote path.
+          pin_verified_user_id: pinVerifiedAs,
           operator_user_id: hold.created_by,
           // The swing AS WRITTEN, which may differ from the one that caused the
           // hold if the anchor moved in between.
@@ -326,22 +388,54 @@ export async function discardHold(
   if (!hold) throw new HoldNotFoundError('hold_not_found');
   if (hold.status !== 'pending') throw new HoldNotPendingError(`hold_${hold.status}`);
 
-  await db.inventoryCountHold.update({
-    where: { id: hold.id },
-    data: {
-      status: 'discarded',
-      discarded_by: args.userId,
-      discarded_at: new Date(),
-      discard_reason: args.reason,
-    },
+  // ADR-0072 Am.2 (PR #313 review) — the same CAS-first shape as the ADR-0118
+  // release. The unconditional `update` this replaces could overwrite a hold a
+  // manager released between the read above and here: the hold read `discarded`
+  // while its anchor stood. The guarded `updateMany` is the gate; the audit row
+  // commits with it or not at all.
+  await db.$transaction(async (tx) => {
+    const { count } = await tx.inventoryCountHold.updateMany({
+      where: { id: hold.id, status: 'pending' },
+      data: {
+        status: 'discarded',
+        discarded_by: args.userId,
+        discarded_at: new Date(),
+        discard_reason: args.reason,
+      },
+    });
+    if (count === 0) {
+      const row = await tx.inventoryCountHold.findUniqueOrThrow({
+        where: { id: hold.id },
+        select: { status: true },
+      });
+      throw new HoldNotPendingError(`hold_${row.status}`);
+    }
+    await tx.auditLog.create({
+      data: {
+        actor_user_id: args.userId,
+        action: 'update',
+        table_name: 'inventory_count_holds',
+        row_id: hold.id,
+        after: { discarded: true, reason: args.reason },
+      },
+    });
   });
-  await db.auditLog.create({
-    data: {
-      actor_user_id: args.userId,
-      action: 'update',
-      table_name: 'inventory_count_holds',
-      row_id: hold.id,
-      after: { discarded: true, reason: args.reason },
-    },
-  });
+}
+
+/**
+ * ADR-0072 Am.2 (PR #313 review) — pending holds at a site for the dashboard link,
+ * or null when the read fails. The link is the working approval path; a failed
+ * count must cost the number in its label, never the dashboard.
+ */
+export async function countPendingHolds(db: PrismaClient, siteId: string): Promise<number | null> {
+  try {
+    return await db.inventoryCountHold.count({ where: { site_id: siteId, status: 'pending' } });
+  } catch (err) {
+    log.warn({ err, siteId }, '[anchor-hold] pending hold count failed; link shown without it');
+    return null;
+  }
+}
+
+export function heldCountsLabel(pending: number | null): string {
+  return pending ? `Held counts (${pending} waiting)` : 'Held counts';
 }

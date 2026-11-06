@@ -26,9 +26,12 @@ import { reconcilePhysicalCount } from '@/lib/inventory/running-balance';
 import {
   BadPinError,
   HoldNotPendingError,
+  NoFloorPinError,
   NotAManagerError,
   SelfReleaseRefusedError,
+  countPendingHolds,
   discardHold,
+  heldCountsLabel,
   releaseHold,
 } from './anchor-holds';
 
@@ -36,8 +39,13 @@ const OPERATOR = 'user-operator';
 const MANAGER = 'user-manager';
 const OUTSIDER = 'user-outsider';
 const SITE = 'site-woodland';
+/** ADR-0072 Am.2 — MANAGER's own operator account, the one that carries the PIN. */
+const MANAGER_FLOOR = 'user-manager-floor';
 
-function fakeDb(over: Partial<Record<string, unknown>> = {}) {
+type LinkRow = { id: string; floor_user_id: string | null };
+const DEFAULT_LINKS: LinkRow[] = [{ id: MANAGER, floor_user_id: MANAGER_FLOOR }];
+
+function fakeDb(over: Partial<Record<string, unknown>> = {}, links: LinkRow[] = DEFAULT_LINKS) {
   const hold = {
     id: 'hold-1',
     site_id: SITE,
@@ -89,7 +97,19 @@ function fakeDb(over: Partial<Record<string, unknown>> = {}) {
       },
     },
     user: {
-      findMany: async () => [{ id: MANAGER, name: 'Morena Gomez' }],
+      // Two reads share this: the eligible-approver list, and the ADR-0072 Am.2
+      // person-link read, which is the only one that filters on `floor_user_id`.
+      // The link read is evaluated against `links` the way Postgres would.
+      findMany: async (a: { where: Record<string, unknown> }) => {
+        if (!JSON.stringify(a.where).includes('floor_user_id')) {
+          return [{ id: MANAGER, name: 'Morena Gomez' }];
+        }
+        const or = a.where['OR'] as Array<Record<string, { in: string[] }>>;
+        const ids = or.find((c) => 'id' in c)!['id']!.in;
+        return links.filter(
+          (r) => ids.includes(r.id) || (r.floor_user_id !== null && ids.includes(r.floor_user_id)),
+        );
+      },
     },
     siteInventorySnapshot: {
       findFirst: async () => ({
@@ -273,6 +293,130 @@ describe('releaseHold', () => {
   });
 });
 
+describe('ADR-0072 Am.2 — floor PIN via a linked operator account', () => {
+  it('verifies the PIN against the LINKED operator account, and audits whose PIN it was', async () => {
+    const db = fakeDb();
+    await releaseHold(db as never, {
+      holdId: 'hold-1',
+      approverUserId: MANAGER,
+      path: 'pin',
+      pin: 'good',
+    });
+    expect(verifyPin).toHaveBeenCalledTimes(1);
+    expect(verifyPin).toHaveBeenCalledWith(MANAGER_FLOOR, 'good');
+    // The approver of record is still the manager account, not the floor one.
+    expect(db.updates[0]!['approved_by']).toBe(MANAGER);
+    const after = db.audits[0]!['after'] as Record<string, unknown>;
+    expect(after['approver_user_id']).toBe(MANAGER);
+    expect(after['pin_verified_user_id']).toBe(MANAGER_FLOOR);
+  });
+
+  it('a manager with NO link gets no_floor_pin, before any PIN is verified', async () => {
+    const db = fakeDb({}, []);
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'good',
+      }),
+    ).rejects.toBeInstanceOf(NoFloorPinError);
+    expect(verifyPin).not.toHaveBeenCalled();
+    expect(reconcilePhysicalCount).not.toHaveBeenCalled();
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it('an unlinked manager can still release REMOTELY (the desktop path needs no PIN)', async () => {
+    const db = fakeDb({}, []);
+    const out = await releaseHold(db as never, {
+      holdId: 'hold-1',
+      approverUserId: MANAGER,
+      path: 'remote',
+    });
+    expect(out.snapshotId).toBe('snap-new');
+    const after = db.audits[0]!['after'] as Record<string, unknown>;
+    expect(after['pin_verified_user_id']).toBeNull();
+  });
+
+  it('a wrong floor PIN is bad_pin and writes nothing', async () => {
+    const db = fakeDb();
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'wrong',
+      }),
+    ).rejects.toBeInstanceOf(BadPinError);
+    expect(verifyPin).toHaveBeenCalledWith(MANAGER_FLOOR, 'wrong');
+    expect(db.updates).toHaveLength(0);
+  });
+
+  // ── Four-eyes by PERSON ────────────────────────────────────────────────────
+  // Morena counts on her operator login; Morena's manager login must not release
+  // it. Refused before the PIN, so the refusal is not a PIN oracle.
+  it('PIN path: refuses the manager account linked to the operator who ENTERED it', async () => {
+    const db = fakeDb({ created_by: MANAGER_FLOOR });
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'good',
+      }),
+    ).rejects.toBeInstanceOf(SelfReleaseRefusedError);
+    expect(verifyPin).not.toHaveBeenCalled();
+    expect(reconcilePhysicalCount).not.toHaveBeenCalled();
+  });
+
+  it('remote path: the same person cannot release it from the desktop either', async () => {
+    const db = fakeDb({ created_by: MANAGER_FLOOR });
+    await expect(
+      releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' }),
+    ).rejects.toBeInstanceOf(SelfReleaseRefusedError);
+    expect(reconcilePhysicalCount).not.toHaveBeenCalled();
+  });
+
+  it('the link is found from the CREATOR side too (the approver row alone is not trusted)', async () => {
+    // The person-link read returns rows matching either id or either link, so a
+    // creator who is the TARGET of a link is matched even when the read is keyed
+    // on the creator. Same refusal, both paths.
+    for (const path of ['pin', 'remote'] as const) {
+      const db = fakeDb({ created_by: OPERATOR }, [{ id: MANAGER, floor_user_id: OPERATOR }]);
+      await expect(
+        releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path, pin: 'good' }),
+      ).rejects.toBeInstanceOf(SelfReleaseRefusedError);
+    }
+    expect(verifyPin).not.toHaveBeenCalled();
+  });
+
+  it('a count entered on the MANAGER login cannot be released with that person’s floor PIN', async () => {
+    const db = fakeDb({ created_by: MANAGER });
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'good',
+      }),
+    ).rejects.toBeInstanceOf(SelfReleaseRefusedError);
+    expect(verifyPin).not.toHaveBeenCalled();
+  });
+
+  it('a DIFFERENT linked person may release an operator’s count', async () => {
+    // Someone else's link must not trip the rule: OPERATOR is unlinked, MANAGER is
+    // linked to MANAGER_FLOOR.
+    const db = fakeDb({ created_by: OPERATOR });
+    const out = await releaseHold(db as never, {
+      holdId: 'hold-1',
+      approverUserId: MANAGER,
+      path: 'pin',
+      pin: 'good',
+    });
+    expect(out.snapshotId).toBe('snap-new');
+  });
+});
+
 describe('discardHold', () => {
   it('records who and why, and writes nothing to inventory', async () => {
     const db = fakeDb();
@@ -291,5 +435,54 @@ describe('discardHold', () => {
     await expect(
       discardHold(db as never, { holdId: 'hold-1', userId: OPERATOR, reason: 'x' }),
     ).rejects.toBeInstanceOf(HoldNotPendingError);
+  });
+});
+
+describe('discardHold — ADR-0072 Am.2 CAS (PR #313 review)', () => {
+  it('a release that lands between the read and the write wins; discard writes nothing', async () => {
+    const db = fakeDb();
+    // The pre-read sees `pending`; by the time the guarded write runs, a manager
+    // has released it.
+    const pendingCopy = { ...db.hold };
+    db.inventoryCountHold.findUnique = async () => pendingCopy;
+    (db.hold as Record<string, unknown>)['status'] = 'approved';
+    await expect(
+      discardHold(db as never, { holdId: 'hold-1', userId: OPERATOR, reason: 'x' }),
+    ).rejects.toThrow('hold_approved');
+    expect(db.updates).toHaveLength(0);
+    expect(db.audits).toHaveLength(0);
+  });
+
+  it('writes the status and its audit row on ONE transaction', async () => {
+    const db = fakeDb();
+    const tx = vi.spyOn(db, '$transaction');
+    await discardHold(db as never, { holdId: 'hold-1', userId: OPERATOR, reason: 'typo' });
+    expect(tx).toHaveBeenCalledTimes(1);
+    expect(db.updates).toHaveLength(1);
+    expect(db.audits).toHaveLength(1);
+  });
+});
+
+describe('countPendingHolds / heldCountsLabel — the dashboard link degrades', () => {
+  it('returns the count when the read works', async () => {
+    const db = { inventoryCountHold: { count: async () => 3 } };
+    expect(await countPendingHolds(db as never, SITE)).toBe(3);
+  });
+
+  it('returns null instead of throwing when the read fails', async () => {
+    const db = {
+      inventoryCountHold: {
+        count: async () => {
+          throw new Error('connection reset');
+        },
+      },
+    };
+    expect(await countPendingHolds(db as never, SITE)).toBeNull();
+  });
+
+  it('labels the link, falling back to the plain label', () => {
+    expect(heldCountsLabel(2)).toBe('Held counts (2 waiting)');
+    expect(heldCountsLabel(0)).toBe('Held counts');
+    expect(heldCountsLabel(null)).toBe('Held counts');
   });
 });

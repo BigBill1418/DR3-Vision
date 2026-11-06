@@ -9,6 +9,20 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-06 — managers approve held counts on the iPad with their floor PIN (ADR-0072 Amendment 2)
+
+- **New, additive migration** `20260871_adr0072_am2_floor_pin_link`: `users.floor_user_id` links a manager account
+  to the same person's operator account (FK, `ON DELETE SET NULL`, unique, no self-link). No rows written.
+- **iPad approval:** the PIN is checked against the linked operator account, so its lockout applies. A manager with
+  no link now sees "This manager has no floor PIN; approve from the desktop Held counts page" (en/es/ur), not
+  "wrong PIN". `verifyPin` stays operator-only; no manager gets a PIN; sign-in is unchanged.
+- **Four-eyes by person:** a count entered on someone's operator login cannot be approved from their linked manager
+  login, on the iPad or the desktop, and the reverse. Checked before the PIN.
+- **Admin script** `scripts/link-floor-pin.mjs` sets or clears a link by exact user ids, dry run by default, audited,
+  refusing different sites or a non-operator target.
+- **From the #313 review:** discarding a hold is now a guarded, audited, single-transaction write (a discard can no
+  longer overwrite a release), and the dashboard's held-count number fails soft to the plain "Held counts" label.
+
 ## 2026-11-06 — held counts could never be approved: manager Held counts screen (ADR-0072 Amendment 1)
 
 - **Found live:** 4 Tier 2 holds pending at Woodland, none ever approved at any site. The iPad PIN path refuses

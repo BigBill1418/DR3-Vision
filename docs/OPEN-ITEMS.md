@@ -19,12 +19,24 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.HD — 2026-11-06 managers approve held counts with their floor PIN (ADR-0072 Am.2) — **PR open; Bill merges + deploys, then links**
+
+- **After deploy (Bill):** link each manager who also has a floor operator account, by exact user id, dry run first:
+  `docker exec dr3-vision-app node scripts/link-floor-pin.mjs --actor=<admin-id> --manager=<manager-id> --operator=<operator-id>`
+  then the same with `--apply`. Woodland: Morena Gomez and Janette Tomas. Read the ids from `users`; never link by name.
+- **Then:** one approval on the Woodland iPad with a linked manager's floor PIN, and confirm the audit row's
+  `pin_verified_user_id` names their operator account.
+- **Residual:** linkage correctness rests on the admin; five wrong approval PINs also lock that person's floor
+  sign-in (one PIN, one counter). A pending hold still raises no alert.
+
+---
+
 ## 0.HC — 2026-11-06 held counts could never be approved (ADR-0072 Am.1) — **PR open; Bill merges + deploys**
 
 - **After deploy:** a Woodland manager opens `/dashboard/woodland/held-counts` and approves or discards the 4 pending
   holds. Several may be duplicates of one count; the screen marks same-day, same-total holds.
-- **Residual, no owner yet:** a pending hold raises no alert. Whether managers should carry a floor PIN (so the
-  on-device path works) is Bill's policy call; nothing was changed.
+- **Residual, no owner yet:** a pending hold raises no alert. The floor-PIN question was decided by Bill on
+  2026-11-06: link the manager account to the person's operator account (see 0.HD, ADR-0072 Am.2).
 
 ---
 

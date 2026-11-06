@@ -454,6 +454,14 @@ model User {
   // is_super_admin demotion via raw SQL MUST also set this (see ADR-0053 D2).
   sessions_invalidated_at DateTime? @db.Timestamptz
 
+  // ADR-0072 Amendment 2 — on a MANAGER/admin row, the same person's OPERATOR row.
+  // A held count released on the iPad verifies the PIN against this operator row
+  // (its lockout applies), and the four-eyes rule treats both rows as one person.
+  // Set only by an admin via `scripts/link-floor-pin.mjs`; never grants sign-in.
+  floor_user_id  String? @unique
+  floor_user     User?   @relation("FloorPinLink", fields: [floor_user_id], references: [id], onDelete: SetNull)
+  linked_manager User?   @relation("FloorPinLink")
+
   // Relations
   loads_assigned                 InboundLoad[]       @relation("LoadAssignedOperator")
   loads_submitted                InboundLoad[]       @relation("LoadSubmittedBy")

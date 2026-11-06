@@ -234,6 +234,17 @@ describe('ADR-0072 Am.1 — a held count refused at Approve', () => {
     expect(screen.getByTestId('count-hold')).toBeTruthy();
   });
 
+  it('ADR-0072 Am.2 — 403 no_floor_pin says this manager has no floor PIN, not "wrong PIN"', async () => {
+    await approveAnswered(403, JSON.stringify({ error: 'no_floor_pin' }));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(en.floor.count.err_no_floor_pin),
+    );
+    expect(document.body.textContent).not.toContain(en.floor.count.err_bad_pin);
+    expect(screen.queryByTestId('write-refusal')).toBeNull();
+    // Still on the hold screen, so a linked manager can approve instead.
+    expect(screen.getByTestId('count-hold')).toBeTruthy();
+  });
+
   it('a reason-free 401 at Approve is still the dead session', async () => {
     await approveAnswered(401, 'unauthenticated');
     await waitFor(() => expect(screen.getByTestId('write-refusal')).toBeTruthy());
