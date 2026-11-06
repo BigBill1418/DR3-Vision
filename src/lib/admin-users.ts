@@ -445,16 +445,6 @@ export async function updateUser(
     data.sessions_invalidated_at = new Date();
   }
 
-  // ADR-0072 Am.2 — a manager↔floor link is only valid between an operator and a
-  // manager/admin at the SAME site. A role or site change on either end voids
-  // it, so clear it in the same update rather than leave a link `verifyPin`
-  // would refuse (or, across sites, one it should never have honoured). Both
-  // directions: this account's own link, and any account linking TO it.
-  const siteChanged =
-    input.primary_site_id !== undefined && input.primary_site_id !== existing.primary_site_id;
-  const voidsLink = roleChanged || siteChanged;
-  if (voidsLink && existing.floor_user_id) data.floor_user = { disconnect: true };
-
   const updated = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
       where: { id },
@@ -473,27 +463,6 @@ export async function updateUser(
         user_agent: actor.userAgent,
       },
     });
-    if (voidsLink) {
-      const inbound = await tx.user.findMany({
-        where: { floor_user_id: id },
-        select: { id: true },
-      });
-      for (const { id: managerId } of inbound) {
-        await tx.user.update({ where: { id: managerId }, data: { floor_user_id: null } });
-        await tx.auditLog.create({
-          data: {
-            actor_user_id: actor.actorUserId,
-            action: 'update' satisfies AuditAction,
-            table_name: 'users',
-            row_id: managerId,
-            before: serializeForAudit({ floor_user_id: id }),
-            after: serializeForAudit({ floor_user_id: null }),
-            ip: actor.ip,
-            user_agent: actor.userAgent,
-          },
-        });
-      }
-    }
     return u;
   });
 
@@ -636,9 +605,7 @@ export async function getUser(id: string): Promise<AdminUserDto | null> {
 // Date instances aren't JSON-serializable through Prisma's input
 // type, but `JSON.parse(JSON.stringify(...))` ISO-stringifies them,
 // matching the `audit.ts` behavior.
-function serializeForAudit(
-  v: ScrubbedUser | { floor_user_id: string | null },
-): Prisma.InputJsonValue {
+function serializeForAudit(v: ScrubbedUser): Prisma.InputJsonValue {
   // Defensive: confirm at runtime that nobody dropped pin_hash back
   // in via a future refactor. We also reject `password_hash` even
   // though the column was dropped in Sprint-2 — if a future change

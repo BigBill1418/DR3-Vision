@@ -228,11 +228,12 @@ describe.skipIf(!REAL_DB)('ADR-0072 Am.2 — floor PIN link (real Postgres)', ()
 
     it('wrong PINs lock the LINKED operator account; the right PIN then fails too', async () => {
       const holdId = await pendingHold(OPERATOR);
-      const { releaseHold, BadPinError } = await import('./anchor-holds');
+      const { releaseHold, BadPinError, PinLockedError } = await import('./anchor-holds');
+      // Four wrong PINs read as wrong; the fifth trips the lockout and says so.
       for (let i = 0; i < 5; i++) {
         await expect(
           releaseHold(db, { holdId, approverUserId: MORENA_MGR, path: 'pin', pin: '9157' }),
-        ).rejects.toBeInstanceOf(BadPinError);
+        ).rejects.toBeInstanceOf(i < 4 ? BadPinError : PinLockedError);
       }
       const op = await db.user.findUnique({ where: { id: MORENA_OP } });
       expect(op.pin_locked_until).not.toBeNull();
@@ -243,7 +244,7 @@ describe.skipIf(!REAL_DB)('ADR-0072 Am.2 — floor PIN link (real Postgres)', ()
       expect(mgr.pin_hash).toBeNull();
       await expect(
         releaseHold(db, { holdId, approverUserId: MORENA_MGR, path: 'pin', pin: PIN }),
-      ).rejects.toBeInstanceOf(BadPinError);
+      ).rejects.toBeInstanceOf(PinLockedError);
       const hold = await db.inventoryCountHold.findUnique({ where: { id: holdId } });
       expect(hold.status).toBe('pending');
     });

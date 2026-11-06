@@ -242,6 +242,23 @@ export async function releaseHold(
   let pinVerifiedAs: string | null = null;
   if (args.path === 'pin') {
     if (!links.approverFloorUserId) throw new NoFloorPinError('no_floor_pin');
+    // The link is kept when an account's role or site changes (it is also the
+    // "same person" record the four-eyes check reads), so it is validated HERE,
+    // at use: the linked account must still be an active operator at THIS hold's
+    // site. A stale or cross-site link reads as "no floor PIN" and verifies nothing.
+    const floor = await db.user.findUnique({
+      where: { id: links.approverFloorUserId },
+      select: { role: true, is_active: true, deleted_at: true, primary_site_id: true },
+    });
+    if (
+      !floor ||
+      floor.role !== 'operator' ||
+      !floor.is_active ||
+      floor.deleted_at !== null ||
+      floor.primary_site_id !== hold.site_id
+    ) {
+      throw new NoFloorPinError('no_floor_pin');
+    }
     if (!args.pin) throw new BadPinError('pin_required');
     const res = await verifyPin(links.approverFloorUserId, args.pin);
     if (res.ok !== true) {

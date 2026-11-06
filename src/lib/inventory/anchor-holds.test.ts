@@ -46,7 +46,24 @@ const MANAGER_FLOOR = 'user-manager-floor';
 type LinkRow = { id: string; floor_user_id: string | null };
 const DEFAULT_LINKS: LinkRow[] = [{ id: MANAGER, floor_user_id: MANAGER_FLOOR }];
 
-function fakeDb(over: Partial<Record<string, unknown>> = {}, links: LinkRow[] = DEFAULT_LINKS) {
+type FloorRow = {
+  role: string;
+  is_active: boolean;
+  deleted_at: Date | null;
+  primary_site_id: string | null;
+};
+const GOOD_FLOOR: FloorRow = {
+  role: 'operator',
+  is_active: true,
+  deleted_at: null,
+  primary_site_id: SITE,
+};
+
+function fakeDb(
+  over: Partial<Record<string, unknown>> = {},
+  links: LinkRow[] = DEFAULT_LINKS,
+  floor: FloorRow | null = GOOD_FLOOR,
+) {
   const hold = {
     id: 'hold-1',
     site_id: SITE,
@@ -98,6 +115,9 @@ function fakeDb(over: Partial<Record<string, unknown>> = {}, links: LinkRow[] = 
       },
     },
     user: {
+      // The linked floor account, read to confirm it is still an active operator
+      // at the hold's site (the link outlives role/site changes).
+      findUnique: async () => floor,
       // Two reads share this: the eligible-approver list, and the ADR-0072 Am.2
       // person-link read, which is the only one that filters on `floor_user_id`.
       // The link read is evaluated against `links` the way Postgres would.
@@ -351,6 +371,37 @@ describe('ADR-0072 Am.2 — floor PIN via a linked operator account', () => {
     ).rejects.toBeInstanceOf(BadPinError);
     expect(verifyPin).toHaveBeenCalledWith(MANAGER_FLOOR, 'wrong');
     expect(db.updates).toHaveLength(0);
+  });
+
+  it.each([
+    ['moved to another site', { ...GOOD_FLOOR, primary_site_id: 'site-eugene' }],
+    ['promoted off the operator role', { ...GOOD_FLOOR, role: 'manager' }],
+    ['deactivated', { ...GOOD_FLOOR, is_active: false }],
+    ['deleted', { ...GOOD_FLOOR, deleted_at: new Date('2026-11-01T00:00:00Z') }],
+  ])('a linked floor account that was %s is no_floor_pin and no PIN is checked', async (_n, row) => {
+    const db = fakeDb({}, DEFAULT_LINKS, row);
+    await expect(
+      releaseHold(db as never, {
+        holdId: 'hold-1',
+        approverUserId: MANAGER,
+        path: 'pin',
+        pin: 'good',
+      }),
+    ).rejects.toBeInstanceOf(NoFloorPinError);
+    expect(verifyPin).not.toHaveBeenCalled();
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it('a stale link does NOT dissolve the same-person rule', async () => {
+    // Even with the floor account moved away, the person that entered the count
+    // is still the person on the manager login: the self-release refusal stands.
+    const db = fakeDb({ created_by: MANAGER_FLOOR }, DEFAULT_LINKS, {
+      ...GOOD_FLOOR,
+      primary_site_id: 'site-eugene',
+    });
+    await expect(
+      releaseHold(db as never, { holdId: 'hold-1', approverUserId: MANAGER, path: 'remote' }),
+    ).rejects.toBeInstanceOf(SelfReleaseRefusedError);
   });
 
   it('a locked-out floor account is pin_locked, not bad_pin, and writes nothing', async () => {
