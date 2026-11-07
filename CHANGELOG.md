@@ -15,6 +15,18 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
   admin could approve a count their operator login entered. The script now lets an admin link to any operator that has
   a site; a manager must still share the operator's site. The PIN path still checks the operator's site against the hold.
 
+### 2026-11-07 — Woodland self-approval incident note; ADR-0072 and OPEN-ITEMS resynced
+
+#### Added
+- **Incident note** `docs/incidents/2026-11-06-woodland-held-count-self-approval.md`: records a held count at Woodland
+  that was approved from the same account that entered it — the four-eyes gap ADR-0072 Amendment 2 exists to close.
+  The timeline is written against the actual merge times, and OPEN-ITEMS carries the resulting follow-up.
+
+#### Changed
+- **ADR-0072, this changelog and OPEN-ITEMS brought back into agreement** with the recent link-floor-pin work: the
+  amendment text now matches what actually shipped, the existing changelog entry is corrected, and the open-items
+  list no longer trails the code.
+
 ## 2026-11-06 — floor-PIN link follow-ups: lockout message, stale link refused at use (ADR-0072 Am.2)
 
 - **Locked-out PIN no longer says "wrong PIN":** when the linked floor account is inside its lockout (5 wrong in
