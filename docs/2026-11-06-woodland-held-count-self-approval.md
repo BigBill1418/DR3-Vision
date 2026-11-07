@@ -7,8 +7,8 @@ All times Pacific (PST). Source: `inventory_count_holds` and `audit_log` on the 
 ## Summary
 
 A Woodland physical count (885 → 362 units, a 59.1% swing against a 20% threshold) was held under ADR-0072 Tier 2 at
-07:18. For five hours nobody could approve it, because the approval screen could not work for any manager. Staff
-re-entered the same count four more times. At 12:50 the held count was approved from the desktop by the manager login
+07:18. Until the desktop screen shipped at 09:49 nobody could approve it, because the approval screen could not work for any manager. Staff
+re-entered the same count four more times. At 12:50 the held count was approved from the new desktop screen by the manager login
 of the same person whose operator login had entered it. That broke the four-eyes rule the Tier-2 hold exists to
 enforce, and it went through because the database check compares accounts, not people.
 
@@ -19,20 +19,22 @@ enforce, and it went through because the database check compares accounts, not p
 | 07:18 | Hold `998a2dca` created from an operator login: prior 885, new 362, swing 59.1%. |
 | 08:24, 08:40, 09:09, 12:31 | Four more identical holds created (three from the same operator login, one from a second person's operator login). |
 | (morning) | Bill reports "dr3 vision wont let the managers approve a new count - saying session expired". |
-| 12:50:30 | `998a2dca` released by the manager login of the person whose operator login created it. Path `remote`. |
+| 09:49 | #313 merged (desktop Held counts screen, honest PIN error); deployed by the auto-deployer after the merge. |
+| 12:50:30 | `998a2dca` released from that screen by the manager login of the person whose operator login created it. Path `remote`. |
 | 12:50:43 – 12:51:34 | The same manager login discards the four duplicates (reasons "Duplicate" / "Duplicate entry"). |
-| ~13:00 | Fix #313 deployed (desktop Held counts screen, honest PIN error). |
-| ~14:00 | Fix #314 deployed (floor-PIN link, four-eyes by person). The two Woodland pairs are linked. |
-| 2026-11-07 ~01:15 | #316 deployed; the Bill Barnard admin and operator accounts linked. Scan finds no other pairs. |
+| 13:16 | #314 merged (floor-PIN link, four-eyes by person). The two Woodland pairs were linked after it deployed. |
+| 15:55 | #315 merged (lockout message, stale links refused at use). |
+| 2026-11-07 00:54 | #316 merged; the Bill Barnard admin and operator accounts linked afterwards. Scan finds no other pairs. |
 
 ## What went wrong
 
 1. **The iPad PIN approval could never work for a manager.** `verifyPin` is operator-only and managers have no PIN, so
    every manager approval failed. The failure came back as 401, and the client mapped every 401 to "session expired",
-   so the real problem (no PIN, wrong PIN) was never shown. Result: five hours of unresolvable holds and four
-   duplicate counts.
-2. **No other approval route existed on screen.** The desktop route `POST /api/manager/[site]/count-holds/[holdId]`
-   existed but had no page. Staff found a way to call it.
+   so the real problem (no PIN, wrong PIN) was never shown. Result: unresolvable holds and four duplicate counts
+   (08:24 to 12:31).
+2. **The desktop approval route had no screen until #313.** `POST /api/manager/[site]/count-holds/[holdId]` existed
+   but nothing called it. #313 added the screen at 09:49 and it worked, but it inherited the account-level
+   self-approval gap from item 3, which was not yet closed when it was used at 12:50.
 3. **Four-eyes was enforced per account.** The DB CHECK is `approved_by <> created_by`, which a person holding both an
    operator and a manager login passes trivially. One person entered the count and approved it.
 4. **Hold ids were not checked against the caller's site** (found in #313 review; not known to be exploited).
