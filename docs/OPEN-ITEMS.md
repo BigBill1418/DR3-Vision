@@ -41,10 +41,10 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.HC — 2026-11-06 held counts could never be approved (ADR-0072 Am.1) — **PR open; Bill merges + deploys**
+## 0.HC — 2026-11-06 held counts could never be approved (ADR-0072 Am.1) — **DEPLOYED (#313, 2026-11-06 09:49 PST); all 5 holds resolved (1 approved, 4 discarded as duplicates)**
 
-- **After deploy:** a Woodland manager opens `/dashboard/woodland/held-counts` and approves or discards the 4 pending
-  holds. Several may be duplicates of one count; the screen marks same-day, same-total holds.
+- **Done:** the Woodland holds were resolved from `/dashboard/woodland/held-counts`. See 0.HE for the self-approval found
+  there.
 - **Residual, no owner yet:** a pending hold raises no alert. The floor-PIN question was decided by Bill on
   2026-11-06: link the manager account to the person's operator account (see 0.HD, ADR-0072 Am.2).
 

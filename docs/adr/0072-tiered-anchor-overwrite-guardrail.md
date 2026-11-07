@@ -245,7 +245,17 @@ person's operator account. Keep the desktop Held counts page.
   default, `--apply` writes the link and its audit row in one guarded
   transaction. It refuses different primary sites, a target that is not an active
   operator with a PIN, an operator already linked, and a manager already linked
-  elsewhere (`--clear` first).
+  elsewhere (`--clear` first). A manager must share the operator's primary site;
+  an **admin** account has no site and may link to an operator at any site
+  (PR #316), the operator still needing one.
+- **Follow-ups (PR #315):** a linked floor account inside its PIN lockout answers
+  `423 pin_locked` (own message, not "wrong PIN"). The link is **not** cleared when
+  a role or site changes, because it is also the same-person record behind the
+  four-eyes rule and clearing it would reopen self-approval; instead the PIN path
+  requires the linked account to still be an active operator at the hold's site,
+  else `no_floor_pin` and nothing is verified.
+- **Incident:** `docs/2026-11-06-woodland-held-count-self-approval.md` records the
+  self-approval that motivated the by-person rule.
 - **Folded in from the PR #313 review:** `discardHold` is now a guarded
   `updateMany({ id, status: 'pending' })` with its audit row on the same
   transaction (the ADR-0118 shape), so a discard can no longer overwrite a hold a
