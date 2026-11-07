@@ -371,7 +371,7 @@ describe.skipIf(!REAL_DB)('ADR-0072 Am.2 — floor PIN link (real Postgres)', ()
     it('an ADMIN with no site of its own can link to an operator; a site-less MANAGER cannot', async () => {
       const { linkFloorPin, LinkRefused } = await import('../../../scripts/link-floor-pin.mjs');
       await db.user.update({ where: { id: ADMIN }, data: { primary_site_id: null } });
-      const adminLink = { actor: ADMIN, manager: ADMIN, operator: OPERATOR, apply: true };
+      const adminLink = { ...base, manager: ADMIN, apply: true };
       expect((await linkFloorPin(db, adminLink)).action).toBe('link');
       expect((await db.user.findUnique({ where: { id: ADMIN } })).floor_user_id).toBe(OPERATOR);
       await db.user.update({ where: { id: ADMIN }, data: { floor_user_id: null } });
