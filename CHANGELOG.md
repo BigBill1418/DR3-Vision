@@ -9,6 +9,12 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-07 — link-floor-pin accepts an admin account (ADR-0072 Am.2)
+
+- An admin has no primary site, so `scripts/link-floor-pin.mjs` refused to link one to its own operator account and an
+  admin could approve a count their operator login entered. The script now lets an admin link to any operator that has
+  a site; a manager must still share the operator's site. The PIN path still checks the operator's site against the hold.
+
 ## 2026-11-06 — floor-PIN link follow-ups: lockout message, link voided on role/site change (ADR-0072 Am.2)
 
 - **Locked-out PIN no longer says "wrong PIN":** when the linked floor account is inside its lockout (5 wrong in

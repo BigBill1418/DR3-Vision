@@ -8,9 +8,10 @@
 //
 // It refuses (exit 2) when: the actor is not an active admin; the manager account is
 // not an active manager/admin; the operator account is not an active operator with a
-// PIN; the two are at different primary sites (or either has none); the operator is
-// already linked from another account; or the manager is already linked to a
-// different operator (clear it first). Linking an existing link is a no-op.
+// PIN and a primary site; a MANAGER is at a different primary site than the operator
+// (an admin has no site and may link to an operator at any); the operator is already
+// linked from another account; or the manager is already linked to a different
+// operator (clear it first). Linking an existing link is a no-op.
 //
 // Dry run by default. `--apply` writes the link and its audit row in ONE transaction,
 // guarded so a concurrent change is refused rather than overwritten.
@@ -123,7 +124,13 @@ export async function linkFloorPin(prisma, opts) {
     throw new LinkRefused('operator account is not an active operator');
   }
   if (!operator.pin_hash) throw new LinkRefused('operator account has no floor PIN');
-  if (!manager.primary_site_id || manager.primary_site_id !== operator.primary_site_id) {
+  // An admin account has no site of its own (admins see every site), so the pair
+  // only needs the operator to have one. A manager must be at the operator's site.
+  // Either way, the PIN path re-checks the operator's site against the hold.
+  if (!operator.primary_site_id) {
+    throw new LinkRefused('the operator account has no primary site');
+  }
+  if (manager.role !== 'admin' && manager.primary_site_id !== operator.primary_site_id) {
     throw new LinkRefused('the two accounts are not at the same primary site');
   }
   const { pin_hash: _omit, ...operatorSafe } = operator;
