@@ -19,6 +19,13 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.HE — 2026-11-06 Woodland self-approved held count — **incident note written; baseline NOT independently verified**
+
+- `docs/2026-11-06-woodland-held-count-self-approval.md`. Open: an independent Woodland physical count (885 → 362),
+  rotate `NEXTAUTH_SECRET`, decide on a pending-hold alert.
+
+---
+
 ## 0.HD — 2026-11-06 managers approve held counts with their floor PIN (ADR-0072 Am.2) — **DEPLOYED (e2db898); Morena + Janette linked 2026-11-06; live iPad approval still unverified**
 
 - **Follow-ups PR (2026-11-06):** locked-out PIN now answers `423 pin_locked` (own message); a link whose operator moved site, changed
