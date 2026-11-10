@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **FIX ON BRANCH `fix/haul-tap-freeze-20261110`, NOT MERGED / NOT DEPLOYED**
+## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **MERGED #319 (821e300) and DEPLOYED 2026-11-10 2:51 PM PT; real-iPad check at Woodland still open (HF-1)**
 
 - HF-1 (fix, this PR): the pinned block leads with actionable cards, and the confirm panels scroll on screen when
   they open. Verified on a local iPad-sized WebKit only. Still to do: merge, deploy, then a real Woodland iPad check.
