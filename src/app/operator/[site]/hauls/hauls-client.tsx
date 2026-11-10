@@ -71,6 +71,27 @@ export interface HaulRowView {
   } | null;
 }
 
+/**
+ * 2026-11-10 — where a card sits in the pinned "Coming up" block.
+ *
+ * The block is every `Confirmed` haul, newest docking date first. On 2026-11-10
+ * Woodland's held 27 cards and exactly one could start a load; the others were
+ * worked, withdrawn or booked for another day, and those inert cards look like
+ * the live one until their last line is read. The floor report was "we tap the
+ * haul and nothing happens". So the cards that DO something lead: today's
+ * startable truck first, then open loads to resume or take over, then everything
+ * else in the server's order (the sort is stable).
+ *
+ * The predicates restate `renderRow`'s branch conditions in the same order, so a
+ * card ranked actionable is one `renderRow` gives a control. Only the pinned
+ * block is reordered; the paginated list keeps ADR-0074's newest-first contract.
+ */
+export function pinnedRank(r: HaulRowView): number {
+  if (r.consumedLoad) return r.consumedLoad.open ? 1 : 2;
+  if (r.expectedLoadId && r.externalHaulId) return 0;
+  return 2;
+}
+
 type Props = {
   siteCode: string;
   view: HaulsListParams;
@@ -414,7 +435,9 @@ export function HaulsClient({
                 say so, or the zeros read as an empty truck. */}
             <p className="text-start text-sm text-dr3-cream/70">{t('floor.hauls.pending_note')}</p>
           </div>
-          <ul className="flex flex-col gap-3">{pending.map(renderRow)}</ul>
+          <ul className="flex flex-col gap-3">
+            {[...pending].sort((a, b) => pinnedRank(a) - pinnedRank(b)).map(renderRow)}
+          </ul>
         </section>
       )}
 

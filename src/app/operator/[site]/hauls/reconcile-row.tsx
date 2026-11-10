@@ -33,7 +33,7 @@
 // and the operator retaps forever, so the catch here renders a sentence and
 // leaves the control usable.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { isNextRedirectSignal } from '@/lib/next-redirect';
@@ -60,6 +60,11 @@ export function ReconcileRow({
   const [confirming, setConfirming] = useState(false);
   const [failed, setFailed] = useState(false);
   const [isPending, startTransition] = useWatchedTransition();
+  // 2026-11-10 — same as `QueueRow`: the read-back must open where it is seen.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (confirming) panelRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [confirming]);
 
   return (
     <div className="rounded-lg bg-dr3-green-dark/40 p-4">
@@ -80,7 +85,7 @@ export function ReconcileRow({
           {t('floor.hauls.late_cta')}
         </button>
       ) : (
-        <div className="mt-3 flex flex-col gap-2">
+        <div ref={panelRef} className="mt-3 flex flex-col gap-2">
           {/* The read-back. Naming the haul AND the booked day is what makes the
               next tap a decision rather than a reflex. */}
           <p className="text-start text-sm font-medium text-dr3-cream">

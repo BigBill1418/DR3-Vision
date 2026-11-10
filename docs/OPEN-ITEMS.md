@@ -19,6 +19,18 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **FIX ON BRANCH `fix/haul-tap-freeze-20261110`, NOT MERGED / NOT DEPLOYED**
+
+- HF-1 (fix, this PR): the pinned block leads with actionable cards, and the confirm panels scroll on screen when
+  they open. Verified on a local iPad-sized WebKit only. Still to do: merge, deploy, then a real Woodland iPad check.
+- HF-2 (open): which card was actually tapped on 2026-11-10 is unproven. `DeadEndBeacon` counts renders, not taps.
+  Add a tap-on-inert beacon so the next report of this kind can be answered from data.
+- HF-3 (open, separate bug): when the session expires with a page open, tapping Yes on a check-in gets
+  `LoadAccessError 401` (an error page / 500, not a redirect) and the card shows the "card changed" copy. It should
+  say the operator is signed out and route them to the PIN screen. The `signed_out` WriteRefusal kind already exists.
+
+---
+
 ## 0.HE — 2026-11-06 Woodland self-approved held count — **incident note written; baseline NOT independently verified**
 
 - `docs/2026-11-06-woodland-held-count-self-approval.md`. Open: an independent Woodland physical count (885 → 362),
