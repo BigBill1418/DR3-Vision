@@ -421,3 +421,84 @@ describe('ADR-0099 — a withdrawn slot says so, and says what to do', () => {
     expect(screen.queryByTestId('haul-withdrawn')).toBeNull();
   });
 });
+
+// 2026-11-10 Woodland — "when we tap the Haul, nothing happens". The pinned
+// "Coming up" block held 27 cards and exactly ONE could start a load; the rest
+// were worked, withdrawn or booked for another day, and an inert card looks the
+// same as the live one until its last line is read. The block is ordered newest
+// docking date first, so the one actionable truck sat wherever its date put it.
+// Actionable cards now lead the block; within each group the server's order holds.
+describe('2026-11-10 — the pinned block leads with what can be worked', () => {
+  const worked = row({
+    id: 'a2K-worked',
+    externalHaulId: 'H-900002',
+    dockingDateISO: '2026-11-11T12:00:00.000Z',
+    consumedLoad: {
+      status: 'submitted',
+      open: false,
+      totalUnits: 40,
+      workedAtISO: '2026-11-10T17:00:00.000Z',
+      loadId: 'load-2',
+      holderUserId: VIEWER,
+      holderName: 'Pablo',
+    },
+  });
+  const withdrawn = row({
+    id: 'a2K-withdrawn',
+    externalHaulId: 'H-900008',
+    cancelledAtISO: '2026-11-01T16:00:00.000Z',
+  });
+  const open = row({
+    id: 'a2K-open',
+    externalHaulId: 'H-900003',
+    consumedLoad: {
+      status: 'in_progress',
+      open: true,
+      totalUnits: null,
+      workedAtISO: null,
+      loadId: 'load-3',
+      holderUserId: VIEWER,
+      holderName: 'Pablo',
+    },
+  });
+  const startable = row({ id: 'a2K-start', externalHaulId: 'H-900001', expectedLoadId: 'exp-1' });
+
+  function pendingOrder(pending: HaulRowView[]) {
+    render(
+      <HaulsClient
+        siteCode="woodland"
+        view={{ q: undefined, page: 1, undated: false }}
+        rows={[]}
+        pending={pending}
+        undatedCount={0}
+        hasAnyHauls
+        viewerUserId={VIEWER}
+      />,
+    );
+    const block = screen.getAllByRole('list')[0]!;
+    return within(block)
+      .getAllByRole('listitem')
+      .map((li) => li.textContent?.match(/H-\d+/)?.[0]);
+  }
+
+  it('THE INCIDENT: the startable truck is the first card, ahead of inert ones', () => {
+    expect(pendingOrder([worked, withdrawn, open, startable])).toEqual([
+      'H-900001',
+      'H-900003',
+      'H-900002',
+      'H-900008',
+    ]);
+  });
+
+  it('leaves the order alone when nothing is actionable', () => {
+    expect(pendingOrder([withdrawn, worked])).toEqual(['H-900008', 'H-900002']);
+  });
+
+  it('the reconcile confirm panel is scrolled into view when it opens', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    list(row({ reconcilableExpectedLoadId: 'exp-r', slotDayISO: '2026-11-03' }));
+    fireEvent.click(rowList().getByRole('button'));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+});

@@ -430,3 +430,31 @@ a behaviour change, not a hardening.
   `portal-hauls.test.ts` ("an UNCONSUMED sibling whose appointment is today still
   gets the button") — a fix that removed every button would have replaced one
   outage with another.
+
+## Amendment 2 (2026-11-10) — the pinned block leads with what can be worked; confirm panels open on screen
+
+**Trigger.** Woodland floor report, 2026-11-10 ~11:50 AM PST: "Vision is frozen. When we tap the Haul, nothing
+happens. We tried all 4 tablets." The server, database and tunnel were healthy. The "Coming up" block held 27
+`Confirmed` hauls and exactly one could start a load; at render the page mounted 42 dead-end beacons (34
+`already_worked`, 8 `slot_withdrawn`).
+
+**What was reproduced** (local stack, synthetic data mirroring those card states, iPad-sized WebKit):
+
+1. No hang. Today's startable card → confirm → Yes redirected to `/load/<id>` in ~0.3 s, also while all 42 beacon
+   POSTs were in flight. The beacons are plain `fetch` calls and do not queue behind or block server actions.
+2. Worked and withdrawn cards do nothing when tapped. That is by design (Amendment 1, ADR-0099), but such a card
+   looks like the live one until its last line is read. Tapping the body of a booked-for-another-day card (ADR-0096)
+   does nothing either; only its green button does anything.
+3. **Defect.** When a startable card sat near the bottom of the screen, the confirm panel opened entirely below the
+   fold (Yes at 1195 px on a 1080 px viewport). Nothing visible changed, so the tap read as dead.
+
+**Decisions.**
+
+- **D1.** Only the pinned block is ordered by actionability: today's startable truck first, then open loads, then
+  everything else in the server's newest-first order (a stable sort). The paginated list keeps the original
+  newest-first contract. `pinnedRank` restates `renderRow`'s branch order, so a card ranked actionable is one that
+  gets a control.
+- **D2.** The `QueueRow` and `ReconcileRow` confirm panels call `scrollIntoView({ block: 'nearest' })` when they open.
+- **Not changed.** No write path, server guard, beacon or copy key changed. Which card the operators actually tapped
+  on 2026-11-10 is **not proven**: the beacon counts renders, not taps. Tap-on-inert telemetry is a follow-up
+  (OPEN-ITEMS 0.HF).

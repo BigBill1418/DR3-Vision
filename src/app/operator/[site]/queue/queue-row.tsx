@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { isNextRedirectSignal } from '@/lib/next-redirect';
@@ -77,6 +77,14 @@ export function QueueRow({
   const [isPending, startTransition] = useWatchedTransition();
   const [confirming, setConfirming] = useState(false);
   const [refused, setRefused] = useState(false);
+  // 2026-11-10 — the panel IS the answer to the first tap. A card near the
+  // bottom of the iPad opened it entirely below the fold (reproduced: Yes at
+  // 1195px on a 1080px viewport), so the tap read as "nothing happens". Bring it
+  // on screen. Optional-called: jsdom and very old WebKit lack the method.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (confirming) panelRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [confirming]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -94,6 +102,7 @@ export function QueueRow({
 
       {confirming && (
         <div
+          ref={panelRef}
           className="flex flex-col gap-2 rounded-lg bg-dr3-green-dark/60 p-4"
           data-testid="queue-row-confirm"
         >

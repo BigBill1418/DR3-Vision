@@ -115,3 +115,29 @@ describe('ADR-0127 — one tap no longer commits to a truck', () => {
   // as an unhandled rejection and fails the run whether the code is right or
   // wrong, which would make the test say nothing about the code.
 });
+
+// 2026-11-10 Woodland "we tap the haul and nothing happens" — reproduced on an
+// iPad-sized WebKit: a startable card whose top sat 213px above the bottom edge
+// opened its confirm panel ENTIRELY below the fold (panel top 1039, Yes at 1195,
+// viewport 1080). Nothing on screen changed, so the tap read as dead. The panel
+// is the answer to the tap; it has to be where the operator is looking.
+describe('the confirm panel is brought on screen when it opens', () => {
+  const scrollIntoView = vi.fn();
+  beforeEach(() => {
+    scrollIntoView.mockClear();
+    Element.prototype.scrollIntoView = scrollIntoView;
+  });
+
+  it('scrolls the panel into view on the first tap', () => {
+    mount();
+    fireEvent.click(cardButton());
+    const panel = screen.getByTestId('queue-row-confirm');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toBe(panel);
+  });
+
+  it('does not scroll anything before the card is tapped', () => {
+    mount();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});

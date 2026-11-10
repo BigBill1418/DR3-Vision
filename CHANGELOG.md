@@ -9,6 +9,18 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-10 — Woodland "tap the haul, nothing happens": actionable cards first, confirm panel on screen (ADR-0074 Am.2)
+
+- **Reproduced locally**, with synthetic data on an iPad-sized WebKit. Today's truck starts in ~0.3 s, even with 42
+  dead-end beacons in flight, so nothing hangs. The taps that do nothing are on worked and withdrawn cards (inert
+  by design), on the body of a booked-for-another-day card, and on a startable card near the bottom of the screen,
+  whose confirm panel opened entirely below the fold.
+- **Fixed.** The "Coming up" block now puts today's startable truck first, then open loads, then the rest in the
+  same newest-first order as before. The check-in and late-truck confirm panels now scroll onto the screen when
+  they open. The paginated list, write paths and server guards are unchanged.
+- **Found, not fixed:** if the session expires while a page is open, tapping Yes returns a 500 and shows "This card
+  changed since the page loaded" instead of a sign-in prompt (OPEN-ITEMS 0.HF-3).
+
 ## 2026-11-07 — link-floor-pin accepts an admin account (ADR-0072 Am.2)
 
 - An admin has no primary site, so `scripts/link-floor-pin.mjs` refused to link one to its own operator account and an
@@ -18,11 +30,13 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
 ### 2026-11-07 — Woodland self-approval incident note; ADR-0072 and OPEN-ITEMS resynced
 
 #### Added
+
 - **Incident note** `docs/incidents/2026-11-06-woodland-held-count-self-approval.md`: records a held count at Woodland
   that was approved from the same account that entered it — the four-eyes gap ADR-0072 Amendment 2 exists to close.
   The timeline is written against the actual merge times, and OPEN-ITEMS carries the resulting follow-up.
 
 #### Changed
+
 - **ADR-0072, this changelog and OPEN-ITEMS brought back into agreement** with the recent link-floor-pin work: the
   amendment text now matches what actually shipped, the existing changelog entry is corrected, and the open-items
   list no longer trails the code.
