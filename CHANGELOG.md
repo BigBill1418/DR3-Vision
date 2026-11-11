@@ -16,6 +16,8 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
   them (production Next hides thrown errors), and the check-in and late-truck rows show one sentence per cause:
   session ended (with a "Sign in again" control), card changed (a real 409 only), not allowed here, app updated,
   no connection, or a plain failure. Server checks, the haul-number read-back and the write are unchanged.
+  Each returned refusal is logged once as `evt: floor.action_refused` (action, status, reason, siteCode,
+  expectedLoadId; no operator identity), replacing the thrown-error log line the refusals used to produce.
 - **Sign-in comes back to the same screen.** The signed-out notice on the count, inbound, processed and drop-off
   screens now has the same control, and the floor pages' signed-out redirects carry `?next=` (only for a 401; a
   wrong role or site is unchanged). The return path is validated by the keypad's own check.

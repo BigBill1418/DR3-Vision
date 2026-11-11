@@ -18,7 +18,7 @@
 
 import React from 'react';
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import en from '@/i18n/locales/en/operator.json';
 
 vi.mock('next/navigation', () => ({
@@ -589,6 +589,16 @@ describe('ADR-0144 — a failed late-truck check-in says WHY', () => {
       }),
     );
     expect(notice.textContent).toContain(en.floor.confirm_checkin.mismatch);
+  });
+
+  it('an UNDEFINED result (success during a hard navigation) shows no failure notice', async () => {
+    startLoadReconciledAction.mockResolvedValueOnce(undefined);
+    list(lateRow);
+    fireEvent.click(rowList().getByRole('button'));
+    fireEvent.click(rowList().getByText(en.floor.hauls.late_yes));
+    await waitFor(() => expect(startLoadReconciledAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('checkin-failure')).toBeNull();
   });
 
   it('no network says no connection, not card changed', async () => {

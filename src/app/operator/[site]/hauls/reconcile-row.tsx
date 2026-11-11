@@ -123,6 +123,9 @@ export function ReconcileRow({
                     if (isNextRedirectSignal(e)) throw e;
                     outcome = e;
                   }
+                  // Some Next paths resolve `undefined` on success while a hard
+                  // navigation is in flight; that is not a failure.
+                  if (outcome === undefined) return;
                   setFailure(classifyFloorActionFailure(outcome));
                   setConfirming(false);
                 })

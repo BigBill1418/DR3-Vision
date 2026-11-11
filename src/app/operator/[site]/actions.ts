@@ -12,6 +12,7 @@ import {
   LoadsInventoryNotActivatedError,
 } from '@/lib/loads/record-guards';
 import type { CheckinRefusal } from '@/lib/floor/action-outcome';
+import { log } from '@/lib/observability/logger';
 import { UI_SURFACE } from '@/lib/notify/rollout';
 import type { CountMode, ConcernCategory, LoadVoidReason, RejectionCategory } from '@prisma/client';
 
@@ -71,16 +72,42 @@ async function ctx(siteCode: string) {
  * a database outage, a bug, and above all Next's `NEXT_REDIRECT` — is re-thrown
  * untouched, so success still navigates and a crash is still a crash.
  */
-async function refusalOrRedirect(run: () => Promise<string>): Promise<CheckinRefusal> {
+async function refusalOrRedirect(
+  where: { action: string; siteCode: string; expectedLoadId: string },
+  run: () => Promise<string>,
+): Promise<CheckinRefusal> {
   let destination: string;
   try {
     destination = await run();
   } catch (e) {
-    if (e instanceof svc.LoadAccessError) return { ok: false, status: e.status, reason: e.reason };
-    if (e instanceof LoadsInventoryNotActivatedError) {
-      return { ok: false, status: e.status, reason: 'surface_not_activated' };
+    let refusal: CheckinRefusal;
+    if (e instanceof svc.LoadAccessError) {
+      refusal = { ok: false, status: e.status, reason: e.reason };
+    } else if (e instanceof LoadsInventoryNotActivatedError) {
+      refusal = { ok: false, status: e.status, reason: 'surface_not_activated' };
+    } else {
+      throw e;
     }
-    throw e;
+    // A returned refusal is no longer logged by Next the way a thrown one was, and
+    // the 2026-11-10 outage was diagnosed from exactly those thrown-401 lines. So
+    // log it here, once. No operator identity: ids of the RECORD only, as
+    // `loadsErrorResponse` already logs.
+    try {
+      log.warn(
+        {
+          evt: 'floor.action_refused',
+          action: where.action,
+          status: refusal.status,
+          reason: refusal.reason,
+          siteCode: where.siteCode,
+          expectedLoadId: where.expectedLoadId,
+        },
+        `floor action refused: ${where.action} ${refusal.status} ${refusal.reason}`,
+      );
+    } catch {
+      /* observability is never load-bearing */
+    }
+    return refusal;
   }
   // Outside the try: `redirect()` throws its control-flow signal, which must reach
   // the framework rather than this function's catch.
@@ -101,7 +128,7 @@ export async function startLoadAction(
   expectedLoadId: string,
   acknowledgedHaulId: string,
 ): Promise<CheckinRefusal> {
-  return refusalOrRedirect(async () => {
+  return refusalOrRedirect({ action: 'startLoadAction', siteCode, expectedLoadId }, async () => {
     const { operatorUserId, siteId } = await ctx(siteCode);
     // ADR-0082 — `claimed` is deliberately NOT branched on here. Whether this call
     // made the claim or lost the race to a colleague, the destination is the same
@@ -151,22 +178,25 @@ export async function startLoadReconciledAction(
   acknowledgedSlotDayISO: string,
   acknowledgedHaulId: string,
 ): Promise<CheckinRefusal> {
-  return refusalOrRedirect(async () => {
-    const { operatorUserId, siteId } = await ctx(siteCode);
-    const load = await svc.startInboundLoad({
-      expectedLoadId,
-      siteId,
-      operatorUserId,
-      // ADR-0127 — this path already read the haul number back to the operator; it
-      // now travels and is checked, exactly like the day. Two acknowledgements on
-      // the noisier path, one on the ordinary one, and both are compared server-side.
-      acknowledgedHaulId,
-      reconcile: { acknowledgedSlotDayISO },
-    });
-    revalidatePath(`/operator/${siteCode}/queue`);
-    revalidatePath(`/operator/${siteCode}/hauls`);
-    return `/operator/${siteCode}/load/${load.id}`;
-  });
+  return refusalOrRedirect(
+    { action: 'startLoadReconciledAction', siteCode, expectedLoadId },
+    async () => {
+      const { operatorUserId, siteId } = await ctx(siteCode);
+      const load = await svc.startInboundLoad({
+        expectedLoadId,
+        siteId,
+        operatorUserId,
+        // ADR-0127 — this path already read the haul number back to the operator; it
+        // now travels and is checked, exactly like the day. Two acknowledgements on
+        // the noisier path, one on the ordinary one, and both are compared server-side.
+        acknowledgedHaulId,
+        reconcile: { acknowledgedSlotDayISO },
+      });
+      revalidatePath(`/operator/${siteCode}/queue`);
+      revalidatePath(`/operator/${siteCode}/hauls`);
+      return `/operator/${siteCode}/load/${load.id}`;
+    },
+  );
 }
 
 /**

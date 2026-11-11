@@ -147,6 +147,9 @@ export function QueueRow({
                     if (isNextRedirectSignal(e)) throw e;
                     outcome = e;
                   }
+                  // Some Next paths resolve `undefined` on success while a hard
+                  // navigation is in flight; that is not a failure.
+                  if (outcome === undefined) return;
                   setConfirming(false);
                   setFailure(classifyFloorActionFailure(outcome));
                 })

@@ -26,6 +26,10 @@ vi.mock('@/lib/loads/record-guards', async (orig) => ({
   ...(await orig<typeof import('@/lib/loads/record-guards')>()),
   assertUiSurfaceActivated: (...a: unknown[]) => assertUiSurfaceActivated(...a),
 }));
+const warn = vi.fn();
+vi.mock('@/lib/observability/logger', () => ({
+  log: { warn: (...a: unknown[]) => warn(...a), info: vi.fn(), error: vi.fn() },
+}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: async () => new Headers() }));
 vi.mock('next/navigation', () => ({
@@ -107,6 +111,27 @@ describe.each([
     );
     expect(isNextRedirectSignal(e)).toBe(true);
     expect((e as { digest: string }).digest).toContain('/operator/woodland/load/load-9');
+  });
+
+  it('a refusal emits ONE floor.action_refused line with no operator identity', async () => {
+    auth.mockResolvedValue(HUSK);
+    await call();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields] = warn.mock.calls[0] as [Record<string, unknown>];
+    expect(fields).toEqual({
+      evt: 'floor.action_refused',
+      action: _name,
+      status: 401,
+      reason: 'not_authenticated_as_operator',
+      siteCode: 'woodland',
+      expectedLoadId: 'exp-1',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('op-1');
+  });
+
+  it('a success emits no refusal line', async () => {
+    await call().catch(() => undefined);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('an unexpected failure is NOT converted — it still throws', async () => {

@@ -43,6 +43,13 @@ found the PIN screen landed on the hub afterwards, although the keypad has honou
   control that fixes it: sign-in for `signed_out`; reload for `card_changed`, `app_updated` and `failed`; no
   control for `no_connection` (a reload would fail too; the card stays tappable) or `not_allowed` (nothing on
   the iPad fixes it). The "card changed" copy appears **only** on a real 409.
+- **D5 — a returned refusal is logged, once.** Returning instead of throwing removes the line Next used to log
+  for every thrown action error, and the 2026-11-10 outage was diagnosed from exactly those thrown-401 lines. So
+  `refusalOrRedirect` emits one pino `warn` per refusal, replacing that signal:
+  `{ evt: 'floor.action_refused', action, status, reason, siteCode, expectedLoadId }`, message
+  `floor action refused: <action> <status> <reason>`. `action` is `startLoadAction` or
+  `startLoadReconciledAction`. It carries no operator identity (no name, user id or PIN); `expectedLoadId` is a
+  record id, as `loadsErrorResponse` already logs. Successes log nothing.
 - **D4 — signing in comes back here.** `floorSignInPath(siteCode, here)` (in `src/lib/floor-return-path.ts`,
   re-exported from `src/lib/auth-helpers.ts`) builds `/operator/<site>?next=<here>`, validating `here` with the
   same `resolveFloorReturnPath` the keypad uses and dropping it if it would be refused — so it never emits an
@@ -66,6 +73,9 @@ found the PIN screen landed on the hub afterwards, although the keypad has honou
 - An idled-out operator who taps Yes reads "Your session ended, so this truck was not checked in" with a
   "Sign in again" control that returns to the same screen after the PIN.
 - `floor.hauls.late_failed` is removed; the late-truck row uses the shared copy.
-- A field-level telemetry gap remains: which class operators actually hit is not counted yet (the dead-end
-  beacon counts renders). Tracked with HF-2.
+- **Counting gap, admitted.** Before this ADR the only server-side signal for these refusals was Next's own
+  log of the thrown error; returning them removed it. D5's `floor.action_refused` line replaces it, and for the
+  first time carries the status and reason in fields. There is still no metric counter, and the client-side
+  classes `app_updated` and `no_connection` never reach the server, so they are not counted at all (the dead-end
+  beacon counts renders, not taps). Tracked with HF-2.
 - Not verified on a real iPad or against the deployed app; the unit and page tests use synthetic data.

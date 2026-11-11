@@ -20,7 +20,7 @@
 
 import React from 'react';
 import { afterEach, describe, expect, it, vi, beforeEach, type MockInstance } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import en from '@/i18n/locales/en/operator.json';
 
 const startLoadAction = vi.fn();
@@ -226,6 +226,16 @@ describe('ADR-0144 — a failed check-in says WHY', () => {
       startLoadAction.mockRejectedValueOnce(new TypeError('Load failed')),
     );
     expect(notice.textContent).toContain(en.floor.action_outcome.no_connection);
+  });
+
+  it('an UNDEFINED result (success during a hard navigation) shows no failure notice', async () => {
+    startLoadAction.mockResolvedValueOnce(undefined);
+    mount();
+    fireEvent.click(cardButton());
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(startLoadAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('checkin-failure')).toBeNull();
   });
 
   it('an opaque server error is a plain failure, NOT a card change', async () => {
