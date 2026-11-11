@@ -327,6 +327,14 @@
       "no": "No, wrong card",
       "mismatch": "This card changed since the page loaded. Pull down to refresh, then try again."
     },
+    "action_outcome": {
+      "signed_out": "Your session ended, so this truck was not checked in. Sign in again and you will come back to this screen.",
+      "sign_in": "Sign in again",
+      "not_allowed": "This card can't be checked in from this sign-in. Ask a manager.",
+      "app_updated": "The app was updated while this page was open. Reload the page, then try again.",
+      "no_connection": "No connection, so this truck was not checked in. Check the Wi-Fi, then try again.",
+      "failed": "Couldn't check it in. Reload the page, then try again."
+    },
     "hub": {
       "heading": "Daily check",
       "caption": "{{site}} · {{name}}",
@@ -377,7 +385,6 @@
       "late_confirm": "Check in {{haul}}, booked for {{date}}, as arriving today?",
       "late_yes": "Yes, check it in",
       "late_cancel": "Cancel",
-      "late_failed": "Couldn't check it in. Pull down to refresh, then try again.",
       "stale_day": "This page is from an earlier day. Reload to check in today's hauls.",
       "empty_no_hauls_why": "This site has no MyMRC portal feed, so there is nothing to list here. That is normal — use the queue for today’s trucks.",
       "withdrawn": "MyMRC withdrew this haul at {{time}}.",

@@ -9,6 +9,23 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-11 — A failed check-in says why; a signed-out operator can sign straight back in (ADR-0144, ADR-0074 Am.2)
+
+- **Fixed (OPEN-ITEMS 0.HF HF-3).** When the 5-minute session had lapsed, tapping Yes on a check-in showed "This
+  card changed since the page loaded". The two check-in actions now return their refusals instead of throwing
+  them (production Next hides thrown errors), and the check-in and late-truck rows show one sentence per cause:
+  session ended (with a "Sign in again" control), card changed (a real 409 only), not allowed here, app updated,
+  no connection, or a plain failure. Server checks, the haul-number read-back and the write are unchanged.
+- **Sign-in comes back to the same screen.** The signed-out notice on the count, inbound, processed and drop-off
+  screens now has the same control, and the floor pages' signed-out redirects carry `?next=` (only for a 401; a
+  wrong role or site is unchanged). The return path is validated by the keypad's own check.
+- **Late-truck cards rank above inert ones** in the "Coming up" block: startable 0, open load 1, late-truck
+  reconcile 2, everything else 3.
+- **Correction to the 2026-11-10 entry:** #319's confirm-panel scroll is in `QueueRow`, so it applies on the queue
+  page (`queue/page.tsx`) as well as on the hauls page.
+- Tests: two #319 tests that replaced `Element.prototype.scrollIntoView` without restoring it now use `vi.spyOn`
+  and restore it.
+
 ## 2026-11-10 — Woodland "tap the haul, nothing happens": actionable cards first, confirm panel on screen (ADR-0074 Am.2)
 
 - **Reproduced locally**, with synthetic data on an iPad-sized WebKit. Today's truck starts in ~0.3 s, even with 42

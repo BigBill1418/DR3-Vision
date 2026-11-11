@@ -22,6 +22,9 @@
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
+// ADR-0144 — the floor pages build their signed-out redirect from here.
+export { floorSignInPath } from '@/lib/floor-return-path';
+
 export interface ManagerSiteContext {
   siteId: string;
   siteCode: string;

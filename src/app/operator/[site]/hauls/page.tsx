@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { checkOperatorForSite } from '@/lib/auth-helpers';
+import { checkOperatorForSite, floorSignInPath } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { listPortalHauls, type PortalHaulRow } from '@/lib/loads/portal-hauls';
 import { getLocale } from '@/i18n/get-locale';
@@ -83,7 +83,15 @@ function toView(r: PortalHaulRow): HaulRowView {
 export default async function FloorHaulsPage({ params, searchParams }: Props) {
   const { site: siteCode } = await params;
   const gate = await checkOperatorForSite(siteCode);
-  if (!gate.ok) redirect(`/operator/${siteCode}`);
+  // ADR-0144 — signed out (401, incl. the session husk) returns here after the PIN;
+  // a wrong role or site (403/404) is not fixed by signing in, so it is unchanged.
+  if (!gate.ok) {
+    redirect(
+      gate.status === 401
+        ? floorSignInPath(siteCode, `/operator/${siteCode}/hauls`)
+        : `/operator/${siteCode}`,
+    );
+  }
   // ADR-0091 — the viewer's identity comes from the SESSION guard, never the
   // `[site]` path segment, and is threaded to the list so a consumed card can
   // tell the operator's own open load from a colleague's.
