@@ -57,6 +57,10 @@ const ALLOWED_HOSTS: Readonly<Record<string, string>> = {
   // SVdP parent-org marketing site, referenced only in brand-token comments and a
   // favicon URL. Not an alert target.
   'www.svdp.us': 'SVdP parent-org site — brand asset reference only',
+  // ADR-0022 Am. 1: the PUBLIC GlitchTip ingest host in CSP connect-src (browser
+  // envelope POSTs). Not an alert target. Verified 2026-11-11: GET / → 200, and
+  // OPTIONS /api/26/envelope/ with Origin dr3-vision.svdp.us → 200, via Cloudflare.
+  'errors.barnardhq.com': 'GlitchTip public ingest — 200 (+ CORS preflight 200), 2026-11-11',
 };
 
 /**

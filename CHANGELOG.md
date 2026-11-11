@@ -9,6 +9,23 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-11 — Browser errors from the floor tablets can reach GlitchTip (ADR-0022 Am.1)
+
+- **Found:** no browser error from the Woodland or Eugene tablets has ever reached GlitchTip. The image was built
+  with no `NEXT_PUBLIC_GLITCHTIP_DSN` (Next bakes it at build time, and the Dockerfile had no build arg for it), and
+  the CSP `connect-src` would have blocked the SDK's POST to GlitchTip even with a DSN.
+- **Fixed in code:** the Dockerfile takes `NEXT_PUBLIC_GLITCHTIP_DSN` as a build arg (empty default), compose passes
+  it from the CHAD-side `.env`, and CSP `connect-src` allows `https://errors.barnardhq.com` (the public host, never
+  the WireGuard-only one). The browser init moved to `src/instrumentation-client.ts`, which removes the
+  `@sentry/nextjs` 10 deprecation warning.
+- **Scrubbing widened** (browser and server share one policy): request bodies, cookies and query strings are
+  removed, only the user id survives, and keypad-tap and console breadcrumbs are dropped, so PIN digits and
+  operator names do not reach GlitchTip. PIN-tagged events are still dropped.
+- **Proof in the build:** `npm run check:browser-dsn` checks the built client chunks; CI builds with a synthetic DSN
+  and runs it.
+- **Still open (OPEN-ITEMS 0.HF HF-6):** set the real value in CHAD-HQ's `/home/bbarnard065/DR3-Vision/.env`,
+  deploy, and prove a synthetic browser error arrives in GlitchTip project 26.
+
 ## 2026-11-11 — A failed check-in says why; a signed-out operator can sign straight back in (ADR-0144, ADR-0074 Am.2)
 
 - **Fixed (OPEN-ITEMS 0.HF HF-3).** When the 5-minute session had lapsed, tapping Yes on a check-in showed "This

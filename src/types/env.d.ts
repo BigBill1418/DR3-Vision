@@ -13,5 +13,7 @@ declare namespace NodeJS {
     DR3_BUILD_AT?: string;
     /** Optional operator override; wins over the baked sha when set. */
     GIT_SHA?: string;
+    /** Browser GlitchTip DSN, baked at image build (ADR-0022 Am. 1). Public host only. */
+    NEXT_PUBLIC_GLITCHTIP_DSN?: string;
   }
 }

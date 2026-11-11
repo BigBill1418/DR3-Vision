@@ -107,6 +107,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # ADR-0022 Am. 1: browser DSN is BUILD-time. Interpolated from the compose
+        # project `.env` at /home/bbarnard065/DR3-Vision/.env on CHAD-HQ (the
+        # deployer passes `--env-file .env`, ADR-0054/0123). Public host only:
+        # https://<publickey>@errors.barnardhq.com/26. Unset ⇒ empty ⇒ no-op.
+        NEXT_PUBLIC_GLITCHTIP_DSN: ${NEXT_PUBLIC_GLITCHTIP_DSN:-}
     image: dr3-vision-app:local
     container_name: dr3-vision-app
     # Resource ceilings (audit 2026-07-16 · RES) — a conservative blast-radius cap

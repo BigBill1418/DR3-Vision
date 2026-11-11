@@ -44,7 +44,8 @@ export async function register() {
     // ─── OpenTelemetry: traces to Tempo ──────────────────────────────
     const { NodeSDK } = await import('@opentelemetry/sdk-node');
     const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http');
-    const { getNodeAutoInstrumentations } = await import('@opentelemetry/auto-instrumentations-node');
+    const { getNodeAutoInstrumentations } =
+      await import('@opentelemetry/auto-instrumentations-node');
     const { Resource } = await import('@opentelemetry/resources');
     const { SemanticResourceAttributes } = await import('@opentelemetry/semantic-conventions');
 
@@ -57,18 +58,24 @@ export async function register() {
       traceExporter: new OTLPTraceExporter({
         url: process.env.TEMPO_ENDPOINT ?? 'http://tempo:4318/v1/traces',
       }),
-      instrumentations: [getNodeAutoInstrumentations({
-        '@opentelemetry/instrumentation-fs': { enabled: false },     // too noisy
-        '@opentelemetry/instrumentation-dns': { enabled: false },    // too noisy
-      })],
+      instrumentations: [
+        getNodeAutoInstrumentations({
+          '@opentelemetry/instrumentation-fs': { enabled: false }, // too noisy
+          '@opentelemetry/instrumentation-dns': { enabled: false }, // too noisy
+        }),
+      ],
     });
 
     sdk.start();
 
     // ─── Existing ntfy boot-publish + uncaught error handlers ────────
     await publishContainerStart();
-    process.on('uncaughtException', (err) => { /* ...existing... */ });
-    process.on('unhandledRejection', (err) => { /* ...existing... */ });
+    process.on('uncaughtException', (err) => {
+      /* ...existing... */
+    });
+    process.on('unhandledRejection', (err) => {
+      /* ...existing... */
+    });
 
     // ─── Sentry/GlitchTip wiring (see §2 below) ──────────────────────
     await initGlitchTip();
@@ -127,7 +134,7 @@ The Sentry Next.js webpack plugin uploads source maps to GlitchTip on production
 
 **Manual error reporting:** `Sentry.captureException(err)` and `Sentry.captureMessage(msg)` are available throughout the codebase for custom error paths. Most paths don't need manual reporting — unhandled errors are caught automatically by the SDK.
 
-**Coordination with ntfy:** the existing `src/lib/ntfy.ts` unhandled-error publish stays. It fires for *system-level* incidents (per CLAUDE.md hard rule #5). GlitchTip captures *every* error including handled ones. The two are complementary:
+**Coordination with ntfy:** the existing `src/lib/ntfy.ts` unhandled-error publish stays. It fires for _system-level_ incidents (per CLAUDE.md hard rule #5). GlitchTip captures _every_ error including handled ones. The two are complementary:
 
 - GlitchTip: every error, all roles, browse in fleet UI
 - ntfy: only sufficiently severe errors, only Bill, mobile-push for immediate attention
@@ -238,7 +245,7 @@ export const bonusMonthsByState = new Gauge({
 export const payrollDeliverySuccess = new Counter({
   name: 'dr3_vision_payroll_delivery_total',
   help: 'M365 mail-send attempts to payroll',
-  labelNames: ['outcome'],  // success | retry | failed
+  labelNames: ['outcome'], // success | retry | failed
   registers: [registry],
 });
 ```
@@ -359,6 +366,54 @@ All documented in `.env.example`. None are required for the application to start
 - Future fleet-wide observability changes (e.g., upgrading Tempo, changing log retention) are absorbed by DR3-Vision automatically because we ship to the fleet endpoints, not to specific configurations.
 - The internal `/metrics` endpoint is reachable from inside the fleet network. The middleware check on `cf-connecting-ip` ensures it's not accidentally exposed via the Cloudflare tunnel. Operator runbook documents the verification step.
 
+## Amendment 1 — 2026-11-11: the browser DSN is a BUILD-time value on the PUBLIC host
+
+**Status:** Accepted (fix in review; inert until the CHAD-side value is set and the image is rebuilt).
+
+**What was wrong.** §2 wired browser error capture, but no browser error from the Woodland/Eugene tablets ever
+reached GlitchTip. Two gaps, either one enough on its own:
+
+1. `NEXT_PUBLIC_GLITCHTIP_DSN` was never set at image build. Next inlines `NEXT_PUBLIC_*` into the client chunks
+   when `next build` runs, and the Dockerfile had no `ARG` for it, so the shipped bundle contained the SDK and no
+   DSN. A runtime `env_file` cannot fix this: the browser never sees container env.
+2. The CSP `connect-src` (src/lib/csp.ts, ADR-0053 D3) allowed only `'self'` and R2. Even with a DSN baked in, the
+   browser would have blocked the SDK's envelope POST to GlitchTip.
+
+**Decision.**
+
+- The browser DSN is a build argument: `Dockerfile` `ARG`/`ENV NEXT_PUBLIC_GLITCHTIP_DSN` (empty default) just
+  before `next build`, fed by `docker-compose.yml` `app.build.args` from `${NEXT_PUBLIC_GLITCHTIP_DSN:-}`. This
+  matches the fleet pattern (Helix-Hub and EyesOn pass `VITE_SENTRY_DSN` the same way).
+- **Where the value lives:** only in the compose project env file on CHAD-HQ,
+  `/home/bbarnard065/DR3-Vision/.env` (gitignored by `.env*`, excluded from the build context by
+  `.dockerignore`). The deployer runs `docker compose --env-file .env build` there (noc-master ADR-0054/0123:
+  `secrets.env` absent, `.env` present). It is never committed. The value is
+  `NEXT_PUBLIC_GLITCHTIP_DSN=https://<publickey>@errors.barnardhq.com/26` (GlitchTip project 26 `dr3-vision`).
+- **Public host only.** The tablets are not on WireGuard: the browser DSN must name `errors.barnardhq.com`
+  (public through Cloudflare). Never `glitchtip.barnardhq.com` (10.99.0.4). The server DSN (`GLITCHTIP_DSN`,
+  runtime env) is separate and unchanged.
+- CSP `connect-src` adds `https://errors.barnardhq.com` and nothing else.
+- The browser init moved from `sentry.client.config.ts` to `src/instrumentation-client.ts`. Next 15.3+ loads that
+  file natively, and `@sentry/nextjs` 10 logs a deprecation warning for the old file. (Next 15.5 inlined the old
+  bracket-form `process.env['NEXT_PUBLIC_GLITCHTIP_DSN']` too; a build on 2026-11-11 confirmed it, so the bracket
+  form was not a third gap.) The file also exports `onRouterTransitionStart`, which the SDK asks for at build;
+  with `tracesSampleRate: 0` it records nothing.
+- One scrubbing policy (`scrubEvent` / `scrubBreadcrumb` in `src/lib/observability/sentry.ts`) for browser and
+  server: PIN-tagged events are dropped, request bodies/cookies/query strings and auth headers are removed, only
+  the opaque user id survives (no username, email or IP), UI breadcrumbs are dropped (a keypad tap records the
+  tapped element, which would leave PIN digits in the trail), console breadcrumbs are dropped (log lines can carry
+  operator names), and URL query strings are stripped from breadcrumbs. `sendDefaultPii: false`.
+- Proof is in the build output: `npm run check:browser-dsn -- --expect errors.barnardhq.com` after a DSN build,
+  `--expect-none` after a plain build. Both also fail if the WireGuard-private host appears in any browser chunk.
+  CI builds with a synthetic DSN (`https://testkey@errors.barnardhq.com/26`) and runs the `--expect` check.
+
+**Not verified by this amendment:** arrival of a real browser event in GlitchTip project 26. That needs the CHAD
+value, a deploy, and a synthetic browser error (OPEN-ITEMS 0.HF HF-6).
+
+**Residual:** an exception's own message text is not rewritten; code must not put PINs or names into thrown
+messages (CLAUDE.md hard rule #8 already forbids logging PINs). Source-map upload (`GLITCHTIP_AUTH_TOKEN`) is
+build-time too and is still not passed as a build arg, so browser stack traces stay minified.
+
 ## References
 
 - ADR-0001 (Tech stack — observability mentioned as fleet-standard)
@@ -367,4 +422,5 @@ All documented in `.env.example`. None are required for the application to start
 - `docs/operator/fleet-observability-setup.md` (operator setup runbook)
 - FLEET-PRIMER (in transcripts — fleet conventions)
 - GlitchTip docs: https://glitchtip.com/documentation
+- Next.js `instrumentation-client`: https://nextjs.org/docs/app/api-reference/file-conventions/instrumentation-client
 - OpenTelemetry Next.js: https://opentelemetry.io/docs/instrumentation/js/getting-started/nodejs/

@@ -119,7 +119,15 @@ jobs:
         run: npm test
 
       - name: Production build (next build)
+        # ADR-0022 Am. 1: build with a SYNTHETIC browser DSN (public host shape,
+        # fake key) so the next step can prove Next bakes it into the client
+        # chunks. The real key lives only in CHAD-HQ's compose .env.
+        env:
+          NEXT_PUBLIC_GLITCHTIP_DSN: https://testkey@errors.barnardhq.com/26
         run: npm run build
+
+      - name: Browser GlitchTip DSN baked into client chunks (ADR-0022 Am. 1)
+        run: npm run check:browser-dsn -- --expect errors.barnardhq.com
 
   # ────────────────────────────────────────────────────────────────────────
   # Migration-check gate (ADR-0035).

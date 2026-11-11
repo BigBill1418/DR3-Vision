@@ -53,6 +53,9 @@ All env vars are documented in `.env.example`. The following are **required** fo
   **http-only on port 9000**; the DSN form is
   `http://<key>@glitchtip.barnardhq.com:9000/<project-id>`. There is no https
   listener and no port-80 listener (verified 2026-08-03).
+- `NEXT_PUBLIC_GLITCHTIP_DSN` — the BROWSER DSN. Build-time, not runtime: it goes in the compose
+  project `.env` (`/home/bbarnard065/DR3-Vision/.env`), which feeds `app.build.args`, and must use the
+  PUBLIC host `https://<publickey>@errors.barnardhq.com/26` (ADR-0022 Am. 1).
 - `TEMPO_ENDPOINT` — OTLP/HTTP traces endpoint. Unset ⇒ tracing disabled
   (fail-open, `src/instrumentation.ts`).
 - **Loki: no DR3-Vision-side endpoint.** The app logs to stdout and the CHAD-HQ

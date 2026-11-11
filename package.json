@@ -14,6 +14,7 @@
     "lint": "next lint --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "check:prisma-keys": "node scripts/check-prisma-write-keys.mjs",
+    "check:browser-dsn": "node scripts/check-browser-dsn.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",

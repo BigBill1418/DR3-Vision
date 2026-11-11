@@ -39,7 +39,9 @@ export function buildCsp({ nonce, allowSameOriginFraming = false }: CspOptions):
     "img-src 'self' https://*.r2.cloudflarestorage.com data: blob:",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     "style-src 'self' 'unsafe-inline'",
-    "connect-src 'self' https://*.r2.cloudflarestorage.com",
+    // ADR-0022 Amendment 1 — the browser Sentry SDK POSTs error envelopes to the
+    // PUBLIC GlitchTip host. Never the WireGuard-private glitchtip.barnardhq.com.
+    "connect-src 'self' https://*.r2.cloudflarestorage.com https://errors.barnardhq.com",
     "media-src 'self' blob:",
     "worker-src 'self' blob:",
     "manifest-src 'self'",

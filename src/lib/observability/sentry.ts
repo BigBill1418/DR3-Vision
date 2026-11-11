@@ -14,10 +14,85 @@
 //   - ntfy fires only for system-level incidents, only to Bill, mobile-push.
 // The two are complementary and gate independently.
 
-import type { NodeOptions } from '@sentry/nextjs';
+import type { BrowserOptions, NodeOptions } from '@sentry/nextjs';
+
+type BeforeSend = NonNullable<NodeOptions['beforeSend']>;
+type BeforeBreadcrumb = NonNullable<NodeOptions['beforeBreadcrumb']>;
+export type SentryErrorEvent = Parameters<BeforeSend>[0];
+export type SentryBreadcrumb = Parameters<BeforeBreadcrumb>[0];
+
+/** Drop everything after `?` / `#` — query strings can carry names or PIN params. */
+function stripQuery(url: unknown): unknown {
+  return typeof url === 'string' ? url.replace(/[?#].*$/, '') : url;
+}
 
 /**
- * Shared `Sentry.init` options for every runtime. Returns `null` when no DSN is
+ * Breadcrumb filter (browser + server). UI breadcrumbs are dropped outright: a
+ * keypad tap records the clicked element's selector, so a PIN entry would leave
+ * its digits in order in the trail. Console breadcrumbs are dropped because log
+ * lines can carry operator names. URL-bearing ones lose their query string.
+ */
+export function scrubBreadcrumb(crumb: SentryBreadcrumb): SentryBreadcrumb | null {
+  const category = crumb.category ?? '';
+  if (category.startsWith('ui.') || category === 'console') return null;
+  if (crumb.data) {
+    for (const key of ['url', 'from', 'to']) {
+      if (key in crumb.data) crumb.data[key] = stripQuery(crumb.data[key]);
+    }
+  }
+  return crumb;
+}
+
+/**
+ * The one scrubbing policy for every runtime (CLAUDE.md hard rule #8, ADR-0007,
+ * ADR-0022 Amendment 1). GlitchTip must never receive PIN digits, operator names,
+ * or request bodies.
+ */
+export const scrubEvent = ((event: SentryErrorEvent): SentryErrorEvent | null => {
+  // Never report PIN-related data — drop the whole event.
+  if (event.tags?.['has_pin']) return null;
+  if (event.request) {
+    delete event.request.data;
+    delete event.request.cookies;
+    delete event.request.query_string;
+    if (event.request.url) event.request.url = event.request.url.replace(/[?#].*$/, '');
+    if (event.request.headers) {
+      delete event.request.headers['authorization'];
+      delete event.request.headers['cookie'];
+    }
+  }
+  // Only the opaque id survives: no username, email or IP.
+  if (event.user) {
+    if (event.user.id === undefined) delete event.user;
+    else event.user = { id: event.user.id };
+  }
+  if (event.breadcrumbs) {
+    event.breadcrumbs = event.breadcrumbs.flatMap((b) => scrubBreadcrumb(b) ?? []);
+  }
+  return event;
+}) satisfies BeforeSend;
+
+/**
+ * Browser `Sentry.init` options (src/instrumentation-client.ts). The DSN is
+ * passed in because Next inlines `process.env.NEXT_PUBLIC_GLITCHTIP_DSN` only
+ * where that DOTTED literal appears; it is baked at image BUILD time and must
+ * name the PUBLIC host errors.barnardhq.com (ADR-0022 Amendment 1).
+ */
+export function browserInitOptions(dsn: string | undefined): BrowserOptions | null {
+  if (!dsn) return null;
+  return {
+    dsn,
+    environment: process.env.NODE_ENV,
+    release: process.env.DR3_BUILD_SHA ?? 'dev',
+    tracesSampleRate: 0,
+    sendDefaultPii: false,
+    beforeSend: scrubEvent,
+    beforeBreadcrumb: scrubBreadcrumb,
+  };
+}
+
+/**
+ * Shared server/edge `Sentry.init` options. Returns `null` when no DSN is
  * configured so callers can no-op cleanly (fail-open).
  */
 export function glitchTipInitOptions(): NodeOptions | null {
@@ -34,21 +109,8 @@ export function glitchTipInitOptions(): NodeOptions | null {
     // (instrumentation.ts) and export to Tempo, so disable Sentry's to avoid a
     // duplicate global TracerProvider registration.
     skipOpenTelemetrySetup: true,
-    beforeSend(event) {
-      // Scrub sensitive fields per CLAUDE.md hard rule #8 + ADR-0007.
-      if (event.request?.headers) {
-        delete event.request.headers['authorization'];
-        delete event.request.headers['cookie'];
-      }
-      if (event.request?.cookies) {
-        delete event.request.cookies;
-      }
-      if (event.user) {
-        delete event.user.ip_address;
-      }
-      // Never report PIN-related data — drop the whole event.
-      if (event.tags?.['has_pin']) return null;
-      return event;
-    },
+    sendDefaultPii: false,
+    beforeSend: scrubEvent,
+    beforeBreadcrumb: scrubBreadcrumb,
   };
 }
