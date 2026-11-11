@@ -9,6 +9,23 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-11 — the service worker no longer replays server actions (ADR-0006 Am.1, OPEN-ITEMS 0.HF HF-5)
+
+- **What was wrong.** Since `9f1ebd8` (2026-05-06) the service worker put every failed server action (`Next-Action`
+  POST) into its own background-sync queue for 24 h and re-sent it later. That was never recorded in an ADR. A
+  re-send used whichever operator was signed in at that moment, most actions had no idempotency key, and after a
+  deploy the action id was stale (`Failed to find Server Action`). iPad Safari has no Background Sync API, so the
+  queue was re-sent every time the worker started.
+- **Changed (Bill approved, 2026-11-11).** Server actions now go straight to the network (`NetworkOnly`, no
+  plugins). A failure reaches the page as a normal rejected fetch. The app's IndexedDB queue (`offline-queue.ts`)
+  is the only replay path. When the new worker activates it deletes, without sending, anything older workers left
+  in the `dr3-server-actions` queue. The photo queues, caches, `/healthz` rule and update prompt are unchanged.
+- **Tests.** New `sw.server-actions.test.ts` (3 of 5 failed on `origin/main` before the change),
+  `sw-legacy-queue.test.ts`, `offline-queue.reauth.test.ts` (AUTH_EXPIRED → same operator replays once; a different
+  operator is refused and the row is kept), and a real-Postgres case in `floor-exactly-once.db.test.ts` (a different
+  operator's replay writes nothing).
+- **Not yet verified:** a real iPad in airplane mode (HF-5 lists the steps).
+
 ## 2026-11-11 — A failed check-in says why; a signed-out operator can sign straight back in (ADR-0144, ADR-0074 Am.2)
 
 - **Fixed (OPEN-ITEMS 0.HF HF-3).** When the 5-minute session had lapsed, tapping Yes on a check-in showed "This

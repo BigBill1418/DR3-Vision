@@ -48,6 +48,7 @@ async function connect(): Promise<any> {
 const SITE = 'xo-site';
 const OP = 'xo-operator';
 const LOAD = 'xo-load';
+const OP_OTHER = 'xo-operator-2';
 
 let seq = 1000;
 function key(): string {
@@ -332,6 +333,40 @@ describe.skipIf(!SAME_DB)('ADR-0078 — dock writes land exactly once', () => {
     };
     await addStack(base);
     await expect(addStack(base)).rejects.toThrow();
+  });
+
+  // ADR-0006 Amendment 1 — the offline queue is now the ONLY replay path for
+  // these writes (the service worker no longer replays server actions), and the
+  // queue replays under whoever is signed in at sweep time. A queued stack or
+  // finish replayed under a DIFFERENT operator's session must be refused by
+  // `assertOwn` and write nothing — the client keeps the row as a conflict
+  // (`offline-queue.reauth.test.ts`).
+  it('a replay under a DIFFERENT operator is refused and writes nothing', async () => {
+    const d = await connect();
+    const { addStack, finishUnload } = await import('./load-service');
+    await d.$executeRawUnsafe(`
+      INSERT INTO "users" ("id","name","role","primary_site_id","updated_at")
+      VALUES ('${OP_OTHER}','XO Operator 2','operator','${SITE}',CURRENT_TIMESTAMP)
+      ON CONFLICT ("id") DO NOTHING`);
+    const asOther = { loadId: LOAD, operatorUserId: OP_OTHER, siteId: SITE };
+
+    await expect(
+      addStack({
+        ...asOther,
+        stackIndex: 1,
+        unitCount: 4,
+        countMode: 'ledger',
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ status: 403, reason: 'load_not_assigned_to_operator' });
+    await expect(
+      finishUnload({ ...asOther, countMode: 'ledger', idempotencyKey: key() }),
+    ).rejects.toMatchObject({ status: 403, reason: 'load_not_assigned_to_operator' });
+
+    expect(await d.loadStack.count({ where: { load_id: LOAD } })).toBe(0);
+    const load = await d.inboundLoad.findUnique({ where: { id: LOAD } });
+    expect(load.status).toBe('in_progress');
+    expect(load.assigned_operator_id).toBe(OP);
   });
 
   // ── FALSIFICATION 7: photo.replay-no-duplicate ──────────────────────────
