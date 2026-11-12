@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BROWSER_MAX_EVENTS_PER_MINUTE,
+  MAX_SCRUB_TEXT,
   browserInitOptions,
   createRateLimiter,
   glitchTipInitOptions,
@@ -220,6 +221,49 @@ describe('free-text scrub boundaries (security review of e1503b9)', () => {
     expect(scrubText(`to a@${uuid}.com now`)).toBe('to [email] now');
     expect(scrubText(`to ${uuid}@x.com now`)).toBe('to [email] now');
     expect(scrubText(`to user.${uuid}@host.com now`)).toBe('to [email] now');
+  });
+});
+
+describe('free-text scrub is linear on hostile input (Ryan final check of 18f13af)', () => {
+  const N = 100_000;
+  const hostile: Record<string, string> = {
+    letters: 'a'.repeat(N),
+    ats: '@'.repeat(N),
+    letterAt: 'a@'.repeat(N / 2),
+    digits: '1'.repeat(N),
+    tokenLike: 'Ab1-'.repeat(N / 4),
+    slashes: '/a'.repeat(N / 2),
+    surveys: '/survey/'.repeat(N / 8),
+    dots: 'a.'.repeat(N / 2),
+    hyphens: '-'.repeat(N),
+  };
+  for (const [name, text] of Object.entries(hostile)) {
+    it(`${name} x100K finishes well under 200 ms`, () => {
+      const t = performance.now();
+      scrubText(text);
+      expect(performance.now() - t).toBeLessThan(200);
+    });
+  }
+
+  it('caps scrubbed text at MAX_SCRUB_TEXT with a marker', () => {
+    const out = scrubText('a'.repeat(N));
+    expect(out.length).toBe(MAX_SCRUB_TEXT + '…[truncated]'.length);
+    expect(out.endsWith('…[truncated]')).toBe(true);
+  });
+
+  it('email matches are unchanged by the linear regex', () => {
+    const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    expect(scrubText('a@b.co')).toBe('[email]');
+    expect(scrubText('mail bob1234@svdp.us today')).toBe('mail [email] today');
+    expect(scrubText(`a@${uuid}.com`)).toBe('[email]');
+    expect(scrubText(`user.${uuid}@host.com`)).toBe('[email]');
+    expect(scrubText('sent to op@example.test, then failed')).toBe('sent to [email] then failed');
+  });
+
+  it('sets maxValueLength on both inits', () => {
+    expect(browserInitOptions('https://k@errors.barnardhq.com/26')!.maxValueLength).toBe(
+      MAX_SCRUB_TEXT,
+    );
   });
 });
 

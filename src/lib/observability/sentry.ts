@@ -67,7 +67,17 @@ export function scrubUrl(url: string): string {
  * groups stay readable. Haul numbers (H-145388) are masked like any digit run.
  * Names in free text are NOT caught — code must not put them in thrown messages.
  */
-export function scrubText(text: string): string {
+/**
+ * Longest free text scrubbed or sent. Backstop for the regexes below (all linear,
+ * tested on 100K hostile inputs) and for @sentry/core, which does not truncate
+ * exception values unless `maxValueLength` is set — a huge thrown message must
+ * not stall the tablet's main thread or the Node event loop inside beforeSend.
+ */
+export const MAX_SCRUB_TEXT = 8192;
+const TRUNCATED = '…[truncated]';
+
+export function scrubText(input: string): string {
+  const text = input.length > MAX_SCRUB_TEXT ? input.slice(0, MAX_SCRUB_TEXT) + TRUNCATED : input;
   const tokenless = scrubUrlsInText(text).replace(
     /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g,
     // Bare words need a digit AND a letter, so long error codes such as
@@ -80,11 +90,17 @@ export function scrubText(text: string): string {
   // Then digits, split around UUIDs (capturing group ⇒ odd indexes are UUIDs) so
   // their hex groups stay readable. The digit boundary is DIGIT-only, so a run
   // glued to letters (`pin1234`, `x1234y`) is still masked.
-  return tokenless
-    .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
-    .split(UUID_IN_TEXT)
-    .map((part, i) => (i % 2 ? part : part.replace(/(?<!\p{N})\p{Nd}{4,6}(?!\p{N})/gu, '[digits]')))
-    .join('');
+  return (
+    tokenless
+      // The lookbehind anchors each attempt at a word start (start, space or @):
+      // without it the engine retried from every character of a long run (O(n²)).
+      .replace(/(?<![^\s@])[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
+      .split(UUID_IN_TEXT)
+      .map((part, i) =>
+        i % 2 ? part : part.replace(/(?<!\p{N})\p{Nd}{4,6}(?!\p{N})/gu, '[digits]'),
+      )
+      .join('')
+  );
 }
 
 const UUID_IN_TEXT = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -223,6 +239,7 @@ export function browserInitOptions(dsn: string | undefined): BrowserOptions | nu
     sampleRate: 1,
     tracesSampleRate: 0,
     sendDefaultPii: false,
+    maxValueLength: MAX_SCRUB_TEXT,
     // Scrub FIRST so the limiter never holds an unscrubbed event.
     beforeSend: (event) => {
       const clean = scrubEvent(event);
@@ -251,6 +268,7 @@ export function glitchTipInitOptions(): NodeOptions | null {
     // duplicate global TracerProvider registration.
     skipOpenTelemetrySetup: true,
     sendDefaultPii: false,
+    maxValueLength: MAX_SCRUB_TEXT,
     beforeSend: scrubEvent,
     beforeBreadcrumb: scrubBreadcrumb,
   };
