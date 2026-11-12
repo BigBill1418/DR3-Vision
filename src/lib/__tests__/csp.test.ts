@@ -46,6 +46,13 @@ describe('buildCsp (ADR-0053 D3)', () => {
     expect(directive(csp, 'manifest-src')).toBe("manifest-src 'self'");
   });
 
+  it('lets the browser SDK POST envelopes to the PUBLIC GlitchTip host only (ADR-0022 Am. 1)', () => {
+    const connectSrc = directive(csp, 'connect-src')!;
+    expect(connectSrc.split(' ')).toContain('https://errors.barnardhq.com');
+    // The WireGuard-private ingest host is unreachable from the tablets.
+    expect(connectSrc).not.toContain('glitchtip.barnardhq.com');
+  });
+
   it('omits frame-ancestors by default and appends frame-ancestors self for survey', () => {
     expect(directive(csp, 'frame-ancestors')).toBeUndefined();
     const surveyCsp = buildCsp({ nonce: NONCE, allowSameOriginFraming: true });

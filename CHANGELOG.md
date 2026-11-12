@@ -9,6 +9,31 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-11 — Browser errors from the floor tablets can reach GlitchTip (ADR-0022 Am.1)
+
+- **Found:** no browser error from the Woodland or Eugene tablets has ever reached GlitchTip. The image was built
+  with no `NEXT_PUBLIC_GLITCHTIP_DSN` (Next bakes it at build time, and the Dockerfile had no build arg for it), and
+  the CSP `connect-src` would have blocked the SDK's POST to GlitchTip even with a DSN.
+- **Fixed in code:** the Dockerfile takes `NEXT_PUBLIC_GLITCHTIP_DSN` as a build arg (empty default), compose passes
+  it from the CHAD-side `.env`, and CSP `connect-src` allows `https://errors.barnardhq.com` (the public host, never
+  the WireGuard-only one). The browser init moved to `src/instrumentation-client.ts`, which removes the
+  `@sentry/nextjs` 10 deprecation warning.
+- **Scrubbing rebuilt on allowlists** (browser and server share one policy): headers keep only User-Agent, so
+  Referer/Authorization/Cookie go in any casing; request bodies, cookies and query strings are removed; survey
+  capability tokens (and other long opaque URL segments) become `[token]` in every URL the event carries; only the
+  user id survives; `extra` and non-device contexts are dropped; keypad-tap and console breadcrumbs are dropped and
+  the rest keep only method/status/URL; tokens, then emails, then 4–6 digit runs (any script, even next to letters;
+  haul numbers included) in error text and tags are masked, in that order. UUIDs stay readable. The old `has_pin` drop
+  was removed: nothing ever set that tag. Names inside error text are not caught (documented residual).
+- **Length cap:** very long error text is cut only at a word boundary, scrubbed, and then cut to 8192 characters,
+  so no secret is split into an unmatched fragment; Sentry's own `maxValueLength` is left unset for the same
+  reason. The email mask no longer goes quadratic on long text without spaces.
+- **Volume cap:** at most 10 browser events per minute per tab; the rest are dropped and counted on the next event.
+- **Proof in the build:** `npm run check:browser-dsn` checks the built client chunks; CI builds with a synthetic DSN
+  and runs it.
+- **Still open (OPEN-ITEMS 0.HF HF-8):** set the real value in CHAD-HQ's `/home/bbarnard065/DR3-Vision/.env`,
+  deploy, and prove a synthetic browser error arrives in GlitchTip project 26.
+
 ## 2026-11-11 — the service worker no longer replays server actions (ADR-0006 Am.1, OPEN-ITEMS 0.HF HF-5)
 
 - **What was wrong.** Since `9f1ebd8` (2026-05-06) the service worker put every failed server action (`Next-Action`

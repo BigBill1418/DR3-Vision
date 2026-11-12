@@ -120,6 +120,22 @@ EOF
 chmod 600 ~/.dr3-vision-secrets/observability.env
 ```
 
+### 4a. Browser DSN — BUILD time, compose `.env` (ADR-0022 Am. 1)
+
+`observability.env` is RUNTIME env and never reaches the browser. The browser DSN is baked into the client
+chunks when the image is built, so it lives in the compose project env file the deployer passes to
+`docker compose --env-file .env build`: `/home/bbarnard065/DR3-Vision/.env` on CHAD-HQ (gitignored). Add one
+line, using the PUBLIC host (the tablets are not on WireGuard):
+
+```bash
+NEXT_PUBLIC_GLITCHTIP_DSN=https://<publickey>@errors.barnardhq.com/26
+```
+
+`<publickey>` is the public key of GlitchTip project 26 `dr3-vision` (Project settings → Client keys). Never
+`glitchtip.barnardhq.com` here. The value takes effect only when the image is REBUILT (next deploy that builds
+`app`); recreating the container is not enough. Proof after the build: the bundle served at
+`https://dr3-vision.svdp.us/_next/static/` contains `errors.barnardhq.com` (see 7a).
+
 ## Step 5 — Ensure docker-compose loads the env file
 
 Edit `~/dr3-vision/docker-compose.yml` (or wherever the production compose lives) to include the observability env file in the `app` service:
@@ -188,6 +204,14 @@ reported — that gate is intentional. Within 30 seconds of an authenticated
 admin hit, the error should appear in GlitchTip → Issues. The stack trace
 should be readable (source maps uploaded if `GLITCHTIP_AUTH_TOKEN` was set
 during build).
+
+That route proves the SERVER path only. To prove the BROWSER path (floor tablets), open
+`https://dr3-vision.svdp.us` in a browser, then in the devtools console run
+`setTimeout(() => { throw new Error('synthetic browser error HF-8') })`. Within ~30 s it should appear in
+GlitchTip project 26. If it does not: check the network tab for the POST to
+`errors.barnardhq.com/api/26/envelope/` (blocked by CSP = `connect-src` regression; absent = no DSN baked,
+see 4a). This console method is not yet proven against this app: if no POST appears at all, confirm the bake
+(4a) before concluding the SDK is broken.
 
 ### 7b. Tempo — traces
 

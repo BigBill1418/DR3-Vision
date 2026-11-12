@@ -48,6 +48,14 @@ RUN DATABASE_URL='postgresql://build:build@127.0.0.1:5432/build?schema=public' n
 # this ENV does not carry into the runner stage (separate FROM). Required for
 # both manual host builds and the fleet auto-deployer. (Codified 2026-06-06.)
 ENV NODE_OPTIONS=--max-old-space-size=8192
+# Browser GlitchTip DSN (ADR-0022 Amendment 1). Next inlines NEXT_PUBLIC_* into
+# the client chunks at BUILD time, so a runtime env_file can never reach the
+# browser. Fed by docker-compose.yml build.args from the CHAD-side compose `.env`
+# (never the repo). Empty default ⇒ local/CI builds work and the browser SDK
+# stays a no-op. Declared here, just before the build, so changing it does not
+# bust the `npm ci` layer above.
+ARG NEXT_PUBLIC_GLITCHTIP_DSN=
+ENV NEXT_PUBLIC_GLITCHTIP_DSN=${NEXT_PUBLIC_GLITCHTIP_DSN}
 # THE expensive step: this line preceded by `COPY . .` re-executes on EVERY
 # commit, so it never hit the Docker layer cache — 93 pages / 191 API routes /
 # 266k LOC recompiled from scratch, ~787s of a ~853s build. Next.js keeps its
