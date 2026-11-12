@@ -38,7 +38,8 @@ item below that names Kelsey as a dependency in that light.
   never captured (no build-time DSN, and CSP `connect-src` blocked GlitchTip). Still to do after merge: add
   `NEXT_PUBLIC_GLITCHTIP_DSN=https://<publickey>@errors.barnardhq.com/26` (project 26 `dr3-vision`) to
   `/home/bbarnard065/DR3-Vision/.env` on CHAD-HQ, deploy (the build must re-run), then throw a synthetic browser
-  error and see it arrive in GlitchTip project 26. Supersedes C-7.
+  error and see it arrive in GlitchTip project 26. Also set a GlitchTip project rate limit on project 26 (fleet
+  observability: Watch/Jesse); the in-app cap is per tab and resets on reload. Supersedes C-7.
 
 ---
 

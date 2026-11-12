@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 const PRIVATE_HOST = 'glitchtip.barnardhq.com';
 // A Sentry DSN baked as a string literal: https://<key>@<host>/<project>.
-const DSN_LITERAL = /https:\/\/[0-9a-zA-Z]+@[a-z0-9.-]+\/\d+/;
+const DSN_LITERAL = /https:\/\/[0-9a-zA-Z]+@[a-z0-9.-]+\/\d+/g;
 
 const args = process.argv.slice(2);
 const staticDir = args.includes('--dir') ? args[args.indexOf('--dir') + 1] : '.next/static';
@@ -42,8 +42,8 @@ const privateHits = [];
 for (const file of jsFiles(staticDir)) {
   files += 1;
   const src = readFileSync(file, 'utf8');
-  const m = src.match(DSN_LITERAL);
-  if (m) dsnHits.push({ file, dsn: m[0] });
+  // EVERY DSN-shaped literal, so a stray one earlier in a chunk cannot mask the real one.
+  for (const m of src.matchAll(DSN_LITERAL)) dsnHits.push({ file, dsn: m[0] });
   if (src.includes(PRIVATE_HOST)) privateHits.push(file);
 }
 
@@ -57,7 +57,8 @@ if (expectNone && dsnHits.length) fail(`DSN baked without one configured: ${dsnH
 if (expectHost) {
   const ok = dsnHits.filter((h) => new URL(h.dsn).host === expectHost);
   if (!ok.length) fail(`no DSN for ${expectHost} in ${files} browser chunks`);
-  console.log(`OK: DSN host ${expectHost} baked into ${ok.length} chunk(s) of ${files}`);
+  const chunks = new Set(ok.map((h) => h.file)).size;
+  console.log(`OK: DSN host ${expectHost} baked into ${chunks} chunk(s) of ${files}`);
 } else {
   console.log(`OK: no DSN in ${files} browser chunks`);
 }

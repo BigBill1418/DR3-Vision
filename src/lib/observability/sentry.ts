@@ -21,24 +21,79 @@ type BeforeBreadcrumb = NonNullable<NodeOptions['beforeBreadcrumb']>;
 export type SentryErrorEvent = Parameters<BeforeSend>[0];
 export type SentryBreadcrumb = Parameters<BeforeBreadcrumb>[0];
 
-/** Drop everything after `?` / `#` — query strings can carry names or PIN params. */
-function stripQuery(url: unknown): unknown {
-  return typeof url === 'string' ? url.replace(/[?#].*$/, '') : url;
+// ─── Scrubbing policy (ADR-0022 Amendment 1) ────────────────────────────────
+// ALLOWLISTS, not denylists: anything not named here is removed, so a field the
+// SDK adds later (it already adds a capitalised `Referer`) cannot leak by default.
+
+/** Request headers that survive. Compared case-insensitively. */
+const KEEP_HEADERS = new Set(['user-agent']);
+/** Event contexts that survive (no PII: browser/OS/device model). */
+const KEEP_CONTEXTS = new Set(['browser', 'os', 'device']);
+/** Breadcrumb `data` keys that survive; URL-bearing ones are scrubbed. */
+const KEEP_CRUMB_DATA = new Set(['method', 'status_code', 'url', 'from', 'to']);
+const URL_CRUMB_KEYS = new Set(['url', 'from', 'to']);
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * A path segment that is a bearer capability, not an id. Survey tokens are
+ * 32-char base64url (src/lib/survey/tokens.ts) and are always replaced after
+ * /survey/ and /api/survey/. Elsewhere, any base64url segment of 32+ chars that
+ * is not a UUID is treated the same way — record ids (cuid ≈ 25 chars, UUIDs)
+ * stay, because they grant nothing on their own (the policy already keeps
+ * user.id), and /operator/<site>/<userId> must stay debuggable.
+ */
+function scrubPath(path: string): string {
+  return path
+    .replace(/(\/(?:api\/)?survey\/)[^/?#]+/g, '$1[token]')
+    .replace(/(^|\/)([A-Za-z0-9_-]{32,})(?=\/|$)/g, (m, lead: string, seg: string) =>
+      UUID.test(seg) ? m : `${lead}[token]`,
+    );
+}
+
+/** Drop query/fragment (can carry names or PIN params) and scrub token segments. */
+export function scrubUrl(url: string): string {
+  const bare = url.replace(/[?#].*$/, '');
+  const origin = /^[a-z][a-z0-9+.-]*:\/\/[^/]*/i.exec(bare)?.[0] ?? '';
+  return origin + scrubPath(bare.slice(origin.length));
+}
+
+/**
+ * Best-effort text scrub for free text we cannot drop (exception values, the
+ * event message): 4–6 digit runs (a PIN is 4 digits) and email-like strings.
+ * Names in free text are NOT caught — code must not put them in thrown messages.
+ */
+export function scrubText(text: string): string {
+  return scrubUrlsInText(
+    text
+      .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
+      .replace(/(?<!\d)\d{4,6}(?!\d)/g, '[digits]'),
+  );
+}
+
+function scrubUrlsInText(text: string): string {
+  return text.replace(/https?:\/\/[^\s"'<>)]+|\/(?:api\/)?survey\/[^\s"'<>)/?#]+/g, (u) =>
+    u.startsWith('/') ? scrubPath(u) : scrubUrl(u),
+  );
 }
 
 /**
  * Breadcrumb filter (browser + server). UI breadcrumbs are dropped outright: a
- * keypad tap records the clicked element's selector, so a PIN entry would leave
- * its digits in order in the trail. Console breadcrumbs are dropped because log
- * lines can carry operator names. URL-bearing ones lose their query string.
+ * keypad tap records the tapped element, so a PIN entry would leave its digits
+ * in order in the trail. Console breadcrumbs are dropped because log lines can
+ * carry operator names. Every other crumb loses its `message` and keeps only the
+ * allowlisted `data` keys, with URLs scrubbed.
  */
 export function scrubBreadcrumb(crumb: SentryBreadcrumb): SentryBreadcrumb | null {
   const category = crumb.category ?? '';
   if (category.startsWith('ui.') || category === 'console') return null;
+  delete crumb.message;
   if (crumb.data) {
-    for (const key of ['url', 'from', 'to']) {
-      if (key in crumb.data) crumb.data[key] = stripQuery(crumb.data[key]);
+    const data: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(crumb.data)) {
+      if (!KEEP_CRUMB_DATA.has(key)) continue;
+      data[key] = URL_CRUMB_KEYS.has(key) && typeof value === 'string' ? scrubUrl(value) : value;
     }
+    crumb.data = data;
   }
   return crumb;
 }
@@ -46,25 +101,53 @@ export function scrubBreadcrumb(crumb: SentryBreadcrumb): SentryBreadcrumb | nul
 /**
  * The one scrubbing policy for every runtime (CLAUDE.md hard rule #8, ADR-0007,
  * ADR-0022 Amendment 1). GlitchTip must never receive PIN digits, operator names,
- * or request bodies.
+ * request bodies or capability tokens.
  */
 export const scrubEvent = ((event: SentryErrorEvent): SentryErrorEvent | null => {
-  // Never report PIN-related data — drop the whole event.
-  if (event.tags?.['has_pin']) return null;
   if (event.request) {
+    const { headers, url } = event.request;
     delete event.request.data;
     delete event.request.cookies;
     delete event.request.query_string;
-    if (event.request.url) event.request.url = event.request.url.replace(/[?#].*$/, '');
-    if (event.request.headers) {
-      delete event.request.headers['authorization'];
-      delete event.request.headers['cookie'];
+    delete event.request.env;
+    if (url) event.request.url = scrubUrl(url);
+    if (headers) {
+      event.request.headers = Object.fromEntries(
+        Object.entries(headers).filter(([k]) => KEEP_HEADERS.has(k.toLowerCase())),
+      );
     }
   }
   // Only the opaque id survives: no username, email or IP.
   if (event.user) {
     if (event.user.id === undefined) delete event.user;
     else event.user = { id: event.user.id };
+  }
+  // `extra` carries arbitrary payloads (the SDK's wrap() puts call arguments in
+  // extra.arguments) — never sent.
+  delete event.extra;
+  if (event.contexts) {
+    event.contexts = Object.fromEntries(
+      Object.entries(event.contexts).filter(([k]) => KEEP_CONTEXTS.has(k)),
+    );
+  }
+  if (event.tags) {
+    for (const [k, v] of Object.entries(event.tags)) {
+      if (typeof v === 'string') event.tags[k] = scrubText(v);
+    }
+  }
+  if (event.transaction) event.transaction = scrubPath(event.transaction);
+  if (event.message) event.message = scrubText(event.message);
+  if (event.logentry) {
+    if (event.logentry.message) event.logentry.message = scrubText(event.logentry.message);
+    delete event.logentry.params;
+  }
+  for (const ex of event.exception?.values ?? []) {
+    if (ex.value) ex.value = scrubText(ex.value);
+    for (const frame of ex.stacktrace?.frames ?? []) {
+      if (frame.abs_path) frame.abs_path = scrubUrl(frame.abs_path);
+      if (frame.filename) frame.filename = scrubUrl(frame.filename);
+      delete frame.vars;
+    }
   }
   if (event.breadcrumbs) {
     event.breadcrumbs = event.breadcrumbs.flatMap((b) => scrubBreadcrumb(b) ?? []);
@@ -73,20 +156,56 @@ export const scrubEvent = ((event: SentryErrorEvent): SentryErrorEvent | null =>
 }) satisfies BeforeSend;
 
 /**
+ * Per-tab volume cap (browser). A crash loop on four tablets must not flood
+ * GlitchTip: at most `max` events per sliding `windowMs`; the rest are dropped and
+ * counted, and the count rides the next accepted event as tag `dropped_by_limit`.
+ * Module scope = one tab; a page reload starts a fresh window, so the GlitchTip
+ * project rate limit is the backstop.
+ */
+export function createRateLimiter(max: number, windowMs: number, now: () => number = Date.now) {
+  const sent: number[] = [];
+  let dropped = 0;
+  return (event: SentryErrorEvent): SentryErrorEvent | null => {
+    const t = now();
+    while (sent.length && t - sent[0]! >= windowMs) sent.shift();
+    if (sent.length >= max) {
+      dropped += 1;
+      return null;
+    }
+    sent.push(t);
+    if (dropped) {
+      event.tags = { ...event.tags, dropped_by_limit: String(dropped) };
+      dropped = 0;
+    }
+    return event;
+  };
+}
+
+export const BROWSER_MAX_EVENTS_PER_MINUTE = 10;
+
+/**
  * Browser `Sentry.init` options (src/instrumentation-client.ts). The DSN is
  * passed in because Next inlines `process.env.NEXT_PUBLIC_GLITCHTIP_DSN` only
- * where that DOTTED literal appears; it is baked at image BUILD time and must
- * name the PUBLIC host errors.barnardhq.com (ADR-0022 Amendment 1).
+ * where that literal appears; it is baked at image BUILD time and must name the
+ * PUBLIC host errors.barnardhq.com (ADR-0022 Amendment 1).
  */
 export function browserInitOptions(dsn: string | undefined): BrowserOptions | null {
   if (!dsn) return null;
+  const limit = createRateLimiter(BROWSER_MAX_EVENTS_PER_MINUTE, 60_000);
   return {
     dsn,
     environment: process.env.NODE_ENV,
     release: process.env.DR3_BUILD_SHA ?? 'dev',
+    // Every error, once: the SDK's default Dedupe integration drops an identical
+    // consecutive event, and the limiter caps volume. Traces are Tempo's job.
+    sampleRate: 1,
     tracesSampleRate: 0,
     sendDefaultPii: false,
-    beforeSend: scrubEvent,
+    // Scrub FIRST so the limiter never holds an unscrubbed event.
+    beforeSend: (event) => {
+      const clean = scrubEvent(event);
+      return clean && limit(clean);
+    },
     beforeBreadcrumb: scrubBreadcrumb,
   };
 }

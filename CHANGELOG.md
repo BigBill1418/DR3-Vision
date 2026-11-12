@@ -18,9 +18,13 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
   it from the CHAD-side `.env`, and CSP `connect-src` allows `https://errors.barnardhq.com` (the public host, never
   the WireGuard-only one). The browser init moved to `src/instrumentation-client.ts`, which removes the
   `@sentry/nextjs` 10 deprecation warning.
-- **Scrubbing widened** (browser and server share one policy): request bodies, cookies and query strings are
-  removed, only the user id survives, and keypad-tap and console breadcrumbs are dropped, so PIN digits and
-  operator names do not reach GlitchTip. PIN-tagged events are still dropped.
+- **Scrubbing rebuilt on allowlists** (browser and server share one policy): headers keep only User-Agent, so
+  Referer/Authorization/Cookie go in any casing; request bodies, cookies and query strings are removed; survey
+  capability tokens (and other long opaque URL segments) become `[token]` in every URL the event carries; only the
+  user id survives; `extra` and non-device contexts are dropped; keypad-tap and console breadcrumbs are dropped and
+  the rest keep only method/status/URL; 4–6 digit runs and emails in error text are masked. The old `has_pin` drop
+  was removed: nothing ever set that tag. Names inside error text are not caught (documented residual).
+- **Volume cap:** at most 10 browser events per minute per tab; the rest are dropped and counted on the next event.
 - **Proof in the build:** `npm run check:browser-dsn` checks the built client chunks; CI builds with a synthetic DSN
   and runs it.
 - **Still open (OPEN-ITEMS 0.HF HF-6):** set the real value in CHAD-HQ's `/home/bbarnard065/DR3-Vision/.env`,

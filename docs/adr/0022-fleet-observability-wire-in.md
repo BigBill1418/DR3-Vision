@@ -117,7 +117,7 @@ export async function initGlitchTip() {
         delete event.contexts.user.ip_address;
       }
       // Never report PIN-related data
-      if (event.tags?.has_pin) return null;
+      if (event.tags?.has_pin) return null; // removed by Amendment 1: nothing set this tag
       return event;
     },
   });
@@ -399,10 +399,27 @@ reached GlitchTip. Two gaps, either one enough on its own:
   form was not a third gap.) The file also exports `onRouterTransitionStart`, which the SDK asks for at build;
   with `tracesSampleRate: 0` it records nothing.
 - One scrubbing policy (`scrubEvent` / `scrubBreadcrumb` in `src/lib/observability/sentry.ts`) for browser and
-  server: PIN-tagged events are dropped, request bodies/cookies/query strings and auth headers are removed, only
-  the opaque user id survives (no username, email or IP), UI breadcrumbs are dropped (a keypad tap records the
-  tapped element, which would leave PIN digits in the trail), console breadcrumbs are dropped (log lines can carry
-  operator names), and URL query strings are stripped from breadcrumbs. `sendDefaultPii: false`.
+  server, built from allowlists so a field the SDK adds later is removed by default:
+  - request: body, cookies, query string and env removed; headers keep only `User-Agent` (case-insensitive), so
+    `Referer`, `Authorization`, `Cookie` and `X-Forwarded-For` go in any casing.
+  - URLs everywhere (request URL, transaction, breadcrumb `url`/`from`/`to`, stack-frame paths, URLs in tags and
+    exception text): query and fragment dropped; the segment after `/survey/` or `/api/survey/` (a capability
+    token) and any other 32+ char base64url segment that is not a UUID become `[token]`. Record ids
+    (cuid, UUID, `/operator/<site>/<userId>`) stay: they grant nothing on their own.
+  - `user` reduced to `{ id }`; `extra` dropped (the SDK's `wrap()` puts call arguments there); `contexts` keep
+    only `browser`, `os`, `device`; stack-frame `vars` dropped.
+  - breadcrumbs: `ui.*` dropped (a keypad tap records the tapped element, i.e. the PIN digits in order) and
+    `console` dropped (log lines can carry names); the rest lose `message` and keep only `method`, `status_code`,
+    `url`, `from`, `to`.
+  - free text (exception values, event message, tag values): best-effort regex replaces 4–6 digit runs and
+    email-like strings. Names in free text are NOT detected (tested as a residual).
+  - `sendDefaultPii: false`.
+- The `has_pin` tag check that §2 described is REMOVED: nothing in the app ever set that tag, so the drop never
+  fired. PIN safety rests on the structural rules above, not on a tag.
+- Browser volume cap: at most 10 events per minute per tab (sliding window); the rest are dropped and counted, and
+  the count rides the next accepted event as tag `dropped_by_limit`. `sampleRate: 1`; the SDK's default Dedupe
+  integration drops identical consecutive events. A reload starts a fresh window, so a GlitchTip project rate
+  limit is the backstop (to be set by fleet observability, not by this repo).
 - Proof is in the build output: `npm run check:browser-dsn -- --expect errors.barnardhq.com` after a DSN build,
   `--expect-none` after a plain build. Both also fail if the WireGuard-private host appears in any browser chunk.
   CI builds with a synthetic DSN (`https://testkey@errors.barnardhq.com/26`) and runs the `--expect` check.
@@ -410,8 +427,8 @@ reached GlitchTip. Two gaps, either one enough on its own:
 **Not verified by this amendment:** arrival of a real browser event in GlitchTip project 26. That needs the CHAD
 value, a deploy, and a synthetic browser error (OPEN-ITEMS 0.HF HF-6).
 
-**Residual:** an exception's own message text is not rewritten; code must not put PINs or names into thrown
-messages (CLAUDE.md hard rule #8 already forbids logging PINs). Source-map upload (`GLITCHTIP_AUTH_TOKEN`) is
+**Residual:** free text is only regex-scrubbed (digit runs, emails, URLs); a name inside a thrown message
+survives, so code must not put names or PINs into thrown messages (CLAUDE.md hard rule #8). Source-map upload (`GLITCHTIP_AUTH_TOKEN`) is
 build-time too and is still not passed as a build arg, so browser stack traces stay minified.
 
 ## References

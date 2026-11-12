@@ -1,84 +1,166 @@
 // ADR-0022 Amendment 1 — the GlitchTip scrubbing policy shared by the browser
-// (floor tablets) and server inits. Synthetic data only.
+// (floor tablets) and server inits, plus the browser volume cap. Synthetic data only.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  BROWSER_MAX_EVENTS_PER_MINUTE,
   browserInitOptions,
+  createRateLimiter,
   glitchTipInitOptions,
   scrubBreadcrumb,
   scrubEvent,
+  scrubText,
+  scrubUrl,
   type SentryBreadcrumb,
   type SentryErrorEvent,
 } from '@/lib/observability/sentry';
 
 const DSN = 'https://testkey@errors.barnardhq.com/26';
+// Synthetic 32-char base64url survey token (same shape as src/lib/survey/tokens.ts).
+const TOKEN = 'Zm9vYmFyYmF6cXV4X3N5bnRoZXRpYy0x';
+const NAME = 'Test Operator';
 
 function syntheticEvent(): SentryErrorEvent {
   return {
     type: undefined,
-    message: 'synthetic failure',
-    tags: { site: 'woodland' },
-    user: {
-      id: 'u-test-1',
-      username: 'Test Operator',
-      email: 'op@example.test',
-      ip_address: '10.0.0.9',
+    message: 'PIN 4821 rejected <op@example.test>',
+    transaction: `/survey/${TOKEN}`,
+    tags: { site: 'woodland', page: `https://dr3-vision.svdp.us/survey/${TOKEN}` },
+    user: { id: 'u-test-1', username: NAME, email: 'op@example.test', ip_address: '10.0.0.9' },
+    extra: { arguments: [{ pin: '4821', name: NAME }] },
+    contexts: {
+      browser: { name: 'Safari' },
+      os: { name: 'iPadOS' },
+      device: { model: 'iPad' },
+      floor: { operator: NAME },
     },
     request: {
-      url: 'https://dr3-vision.svdp.us/operator/pin?name=Test%20Operator&pin=1234',
-      query_string: 'name=Test%20Operator&pin=1234',
-      data: '{"pin":"1234","name":"Test Operator"}',
+      url: `https://dr3-vision.svdp.us/survey/${TOKEN}?name=Test%20Operator&pin=4821`,
+      query_string: 'name=Test%20Operator&pin=4821',
+      data: '{"pin":"4821","name":"Test Operator"}',
       cookies: { session: 'synthetic' },
-      headers: { authorization: 'Bearer synthetic', cookie: 'a=b', 'user-agent': 'iPad' },
+      headers: {
+        Authorization: 'Bearer synthetic',
+        authorization: 'Bearer synthetic',
+        Cookie: 'a=b',
+        'X-Forwarded-For': '10.0.0.9',
+        Referer: `https://dr3-vision.svdp.us/survey/${TOKEN}?pin=4821`,
+        'User-Agent': 'iPad',
+      },
+    },
+    exception: {
+      values: [
+        {
+          type: 'Error',
+          value: `bad pin 4821 from op@example.test at /api/survey/${TOKEN}`,
+          stacktrace: {
+            frames: [
+              {
+                abs_path: `https://dr3-vision.svdp.us/survey/${TOKEN}`,
+                filename: 'app:///_next/static/chunks/main-app-643d3742596340f5.js',
+                vars: { pin: '4821' },
+              },
+            ],
+          },
+        },
+      ],
     },
     breadcrumbs: [
       { category: 'ui.click', message: 'button.keypad-digit[aria-label="1"]' },
       { category: 'ui.input', message: 'input[name="pin"]' },
-      { category: 'console', message: 'Signed in as Test Operator' },
+      { category: 'console', message: `Signed in as ${NAME}` },
       {
         category: 'fetch',
-        data: { method: 'POST', url: '/api/auth/pin?operator=Test%20Operator', status_code: 401 },
+        message: `POST for ${NAME}`,
+        data: {
+          method: 'POST',
+          url: `/api/survey/${TOKEN}?operator=Test%20Operator`,
+          status_code: 401,
+          request_body_size: 12,
+          body: '{"pin":"4821"}',
+        },
       },
-      { category: 'navigation', data: { from: '/operator?x=1', to: '/operator/loads?who=Test' } },
+      {
+        category: 'navigation',
+        data: { from: '/operator/woodland/u-test-1?x=1', to: `/survey/${TOKEN}` },
+      },
     ],
   };
 }
 
 describe('scrubEvent', () => {
-  it('drops a PIN-tagged event entirely', () => {
-    const e = syntheticEvent();
-    e.tags = { has_pin: true };
-    expect(scrubEvent(e)).toBeNull();
+  const out = scrubEvent(syntheticEvent())!;
+  const serialized = JSON.stringify(out);
+
+  it('leaves no PIN digits, name, email, IP or survey token anywhere in the event', () => {
+    for (const leak of ['4821', NAME, 'Test%20Operator', 'op@example.test', '10.0.0.9', TOKEN]) {
+      expect(serialized).not.toContain(leak);
+    }
   });
 
-  it('removes request bodies, cookies, auth headers and query strings', () => {
-    const out = scrubEvent(syntheticEvent())!;
+  it('keeps only User-Agent, matched case-insensitively (Referer/Authorization/Cookie/XFF go)', () => {
+    expect(out.request?.headers).toEqual({ 'User-Agent': 'iPad' });
+  });
+
+  it('removes request bodies, cookies and query strings; tokens become placeholders', () => {
     expect(out.request?.data).toBeUndefined();
     expect(out.request?.cookies).toBeUndefined();
     expect(out.request?.query_string).toBeUndefined();
-    expect(out.request?.url).toBe('https://dr3-vision.svdp.us/operator/pin');
-    expect(out.request?.headers).toEqual({ 'user-agent': 'iPad' });
+    expect(out.request?.url).toBe('https://dr3-vision.svdp.us/survey/[token]');
+    expect(out.transaction).toBe('/survey/[token]');
   });
 
-  it('keeps only the opaque user id — never a name, email or IP', () => {
-    expect(scrubEvent(syntheticEvent())!.user).toEqual({ id: 'u-test-1' });
+  it('keeps only the opaque user id', () => {
+    expect(out.user).toEqual({ id: 'u-test-1' });
     const anon = syntheticEvent();
-    anon.user = { username: 'Test Operator' };
+    anon.user = { username: NAME };
     expect(scrubEvent(anon)!.user).toBeUndefined();
   });
 
-  it('strips keypad/console breadcrumbs and URL query strings from the rest', () => {
-    const out = scrubEvent(syntheticEvent())!;
-    const serialized = JSON.stringify(out);
-    expect(serialized).not.toContain('1234');
-    expect(serialized).not.toContain('Test Operator');
-    expect(serialized).not.toContain('Test%20Operator');
+  it('drops extra and keeps only browser/os/device contexts', () => {
+    expect(out.extra).toBeUndefined();
+    expect(Object.keys(out.contexts ?? {}).sort()).toEqual(['browser', 'device', 'os']);
+  });
+
+  it('scrubs exception values and stack frames, keeping chunk file names', () => {
+    const ex = out.exception!.values![0]!;
+    expect(ex.value).toBe('bad pin [digits] from [email] at /api/survey/[token]');
+    const frame = ex.stacktrace!.frames![0]!;
+    expect(frame.abs_path).toBe('https://dr3-vision.svdp.us/survey/[token]');
+    expect(frame.filename).toBe('app:///_next/static/chunks/main-app-643d3742596340f5.js');
+    expect(frame.vars).toBeUndefined();
+  });
+
+  it('drops UI/console crumbs; others lose message and non-allowlisted data', () => {
     expect(out.breadcrumbs?.map((b) => b.category)).toEqual(['fetch', 'navigation']);
-    expect(out.breadcrumbs?.[0]?.data).toEqual({
-      method: 'POST',
-      url: '/api/auth/pin',
-      status_code: 401,
+    expect(out.breadcrumbs?.[0]).toEqual({
+      category: 'fetch',
+      data: { method: 'POST', url: '/api/survey/[token]', status_code: 401 },
     });
-    expect(out.breadcrumbs?.[1]?.data).toEqual({ from: '/operator', to: '/operator/loads' });
+    // A record id (cuid-ish user id) is NOT a token and stays debuggable.
+    expect(out.breadcrumbs?.[1]?.data).toEqual({
+      from: '/operator/woodland/u-test-1',
+      to: '/survey/[token]',
+    });
+  });
+});
+
+describe('scrubUrl / scrubText', () => {
+  it('replaces any 32+ char base64url segment, but keeps UUIDs and short ids', () => {
+    const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    expect(scrubUrl(`https://h/x/${TOKEN}/y`)).toBe('https://h/x/[token]/y');
+    expect(scrubUrl(`/operator/load/${uuid}`)).toBe(`/operator/load/${uuid}`);
+    expect(scrubUrl('/dashboard/woodland/load/clx1a2b3c4d5e6f7g8h9i0j1k')).toBe(
+      '/dashboard/woodland/load/clx1a2b3c4d5e6f7g8h9i0j1k',
+    );
+  });
+
+  it('documented residual: a NAME inside free text is not detectable and survives', () => {
+    expect(scrubText(`failed for ${NAME}`)).toBe(`failed for ${NAME}`);
+  });
+
+  it('leaves short numbers (HTTP status) alone', () => {
+    expect(scrubText('HTTP 401 after 3 tries')).toBe('HTTP 401 after 3 tries');
+    expect(scrubText('PIN 0042')).toBe('PIN [digits]');
   });
 });
 
@@ -90,26 +172,47 @@ describe('scrubBreadcrumb', () => {
   });
 });
 
+describe('createRateLimiter', () => {
+  it('passes `max` per window, drops and counts the rest, reports the count on the next one', () => {
+    let t = 0;
+    const limit = createRateLimiter(10, 60_000, () => t);
+    const ev = (): SentryErrorEvent => ({ type: undefined });
+    for (let i = 0; i < 10; i++) expect(limit(ev())).not.toBeNull();
+    for (let i = 0; i < 5; i++) expect(limit(ev())).toBeNull();
+    t = 60_000;
+    const next = limit(ev())!;
+    expect(next.tags?.['dropped_by_limit']).toBe('5');
+    expect(limit(ev())!.tags?.['dropped_by_limit']).toBeUndefined();
+  });
+});
+
 describe('browserInitOptions', () => {
   it('is a no-op without a DSN (local/CI builds)', () => {
     expect(browserInitOptions(undefined)).toBeNull();
     expect(browserInitOptions('')).toBeNull();
   });
 
-  it('errors-only, no default PII, and wires both scrub hooks', () => {
+  it('errors-only, sampleRate 1, no default PII, scrub + cap wired', () => {
     const o = browserInitOptions(DSN)!;
     expect(o.dsn).toBe(DSN);
+    expect(o.sampleRate).toBe(1);
     expect(o.tracesSampleRate).toBe(0);
     expect(o.sendDefaultPii).toBe(false);
-    expect(o.beforeSend).toBe(scrubEvent);
     expect(o.beforeBreadcrumb).toBe(scrubBreadcrumb);
+    const send = o.beforeSend!;
+    const hint = {};
+    const first = send(syntheticEvent(), hint) as SentryErrorEvent;
+    expect(JSON.stringify(first)).not.toContain(TOKEN);
+    for (let i = 1; i < BROWSER_MAX_EVENTS_PER_MINUTE; i++)
+      expect(send(syntheticEvent(), hint)).not.toBeNull();
+    expect(send(syntheticEvent(), hint)).toBeNull();
   });
 });
 
 describe('glitchTipInitOptions (server) shares the scrub', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('scrubs request bodies on the server path too', () => {
+  it('uses the same scrub on the server path', () => {
     vi.stubEnv('GLITCHTIP_DSN', DSN);
     const o = glitchTipInitOptions()!;
     expect(o.beforeSend).toBe(scrubEvent);
