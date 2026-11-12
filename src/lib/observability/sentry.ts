@@ -62,8 +62,9 @@ export function scrubUrl(url: string): string {
  * event message, tag values). ORDER IS LOAD-BEARING: tokens first (URLs, then
  * any bare 32+ char base64url word), then emails, then digit runs — masking
  * digits first would cut a token below 32 chars and leak the rest of it.
- * Digit runs are 4–6 digits in ANY script (\p{Nd}; a PIN is 4) standing alone
- * as a word; UUIDs are set aside first so their hex groups are never masked.
+ * Digit runs are 4–6 digits in ANY script (\p{Nd}; a PIN is 4), bounded only by
+ * non-digits (letters do not protect them); UUIDs are set aside so their hex
+ * groups stay readable. Haul numbers (H-145388) are masked like any digit run.
  * Names in free text are NOT caught — code must not put them in thrown messages.
  */
 export function scrubText(text: string): string {
@@ -74,16 +75,15 @@ export function scrubText(text: string): string {
     // token lacks a digit with probability ~(54/64)^32 ≈ 0.4% (accepted residual).
     (w) => (UUID.test(w) || !/\d/.test(w) || !/[A-Za-z]/.test(w) ? w : '[token]'),
   );
-  // Split around UUIDs (capturing group ⇒ odd indexes are the UUIDs themselves).
+  // Emails on the WHOLE string first: an address may contain a UUID, and the UUID
+  // split below would cut it in half so the email mask never saw it.
+  // Then digits, split around UUIDs (capturing group ⇒ odd indexes are UUIDs) so
+  // their hex groups stay readable. The digit boundary is DIGIT-only, so a run
+  // glued to letters (`pin1234`, `x1234y`) is still masked.
   return tokenless
+    .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
     .split(UUID_IN_TEXT)
-    .map((part, i) =>
-      i % 2
-        ? part
-        : part
-            .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
-            .replace(/(?<![\p{L}\p{N}])\p{Nd}{4,6}(?![\p{L}\p{N}])/gu, '[digits]'),
-    )
+    .map((part, i) => (i % 2 ? part : part.replace(/(?<!\p{N})\p{Nd}{4,6}(?!\p{N})/gu, '[digits]')))
     .join('');
 }
 

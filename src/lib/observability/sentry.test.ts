@@ -199,6 +199,30 @@ describe('token containing a 4-6 digit run (review round 2)', () => {
   });
 });
 
+describe('free-text scrub boundaries (security review of e1503b9)', () => {
+  const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+
+  it('masks digit runs glued to letters (digit-only boundary, any script)', () => {
+    expect(scrubText('pin1234')).toBe('pin[digits]');
+    expect(scrubText('PIN=123456x')).toBe('PIN=[digits]x');
+    expect(scrubText('x1234y')).toBe('x[digits]y');
+    expect(scrubText('op\uFF11\uFF12\uFF13\uFF14')).toBe('op[digits]'); // fullwidth
+    expect(scrubText('PIN \u0664\u0668\u0662\u0661')).toBe('PIN [digits]'); // Arabic-Indic
+    expect(scrubText('1234567')).toBe('1234567'); // 7+ digits is not PIN-shaped
+  });
+
+  it('keeps UUIDs intact; haul numbers are masked (ADR-0022 Am.1 promises no exception)', () => {
+    expect(scrubText(`load ${uuid} failed`)).toBe(`load ${uuid} failed`);
+    expect(scrubText('haul H-145388 rejected')).toBe('haul H-[digits] rejected');
+  });
+
+  it('masks a whole email even when a UUID sits inside it', () => {
+    expect(scrubText(`to a@${uuid}.com now`)).toBe('to [email] now');
+    expect(scrubText(`to ${uuid}@x.com now`)).toBe('to [email] now');
+    expect(scrubText(`to user.${uuid}@host.com now`)).toBe('to [email] now');
+  });
+});
+
 describe('scrubBreadcrumb', () => {
   it('drops UI and console breadcrumbs at record time', () => {
     const click: SentryBreadcrumb = { category: 'ui.click', message: 'button[aria-label="7"]' };

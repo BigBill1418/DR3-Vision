@@ -413,7 +413,9 @@ reached GlitchTip. Two gaps, either one enough on its own:
     `url`, `from`, `to`.
   - free text (exception values, event message, tag values, number-typed tags): best-effort, in this order —
     tokens first (URLs, then any bare 32+ char base64url word with a digit and a letter, UUIDs excepted), then
-    email-like strings, then standalone 4–6 digit runs in any script (`\p{Nd}`; UUIDs set aside first). Order
+    email-like strings on the whole text (so an address containing a UUID is still masked), then 4–6 digit runs
+    in any script (`\p{Nd}`) bounded only by non-digits, so `pin1234` and `x1234y` are masked too. UUIDs are set
+    aside for the digit step and stay readable; haul numbers (`H-145388`) are masked like any digit run. Order
     matters: masking digits first would cut a token below 32 chars and leak the rest. Names in free text are NOT
     detected (tested as a residual), nor is a bare random token with no digit (~0.4% of tokens).
   - `sendDefaultPii: false`.
