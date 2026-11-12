@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BROWSER_MAX_EVENTS_PER_MINUTE,
   MAX_SCRUB_TEXT,
+  RAW_SCRUB_LIMIT,
   browserInitOptions,
   createRateLimiter,
   glitchTipInitOptions,
@@ -245,10 +246,20 @@ describe('free-text scrub is linear on hostile input (Ryan final check of 18f13a
     });
   }
 
-  it('caps scrubbed text at MAX_SCRUB_TEXT with a marker', () => {
-    const out = scrubText('a'.repeat(N));
-    expect(out.length).toBe(MAX_SCRUB_TEXT + '…[truncated]'.length);
-    expect(out.endsWith('…[truncated]')).toBe(true);
+  it('a word-free run is dropped whole, never kept as a fragment', () => {
+    expect(scrubText('a'.repeat(N))).toBe('…[truncated]');
+  });
+
+  it('output is at most MAX_SCRUB_TEXT plus the marker, cut at a word boundary', () => {
+    const out = scrubText('word '.repeat(N / 5));
+    expect(out.endsWith(' …[truncated]') || out.endsWith('word…[truncated]')).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(MAX_SCRUB_TEXT + '…[truncated]'.length);
+    expect(
+      out
+        .replace('…[truncated]', '')
+        .split(' ')
+        .every((w) => w === '' || w === 'word'),
+    ).toBe(true);
   });
 
   it('email matches are unchanged by the linear regex', () => {
@@ -260,10 +271,46 @@ describe('free-text scrub is linear on hostile input (Ryan final check of 18f13a
     expect(scrubText('sent to op@example.test, then failed')).toBe('sent to [email] then failed');
   });
 
-  it('sets maxValueLength on both inits', () => {
-    expect(browserInitOptions('https://k@errors.barnardhq.com/26')!.maxValueLength).toBe(
-      MAX_SCRUB_TEXT,
-    );
+  it('never lets the SDK cut UNSCRUBBED text (no maxValueLength on either init)', () => {
+    expect(browserInitOptions('https://k@errors.barnardhq.com/26')!.maxValueLength).toBeUndefined();
+    vi.stubEnv('GLITCHTIP_DSN', 'https://k@errors.barnardhq.com/26');
+    expect(glitchTipInitOptions()!.maxValueLength).toBeUndefined();
+    vi.unstubAllEnvs();
+  });
+});
+
+describe('secrets straddling the length cut never leave a fragment (security review of 286c311)', () => {
+  const TOK = 'Qx7Lm2Np9Rs4Tv6Wy8Za1Bc3De5Fg0HjKk';
+  // Pad so the secret starts just before the raw cut (RAW_SCRUB_LIMIT).
+  const at = (secret: string, before: number) =>
+    'x '.repeat((RAW_SCRUB_LIMIT - before) / 2) + secret + ' tail';
+  const cases: Record<string, [string, number, RegExp]> = {
+    token: [TOK, 10, /Qx7Lm2Np9R/],
+    pin: ['1234', 3, /123/],
+    email: ['someone@example.test', 7, /someone/],
+    survey: [`/survey/${TOK}`, 20, /\/survey\/Qx7/],
+  };
+  for (const [name, [secret, before, fragment]] of Object.entries(cases)) {
+    it(`${name} split by the raw cut leaks no leading fragment (value, message, crumb)`, () => {
+      const text = at(secret, before);
+      expect(text.length).toBeGreaterThan(RAW_SCRUB_LIMIT);
+      const out = scrubEvent({
+        type: undefined,
+        message: text,
+        exception: { values: [{ value: text }] },
+        breadcrumbs: [{ category: 'fetch', message: text }],
+      })!;
+      expect(JSON.stringify(out)).not.toMatch(fragment);
+      expect(out.exception!.values![0]!.value!.endsWith('…[truncated]')).toBe(true);
+    });
+  }
+
+  it('the larger raw limit stays linear (hostile shapes at RAW_SCRUB_LIMIT < 200 ms)', () => {
+    for (const unit of ['a', '1', 'a@', 'Ab1-', '/a', 'a.', '-', 'x ']) {
+      const t = performance.now();
+      scrubText(unit.repeat(RAW_SCRUB_LIMIT / unit.length));
+      expect(performance.now() - t).toBeLessThan(200);
+    }
   });
 });
 

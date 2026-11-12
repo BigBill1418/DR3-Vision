@@ -58,6 +58,35 @@ export function scrubUrl(url: string): string {
 }
 
 /**
+ * Length limits for free text. Order is load-bearing: cut the RAW text only at a
+ * generous limit, and only at whitespace, THEN scrub, THEN cut the SCRUBBED text.
+ * Cutting before scrubbing would split a secret below what its rule matches
+ * (a 31-char token, 3 PIN digits, half an email) and send the fragment. For the
+ * same reason the SDK's `maxValueLength` is NOT set: it would cut values before
+ * beforeSend runs. Every regex here is linear (tested at both limits).
+ */
+export const MAX_SCRUB_TEXT = 8192;
+export const RAW_SCRUB_LIMIT = 4 * MAX_SCRUB_TEXT;
+const TRUNCATED = '…[truncated]';
+
+/** Cut to at most `max` chars, dropping the last partial word; '' if no whitespace. */
+function cutAtWord(text: string, max: number): string {
+  let i = max;
+  while (i > 0 && !/\s/.test(text[i]!)) i -= 1;
+  return text.slice(0, i);
+}
+
+export function scrubText(input: string): string {
+  if (input.length <= RAW_SCRUB_LIMIT) return scrubCapped(scrubBody(input), false);
+  return scrubCapped(scrubBody(cutAtWord(input, RAW_SCRUB_LIMIT)), true);
+}
+
+function scrubCapped(scrubbed: string, truncated: boolean): string {
+  if (scrubbed.length <= MAX_SCRUB_TEXT) return truncated ? scrubbed + TRUNCATED : scrubbed;
+  return cutAtWord(scrubbed, MAX_SCRUB_TEXT) + TRUNCATED;
+}
+
+/**
  * Best-effort text scrub for free text we cannot drop (exception values, the
  * event message, tag values). ORDER IS LOAD-BEARING: tokens first (URLs, then
  * any bare 32+ char base64url word), then emails, then digit runs — masking
@@ -67,17 +96,7 @@ export function scrubUrl(url: string): string {
  * groups stay readable. Haul numbers (H-145388) are masked like any digit run.
  * Names in free text are NOT caught — code must not put them in thrown messages.
  */
-/**
- * Longest free text scrubbed or sent. Backstop for the regexes below (all linear,
- * tested on 100K hostile inputs) and for @sentry/core, which does not truncate
- * exception values unless `maxValueLength` is set — a huge thrown message must
- * not stall the tablet's main thread or the Node event loop inside beforeSend.
- */
-export const MAX_SCRUB_TEXT = 8192;
-const TRUNCATED = '…[truncated]';
-
-export function scrubText(input: string): string {
-  const text = input.length > MAX_SCRUB_TEXT ? input.slice(0, MAX_SCRUB_TEXT) + TRUNCATED : input;
+function scrubBody(text: string): string {
   const tokenless = scrubUrlsInText(text).replace(
     /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g,
     // Bare words need a digit AND a letter, so long error codes such as
@@ -239,7 +258,6 @@ export function browserInitOptions(dsn: string | undefined): BrowserOptions | nu
     sampleRate: 1,
     tracesSampleRate: 0,
     sendDefaultPii: false,
-    maxValueLength: MAX_SCRUB_TEXT,
     // Scrub FIRST so the limiter never holds an unscrubbed event.
     beforeSend: (event) => {
       const clean = scrubEvent(event);
@@ -268,7 +286,6 @@ export function glitchTipInitOptions(): NodeOptions | null {
     // duplicate global TracerProvider registration.
     skipOpenTelemetrySetup: true,
     sendDefaultPii: false,
-    maxValueLength: MAX_SCRUB_TEXT,
     beforeSend: scrubEvent,
     beforeBreadcrumb: scrubBreadcrumb,
   };

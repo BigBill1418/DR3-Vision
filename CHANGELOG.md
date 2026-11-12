@@ -25,8 +25,9 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
   the rest keep only method/status/URL; tokens, then emails, then 4–6 digit runs (any script, even next to letters;
   haul numbers included) in error text and tags are masked, in that order. UUIDs stay readable. The old `has_pin` drop
   was removed: nothing ever set that tag. Names inside error text are not caught (documented residual).
-- **Length cap:** error text is cut to 8192 characters before scrubbing, and Sentry's `maxValueLength` is set to
-  match; the email mask no longer goes quadratic on long text without spaces.
+- **Length cap:** very long error text is cut only at a word boundary, scrubbed, and then cut to 8192 characters,
+  so no secret is split into an unmatched fragment; Sentry's own `maxValueLength` is left unset for the same
+  reason. The email mask no longer goes quadratic on long text without spaces.
 - **Volume cap:** at most 10 browser events per minute per tab; the rest are dropped and counted on the next event.
 - **Proof in the build:** `npm run check:browser-dsn` checks the built client chunks; CI builds with a synthetic DSN
   and runs it.

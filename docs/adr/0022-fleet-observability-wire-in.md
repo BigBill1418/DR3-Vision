@@ -418,8 +418,11 @@ reached GlitchTip. Two gaps, either one enough on its own:
     aside for the digit step and stay readable; haul numbers (`H-145388`) are masked like any digit run. Order
     matters: masking digits first would cut a token below 32 chars and leak the rest. Names in free text are NOT
     detected (tested as a residual), nor is a bare random token with no digit (~0.4% of tokens).
-  - length cap: free text is cut to 8192 chars (`…[truncated]`) before scrubbing, and `maxValueLength: 8192` is
-    set on both inits; every scrub regex is linear (tested on 100K-char hostile inputs).
+  - length cap, in this order: the RAW text is cut only above 32768 chars and only at whitespace (a tail with no
+    whitespace is dropped whole), THEN scrubbed, THEN the scrubbed text is cut to 8192 chars at whitespace plus
+    `…[truncated]`. Cutting before scrubbing would leave a fragment no rule matches (a 31-char token, 3 PIN
+    digits, half an email), so the SDK's `maxValueLength` is deliberately NOT set. Every scrub regex is linear
+    (tested on hostile inputs at both limits and at 100K).
   - `sendDefaultPii: false`.
 - The `has_pin` tag check that §2 described is REMOVED: nothing in the app ever set that tag, so the drop never
   fired. PIN safety rests on the structural rules above, not on a tag.
