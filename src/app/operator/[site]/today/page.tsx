@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
-import { checkOperatorForSite } from '@/lib/auth-helpers';
+import { checkOperatorForSite, floorSignInPath } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { onHand } from '@/lib/inventory/running-balance';
 import { presentOnHand } from '@/lib/inventory/negative-floor';
@@ -40,7 +40,15 @@ type Card = { href: string; title: string; body: string; badge?: string };
 export default async function FloorTodayPage({ params }: Props) {
   const { site: siteCode } = await params;
   const gate = await checkOperatorForSite(siteCode);
-  if (!gate.ok) redirect(`/operator/${siteCode}`);
+  // ADR-0144 — signed out (401, incl. the session husk) returns here after the PIN;
+  // a wrong role or site (403/404) is not fixed by signing in, so it is unchanged.
+  if (!gate.ok) {
+    redirect(
+      gate.status === 401
+        ? floorSignInPath(siteCode, `/operator/${siteCode}/today`)
+        : `/operator/${siteCode}`,
+    );
+  }
   const { siteId, siteName } = gate.ctx;
 
   const session = await auth();

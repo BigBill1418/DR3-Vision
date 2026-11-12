@@ -433,6 +433,11 @@ a behaviour change, not a hardening.
 
 ## Amendment 2 (2026-11-10) — the pinned block leads with what can be worked; confirm panels open on screen
 
+**Status:** Accepted. D1 and D2 merged in #319 (`821e300`) and deployed 2026-11-10 2:51 PM PT; a real Woodland iPad
+check is still open (OPEN-ITEMS 0.HF HF-1). **2026-11-11 (PR-1, not merged):** D1 gains a rank for the late-truck
+card, which has a working control — startable 0, open load 1, late-truck reconcile 2, everything inert 3. The
+signed-out check-in copy is ADR-0144.
+
 **Trigger.** Woodland floor report, 2026-11-10 ~11:50 AM PST: "Vision is frozen. When we tap the Haul, nothing
 happens. We tried all 4 tablets." The server, database and tunnel were healthy. The "Coming up" block held 27
 `Confirmed` hauls and exactly one could start a load; at render the page mounted 42 dead-end beacons (34

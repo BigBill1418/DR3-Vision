@@ -32,11 +32,17 @@
 // finding D-8 is precisely the class where a refused floor write renders nothing
 // and the operator retaps forever, so the catch here renders a sentence and
 // leaves the control usable.
+//
+// ADR-0144 — and the sentence names the CAUSE. The action returns its refusals
+// (a 401 is "your session ended" with a sign-in control, a 409 is "the card
+// changed"), and the same `CheckinFailureNotice` as `QueueRow` renders them.
 
 import { useEffect, useRef, useState } from 'react';
 import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { isNextRedirectSignal } from '@/lib/next-redirect';
+import { classifyFloorActionFailure, type FloorActionFailure } from '@/lib/floor/action-outcome';
+import { CheckinFailureNotice } from '../../_components/checkin-failure-notice';
 import { startLoadReconciledAction } from '../actions';
 
 export function ReconcileRow({
@@ -58,7 +64,7 @@ export function ReconcileRow({
 }) {
   const t = useT();
   const [confirming, setConfirming] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<FloorActionFailure | null>(null);
   const [isPending, startTransition] = useWatchedTransition();
   // 2026-11-10 — same as `QueueRow`: the read-back must open where it is seen.
   const panelRef = useRef<HTMLDivElement>(null);
@@ -77,7 +83,7 @@ export function ReconcileRow({
         <button
           type="button"
           onClick={() => {
-            setFailed(false);
+            setFailure(null);
             setConfirming(true);
           }}
           className="mt-3 min-h-[56px] w-full rounded-lg bg-dr3-green px-4 py-3 text-base font-bold text-dr3-ink transition-colors hover:bg-dr3-green-dark hover:text-dr3-cream active:bg-dr3-green-dark"
@@ -97,10 +103,12 @@ export function ReconcileRow({
               disabled={isPending}
               onClick={() =>
                 startTransition(async () => {
+                  let outcome: unknown;
                   try {
                     // ADR-0127 — the haul number this panel already reads back
                     // now travels with the day and is checked the same way.
-                    await startLoadReconciledAction(
+                    // ADR-0144 — resolves ONLY with a refusal; success redirects.
+                    outcome = await startLoadReconciledAction(
                       siteCode,
                       expectedLoadId,
                       slotDayISO,
@@ -113,9 +121,13 @@ export function ReconcileRow({
                     // and just as bad.
                     // ADR-0127 — the shared predicate; see `next-redirect.ts`.
                     if (isNextRedirectSignal(e)) throw e;
-                    setFailed(true);
-                    setConfirming(false);
+                    outcome = e;
                   }
+                  // Some Next paths resolve `undefined` on success while a hard
+                  // navigation is in flight; that is not a failure.
+                  if (outcome === undefined) return;
+                  setFailure(classifyFloorActionFailure(outcome));
+                  setConfirming(false);
                 })
               }
               className="min-h-[56px] flex-1 rounded-lg bg-dr3-green px-4 py-3 text-base font-bold text-dr3-ink transition-colors hover:bg-dr3-green-dark hover:text-dr3-cream disabled:cursor-not-allowed disabled:opacity-60"
@@ -134,10 +146,10 @@ export function ReconcileRow({
         </div>
       )}
 
-      {failed && (
-        <p className="mt-2 text-start text-sm font-semibold text-dr3-cream">
-          {t('floor.hauls.late_failed')}
-        </p>
+      {failure && (
+        <div className="mt-2">
+          <CheckinFailureNotice failure={failure} siteCode={siteCode} />
+        </div>
       )}
     </div>
   );

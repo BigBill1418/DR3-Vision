@@ -37,3 +37,25 @@ export function resolveFloorReturnPath(next: string | null | undefined, siteCode
 
   return next;
 }
+
+/**
+ * ADR-0144 — the floor's sign-in URL, carrying the way back.
+ *
+ * The name picker is the floor's only sign-in, and it threads `?next=` through
+ * to the keypad, which resolves it with `resolveFloorReturnPath`. This builds the
+ * other end of that pipe for every signed-out surface: the check-in rows, the
+ * write-refusal notice and the floor pages' own 401 redirects.
+ *
+ * `here` is validated with the SAME function the keypad uses, and a path it would
+ * refuse is dropped rather than encoded — so this never emits a `next` the keypad
+ * would bounce, and is not a way to smuggle an off-site target into a link.
+ *
+ * Pure and client-safe on purpose: `auth-helpers.ts` re-exports it for the server
+ * pages, but importing that module from a `'use client'` row would drag the
+ * Auth.js server code into the browser bundle.
+ */
+export function floorSignInPath(siteCode: string, here: string | null | undefined): string {
+  const picker = `/operator/${encodeURIComponent(siteCode)}`;
+  if (!here || resolveFloorReturnPath(here, siteCode) !== here) return picker;
+  return `${picker}?next=${encodeURIComponent(here)}`;
+}

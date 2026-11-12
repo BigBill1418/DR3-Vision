@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useT } from '@/i18n/provider';
 import type { DeadEndSurface } from '@/lib/observability/dead-end';
+import { FloorSignInLink } from './floor-sign-in-link';
 
 // Audit D-8 — the two refusals every floor WRITE client can earn and none of
 // them could read.
@@ -37,6 +38,11 @@ import type { DeadEndSurface } from '@/lib/observability/dead-end';
 //   `update_prompt.reload`               — the app shell's own label for "the
 //     page you are looking at has gone out of date". See `WriteRefusalNotice`
 //     below for why that, and not `floor.conflicts.resubmit_today`.
+//
+// ADR-0144 added one control: the signed-out sentence said "Sign in again" with
+// nothing to tap. It now carries `FloorSignInLink`, which returns the operator to
+// this screen after the PIN (the numbers they typed are not kept — a sign-in is a
+// full page change — but they land on the right form instead of the hub).
 
 export type WriteRefusal = 'wrong_day' | 'signed_out';
 
@@ -125,6 +131,9 @@ export function WriteRefusalNotice({
           ? t('floor.conflicts.why_wrong_day')
           : t('auth_login.error_session_expired')}
       </p>
+      {refusal === 'signed_out' && (
+        <FloorSignInLink siteCode={siteCode} testId="write-refusal-sign-in" />
+      )}
       {refusal === 'wrong_day' && (
         <button
           type="button"

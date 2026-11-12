@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useWatchedTransition } from '@/lib/floor/use-watched-transition';
 import { useT } from '@/i18n/provider';
 import { isNextRedirectSignal } from '@/lib/next-redirect';
+import { classifyFloorActionFailure, type FloorActionFailure } from '@/lib/floor/action-outcome';
+import { CheckinFailureNotice } from '../../_components/checkin-failure-notice';
 import { startLoadAction } from '../actions';
 
 // Tap-to-start wrapper. Per CLAUDE.md hard rule #10 the queue row
@@ -54,6 +56,15 @@ import { startLoadAction } from '../actions';
 // identity; the server is where it is CHECKED. Neither alone would be enough —
 // a read-back nobody verifies is a decoration, and a server check nobody was
 // shown is a refusal out of nowhere.
+//
+// ── ADR-0144 — the failure says WHY ──────────────────────────────────────────
+//
+// The catch below used to print the 409 "card changed" copy for EVERY failure.
+// On 2026-11-10 that was what an idled-out session saw: the action threw a 401,
+// production Next hid it behind a digest, and the operator was told to refresh
+// a page whose real problem was the PIN. The action now RETURNS its refusals and
+// `classifyFloorActionFailure` names each cause; a lapsed session gets a sign-in
+// control that comes back to this screen.
 
 export function QueueRow({
   siteCode,
@@ -76,7 +87,7 @@ export function QueueRow({
   const t = useT();
   const [isPending, startTransition] = useWatchedTransition();
   const [confirming, setConfirming] = useState(false);
-  const [refused, setRefused] = useState(false);
+  const [failure, setFailure] = useState<FloorActionFailure | null>(null);
   // 2026-11-10 — the panel IS the answer to the first tap. A card near the
   // bottom of the iPad opened it entirely below the fold (reproduced: Yes at
   // 1195px on a 1080px viewport), so the tap read as "nothing happens". Bring it
@@ -92,7 +103,7 @@ export function QueueRow({
         type="button"
         disabled={isPending}
         onClick={() => {
-          setRefused(false);
+          setFailure(null);
           setConfirming(true);
         }}
         className="w-full rounded-lg bg-dr3-green-dark/40 p-4 text-left transition-colors hover:bg-dr3-green-dark/70 disabled:cursor-not-allowed disabled:opacity-60"
@@ -127,14 +138,20 @@ export function QueueRow({
               disabled={isPending}
               onClick={() =>
                 startTransition(async () => {
+                  let outcome: unknown;
                   try {
-                    await startLoadAction(siteCode, expectedLoadId, haulLabel);
+                    // Resolves ONLY with a refusal; success redirects.
+                    outcome = await startLoadAction(siteCode, expectedLoadId, haulLabel);
                   } catch (e) {
                     // ADR-0127 — the shared predicate; see `next-redirect.ts`.
                     if (isNextRedirectSignal(e)) throw e;
-                    setConfirming(false);
-                    setRefused(true);
+                    outcome = e;
                   }
+                  // Some Next paths resolve `undefined` on success while a hard
+                  // navigation is in flight; that is not a failure.
+                  if (outcome === undefined) return;
+                  setConfirming(false);
+                  setFailure(classifyFloorActionFailure(outcome));
                 })
               }
               className="min-h-[56px] flex-1 rounded-lg bg-dr3-green px-4 py-3 text-base font-bold text-dr3-ink transition-colors hover:bg-dr3-green-dark hover:text-dr3-cream disabled:cursor-not-allowed disabled:opacity-60"
@@ -153,20 +170,7 @@ export function QueueRow({
         </div>
       )}
 
-      {refused && (
-        <div className="rounded-lg bg-dr3-green-dark/60 p-3">
-          <p className="text-start text-sm font-semibold text-dr3-cream">
-            {t('floor.confirm_checkin.mismatch')}
-          </p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="mt-2 min-h-[44px] rounded-lg bg-dr3-green px-4 py-2 text-sm font-bold text-dr3-ink"
-          >
-            {t('update_prompt.reload')}
-          </button>
-        </div>
-      )}
+      {failure && <CheckinFailureNotice failure={failure} siteCode={siteCode} />}
     </div>
   );
 }

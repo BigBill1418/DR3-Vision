@@ -28,7 +28,11 @@ const { enqueueAction, isOfflineError, newIdempotencyKey } = vi.hoisted(() => ({
 vi.mock('@/lib/offline-queue', () => ({ enqueueAction, isOfflineError, newIdempotencyKey }));
 
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh }),
+  // ADR-0144 — the signed-out notice's sign-in control reads the current path.
+  usePathname: () => '/operator/woodland',
+}));
 
 vi.mock('@/i18n/provider', async () => {
   const { getDictionary, translate } = await import('@/i18n/dictionary');

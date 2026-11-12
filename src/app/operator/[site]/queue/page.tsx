@@ -1,4 +1,5 @@
 import { auth } from '@/lib/auth';
+import { floorSignInPath } from '@/lib/floor-return-path';
 import Link from 'next/link';
 import { redirect, notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
@@ -78,7 +79,8 @@ export default async function OperatorQueuePage({ params }: Props) {
   // The bare check waved it through to the role line below, which sent an idled-out
   // floor operator to HOME_ROUTE and from there to the MANAGER sign-in page. The
   // PIN screen is the only sign-in a person on a forklift can complete.
-  if (!session?.user?.id) redirect(`/operator/${siteCode}`);
+  // ADR-0144 — and come back HERE after the PIN.
+  if (!session?.user?.id) redirect(floorSignInPath(siteCode, `/operator/${siteCode}/queue`));
   if (session.user.role !== 'operator') redirect(HOME_ROUTE);
 
   const site = await prisma.site.findUnique({

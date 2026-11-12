@@ -19,15 +19,21 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **MERGED #319 (821e300) and DEPLOYED 2026-11-10 2:51 PM PT; real-iPad check at Woodland still open (HF-1)**
+## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **MERGED #319 (821e300) and DEPLOYED 2026-11-10 2:51 PM PT; real-iPad check at Woodland still open (HF-1); HF-3 in review (PR-1, ADR-0144)**
 
 - HF-1 (fix, this PR): the pinned block leads with actionable cards, and the confirm panels scroll on screen when
   they open. Verified on a local iPad-sized WebKit only. Still to do: merge, deploy, then a real Woodland iPad check.
 - HF-2 (open): which card was actually tapped on 2026-11-10 is unproven. `DeadEndBeacon` counts renders, not taps.
   Add a tap-on-inert beacon so the next report of this kind can be answered from data.
-- HF-3 (open, separate bug): when the session expires with a page open, tapping Yes on a check-in gets
-  `LoadAccessError 401` (an error page / 500, not a redirect) and the card shows the "card changed" copy. It should
-  say the operator is signed out and route them to the PIN screen. The `signed_out` WriteRefusal kind already exists.
+- HF-3 (**in review**, PR-1 `fix/hf3a-session-ended-checkin-20261111`, ADR-0144): when the session expires with a
+  page open, tapping Yes on a check-in got `LoadAccessError 401` and the card showed the "card changed" copy (3 more
+  such 401s from the hauls page after #319). The check-in actions now return their refusals, each failure class has
+  its own sentence, and a signed-out operator gets a "Sign in again" control and `?next=` back to the same screen.
+  Still to do: merge, deploy, real-iPad check.
+- HF-4 (open, investigating): beacons stopped after the 2026-11-10 deploy. Cause not known yet; until it is, a drop
+  in beacon counts is not evidence that the inert-card taps stopped.
+- HF-5 (open, awaiting Bill): the service worker replays server actions. Whether and how to change that is Bill's
+  decision; ADR-0144 does not touch the service worker.
 
 ---
 

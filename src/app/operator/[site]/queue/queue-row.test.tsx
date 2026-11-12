@@ -19,14 +19,17 @@
 //   5. a refusal is SHOWN rather than swallowed (floor dead-end audit D-8).
 
 import React from 'react';
-import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi, beforeEach, type MockInstance } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import en from '@/i18n/locales/en/operator.json';
 
 const startLoadAction = vi.fn();
 vi.mock('../actions', () => ({
   startLoadAction: (...a: unknown[]) => startLoadAction(...a),
 }));
+
+// The sign-in control returns the operator to the screen they tapped on.
+vi.mock('next/navigation', () => ({ usePathname: () => '/operator/woodland/queue' }));
 
 vi.mock('@/i18n/provider', async () => {
   const { getDictionary, translate } = await import('@/i18n/dictionary');
@@ -102,7 +105,12 @@ describe('ADR-0127 — one tap no longer commits to a truck', () => {
   it('SHOWS a refusal instead of doing nothing (dead-end audit D-8)', async () => {
     // A refused write that renders nothing is the shape the floor audit named:
     // the tap does nothing, no sentence appears, and the operator taps again.
-    startLoadAction.mockRejectedValueOnce(new Error('409 haul_number_mismatch'));
+    // ADR-0144 — the refusal now ARRIVES as a value; a 409 is a real card change.
+    startLoadAction.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      reason: 'haul_number_mismatch',
+    });
     mount();
     fireEvent.click(cardButton());
     fireEvent.click(confirmButton());
@@ -122,10 +130,25 @@ describe('ADR-0127 — one tap no longer commits to a truck', () => {
 // viewport 1080). Nothing on screen changed, so the tap read as dead. The panel
 // is the answer to the tap; it has to be where the operator is looking.
 describe('the confirm panel is brought on screen when it opens', () => {
-  const scrollIntoView = vi.fn();
+  // jsdom has no `scrollIntoView`. Install a stub only for this block and take it
+  // away afterwards — the #319 version assigned the prototype and never restored
+  // it, which leaked into every later test in the same worker.
+  let scrollIntoView: MockInstance<Element['scrollIntoView']>;
+  let installed = false;
+  const proto = Element.prototype as Partial<Element>;
   beforeEach(() => {
-    scrollIntoView.mockClear();
-    Element.prototype.scrollIntoView = scrollIntoView;
+    if (!proto.scrollIntoView) {
+      proto.scrollIntoView = () => {};
+      installed = true;
+    }
+    scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    scrollIntoView.mockRestore();
+    if (installed) {
+      delete proto.scrollIntoView;
+      installed = false;
+    }
   });
 
   it('scrolls the panel into view on the first tap', () => {
@@ -139,5 +162,87 @@ describe('the confirm panel is brought on screen when it opens', () => {
   it('does not scroll anything before the card is tapped', () => {
     mount();
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
+// ADR-0144 — 2026-11-10 Woodland, after #319: an idled-out session tapped Yes and
+// was told "This card changed since the page loaded". The action threw a 401,
+// production Next hid it behind a digest, and the catch printed the 409 copy for
+// everything. Each failure class now gets its own sentence, and signing out gets
+// a way back to the PIN screen that returns to this page.
+describe('ADR-0144 — a failed check-in says WHY', () => {
+  async function confirmWith(result: () => void) {
+    result();
+    mount();
+    fireEvent.click(cardButton());
+    fireEvent.click(confirmButton());
+    return screen.findByTestId('checkin-failure');
+  }
+
+  it('THE INCIDENT: a 401 says the session ended, NOT that the card changed', async () => {
+    const notice = await confirmWith(() =>
+      startLoadAction.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        reason: 'not_authenticated_as_operator',
+      }),
+    );
+    expect(notice.textContent).toContain(en.floor.action_outcome.signed_out);
+    expect(notice.textContent).not.toContain(en.floor.confirm_checkin.mismatch);
+  });
+
+  it('the signed-out notice has a sign-in control that comes back to this screen', async () => {
+    await confirmWith(() =>
+      startLoadAction.mockResolvedValueOnce({ ok: false, status: 401, reason: 'x' }),
+    );
+    const link = screen.getByRole('link', { name: en.floor.action_outcome.sign_in });
+    expect(link.getAttribute('href')).toBe(
+      '/operator/woodland?next=%2Foperator%2Fwoodland%2Fqueue',
+    );
+    // ADR-0060 gloved-hand sizing; rule #10 — a link, never a form.
+    expect(link.className).toContain('min-h-[56px]');
+    expect(document.querySelector('form')).toBeNull();
+  });
+
+  it.each([
+    ['403', { ok: false, status: 403, reason: 'not_an_operator' }],
+    ['404', { ok: false, status: 404, reason: 'expected_load_not_found' }],
+  ] as const)('a %s says this card cannot be checked in here', async (_s, value) => {
+    const notice = await confirmWith(() => startLoadAction.mockResolvedValueOnce(value));
+    expect(notice.textContent).toContain(en.floor.action_outcome.not_allowed);
+    expect(notice.textContent).not.toContain(en.floor.confirm_checkin.mismatch);
+  });
+
+  it('a stale bundle after a deploy says the app was updated', async () => {
+    const e = Object.assign(new Error('Server Action "ab" was not found on the server.'), {
+      name: 'UnrecognizedActionError',
+    });
+    const notice = await confirmWith(() => startLoadAction.mockRejectedValueOnce(e));
+    expect(notice.textContent).toContain(en.floor.action_outcome.app_updated);
+  });
+
+  it('no network says no connection (iPad Safari wording)', async () => {
+    const notice = await confirmWith(() =>
+      startLoadAction.mockRejectedValueOnce(new TypeError('Load failed')),
+    );
+    expect(notice.textContent).toContain(en.floor.action_outcome.no_connection);
+  });
+
+  it('an UNDEFINED result (success during a hard navigation) shows no failure notice', async () => {
+    startLoadAction.mockResolvedValueOnce(undefined);
+    mount();
+    fireEvent.click(cardButton());
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(startLoadAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('checkin-failure')).toBeNull();
+  });
+
+  it('an opaque server error is a plain failure, NOT a card change', async () => {
+    const notice = await confirmWith(() =>
+      startLoadAction.mockRejectedValueOnce(Object.assign(new Error('x'), { digest: '42' })),
+    );
+    expect(notice.textContent).toContain(en.floor.action_outcome.failed);
+    expect(notice.textContent).not.toContain(en.floor.confirm_checkin.mismatch);
   });
 });

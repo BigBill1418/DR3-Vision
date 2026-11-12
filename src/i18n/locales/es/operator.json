@@ -341,6 +341,14 @@
       "no": "No, tarjeta equivocada",
       "mismatch": "Esta tarjeta cambió desde que se cargó la página. Actualice la página e inténtelo de nuevo."
     },
+    "action_outcome": {
+      "signed_out": "Su sesión terminó, así que este camión no se registró. Inicie sesión de nuevo y volverá a esta pantalla.",
+      "sign_in": "Iniciar sesión de nuevo",
+      "not_allowed": "Esta tarjeta no se puede registrar con esta sesión. Pregunte a un gerente.",
+      "app_updated": "La aplicación se actualizó mientras esta página estaba abierta. Recargue la página e inténtelo de nuevo.",
+      "no_connection": "Sin conexión, así que este camión no se registró. Revise el Wi-Fi e inténtelo de nuevo.",
+      "failed": "No se pudo registrar. Recargue la página e inténtelo de nuevo."
+    },
     "hub": {
       "heading": "Revisión diaria",
       "caption": "{{site}} · {{name}}",
@@ -391,7 +399,6 @@
       "late_confirm": "¿Registrar {{haul}}, programada para {{date}}, como llegada hoy?",
       "late_yes": "Sí, regístrela",
       "late_cancel": "Cancelar",
-      "late_failed": "No se pudo registrar. Actualice la página e inténtelo de nuevo.",
       "stale_day": "Esta página es de un día anterior. Recárguela para registrar las cargas de hoy.",
       "empty_no_hauls_why": "Este sitio no tiene conexión con el portal MyMRC, así que no hay nada que mostrar aquí. Es normal — usa la cola para los camiones de hoy.",
       "withdrawn": "MyMRC retiró este viaje a las {{time}}.",

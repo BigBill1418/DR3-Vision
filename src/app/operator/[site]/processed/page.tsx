@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { checkOperatorForSite } from '@/lib/auth-helpers';
+import { checkOperatorForSite, floorSignInPath } from '@/lib/auth-helpers';
 import { isUiSurfaceLive, UI_SURFACE } from '@/lib/notify/rollout';
 import { listProcessedUnits } from '@/lib/loads/processed-units';
 import { getLocale } from '@/i18n/get-locale';
@@ -19,7 +19,15 @@ type Props = { params: Promise<{ site: string }> };
 export default async function FloorProcessedPage({ params }: Props) {
   const { site: siteCode } = await params;
   const gate = await checkOperatorForSite(siteCode);
-  if (!gate.ok) redirect(`/operator/${siteCode}`);
+  // ADR-0144 — signed out (401, incl. the session husk) returns here after the PIN;
+  // a wrong role or site (403/404) is not fixed by signing in, so it is unchanged.
+  if (!gate.ok) {
+    redirect(
+      gate.status === 401
+        ? floorSignInPath(siteCode, `/operator/${siteCode}/processed`)
+        : `/operator/${siteCode}`,
+    );
+  }
   const { siteId, siteName } = gate.ctx;
 
   const locale = await getLocale();

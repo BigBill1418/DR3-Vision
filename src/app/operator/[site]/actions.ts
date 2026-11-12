@@ -7,7 +7,12 @@ import { auth, signOut } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import * as svc from '@/lib/load-service';
 import { takeOverLoad, readClaimHolder, type TakeoverActionResult } from '@/lib/loads/load-claim';
-import { assertUiSurfaceActivated } from '@/lib/loads/record-guards';
+import {
+  assertUiSurfaceActivated,
+  LoadsInventoryNotActivatedError,
+} from '@/lib/loads/record-guards';
+import type { CheckinRefusal } from '@/lib/floor/action-outcome';
+import { log } from '@/lib/observability/logger';
 import { UI_SURFACE } from '@/lib/notify/rollout';
 import type { CountMode, ConcernCategory, LoadVoidReason, RejectionCategory } from '@prisma/client';
 
@@ -57,6 +62,59 @@ async function ctx(siteCode: string) {
 }
 
 /**
+ * ADR-0144 — turn a session / refusal failure into a RETURNED value.
+ *
+ * Production Next replaces a thrown server-action error with an opaque digest, so
+ * the check-in rows could not tell "your session ended" (401) from "the card
+ * changed" (409) and printed the 409 copy for both (Woodland, 2026-11-10). Only
+ * the typed refusals are converted: `LoadAccessError` (every `ctx()` and
+ * `startInboundLoad` refusal) and the ADR-0065 rollout gate's 403. Anything else —
+ * a database outage, a bug, and above all Next's `NEXT_REDIRECT` — is re-thrown
+ * untouched, so success still navigates and a crash is still a crash.
+ */
+async function refusalOrRedirect(
+  where: { action: string; siteCode: string; expectedLoadId: string },
+  run: () => Promise<string>,
+): Promise<CheckinRefusal> {
+  let destination: string;
+  try {
+    destination = await run();
+  } catch (e) {
+    let refusal: CheckinRefusal;
+    if (e instanceof svc.LoadAccessError) {
+      refusal = { ok: false, status: e.status, reason: e.reason };
+    } else if (e instanceof LoadsInventoryNotActivatedError) {
+      refusal = { ok: false, status: e.status, reason: 'surface_not_activated' };
+    } else {
+      throw e;
+    }
+    // A returned refusal is no longer logged by Next the way a thrown one was, and
+    // the 2026-11-10 outage was diagnosed from exactly those thrown-401 lines. So
+    // log it here, once. No operator identity: ids of the RECORD only, as
+    // `loadsErrorResponse` already logs.
+    try {
+      log.warn(
+        {
+          evt: 'floor.action_refused',
+          action: where.action,
+          status: refusal.status,
+          reason: refusal.reason,
+          siteCode: where.siteCode,
+          expectedLoadId: where.expectedLoadId,
+        },
+        `floor action refused: ${where.action} ${refusal.status} ${refusal.reason}`,
+      );
+    } catch {
+      /* observability is never load-bearing */
+    }
+    return refusal;
+  }
+  // Outside the try: `redirect()` throws its control-flow signal, which must reach
+  // the framework rather than this function's catch.
+  redirect(destination);
+}
+
+/**
  * ADR-0127 — check in the truck on the card the operator confirmed.
  *
  * `acknowledgedHaulId` is the haul number the card RENDERED and the operator
@@ -69,22 +127,24 @@ export async function startLoadAction(
   siteCode: string,
   expectedLoadId: string,
   acknowledgedHaulId: string,
-): Promise<void> {
-  const { operatorUserId, siteId } = await ctx(siteCode);
-  // ADR-0082 — `claimed` is deliberately NOT branched on here. Whether this call
-  // made the claim or lost the race to a colleague, the destination is the same
-  // load page; that page renders the workflow when you hold it and the held-by
-  // panel when you do not. Branching in the action would mean two places that
-  // have to agree about who holds a load, and the one that got it wrong before
-  // was the one that redirected without saying anything.
-  const load = await svc.startInboundLoad({
-    expectedLoadId,
-    siteId,
-    operatorUserId,
-    acknowledgedHaulId,
+): Promise<CheckinRefusal> {
+  return refusalOrRedirect({ action: 'startLoadAction', siteCode, expectedLoadId }, async () => {
+    const { operatorUserId, siteId } = await ctx(siteCode);
+    // ADR-0082 — `claimed` is deliberately NOT branched on here. Whether this call
+    // made the claim or lost the race to a colleague, the destination is the same
+    // load page; that page renders the workflow when you hold it and the held-by
+    // panel when you do not. Branching in the action would mean two places that
+    // have to agree about who holds a load, and the one that got it wrong before
+    // was the one that redirected without saying anything.
+    const load = await svc.startInboundLoad({
+      expectedLoadId,
+      siteId,
+      operatorUserId,
+      acknowledgedHaulId,
+    });
+    revalidatePath(`/operator/${siteCode}/queue`);
+    return `/operator/${siteCode}/load/${load.id}`;
   });
-  revalidatePath(`/operator/${siteCode}/queue`);
-  redirect(`/operator/${siteCode}/load/${load.id}`);
 }
 
 /**
@@ -117,21 +177,26 @@ export async function startLoadReconciledAction(
   expectedLoadId: string,
   acknowledgedSlotDayISO: string,
   acknowledgedHaulId: string,
-): Promise<void> {
-  const { operatorUserId, siteId } = await ctx(siteCode);
-  const load = await svc.startInboundLoad({
-    expectedLoadId,
-    siteId,
-    operatorUserId,
-    // ADR-0127 — this path already read the haul number back to the operator; it
-    // now travels and is checked, exactly like the day. Two acknowledgements on
-    // the noisier path, one on the ordinary one, and both are compared server-side.
-    acknowledgedHaulId,
-    reconcile: { acknowledgedSlotDayISO },
-  });
-  revalidatePath(`/operator/${siteCode}/queue`);
-  revalidatePath(`/operator/${siteCode}/hauls`);
-  redirect(`/operator/${siteCode}/load/${load.id}`);
+): Promise<CheckinRefusal> {
+  return refusalOrRedirect(
+    { action: 'startLoadReconciledAction', siteCode, expectedLoadId },
+    async () => {
+      const { operatorUserId, siteId } = await ctx(siteCode);
+      const load = await svc.startInboundLoad({
+        expectedLoadId,
+        siteId,
+        operatorUserId,
+        // ADR-0127 — this path already read the haul number back to the operator; it
+        // now travels and is checked, exactly like the day. Two acknowledgements on
+        // the noisier path, one on the ordinary one, and both are compared server-side.
+        acknowledgedHaulId,
+        reconcile: { acknowledgedSlotDayISO },
+      });
+      revalidatePath(`/operator/${siteCode}/queue`);
+      revalidatePath(`/operator/${siteCode}/hauls`);
+      return `/operator/${siteCode}/load/${load.id}`;
+    },
+  );
 }
 
 /**

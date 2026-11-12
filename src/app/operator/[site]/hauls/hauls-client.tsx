@@ -79,17 +79,21 @@ export interface HaulRowView {
  * worked, withdrawn or booked for another day, and those inert cards look like
  * the live one until their last line is read. The floor report was "we tap the
  * haul and nothing happens". So the cards that DO something lead: today's
- * startable truck first, then open loads to resume or take over, then everything
- * else in the server's order (the sort is stable).
+ * startable truck first (0), then open loads to resume or take over (1), then a
+ * late truck's reconcile card (2), then everything inert (3); within a rank the
+ * server's order holds (the sort is stable).
  *
  * The predicates restate `renderRow`'s branch conditions in the same order, so a
  * card ranked actionable is one `renderRow` gives a control. Only the pinned
  * block is reordered; the paginated list keeps ADR-0074's newest-first contract.
  */
 export function pinnedRank(r: HaulRowView): number {
-  if (r.consumedLoad) return r.consumedLoad.open ? 1 : 2;
+  if (r.consumedLoad) return r.consumedLoad.open ? 1 : 3;
   if (r.expectedLoadId && r.externalHaulId) return 0;
-  return 2;
+  // ADR-0074 Am.2 (PR-1) — the late-truck card carries the ADR-0096 two-tap
+  // check-in, a working control, so it ranks ahead of the inert cards.
+  if (r.reconcilableExpectedLoadId && r.slotDayISO && r.externalHaulId) return 2;
+  return 3;
 }
 
 type Props = {

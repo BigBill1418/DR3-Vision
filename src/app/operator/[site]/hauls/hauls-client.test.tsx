@@ -17,11 +17,14 @@
 // did my truck go".
 
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import en from '@/i18n/locales/en/operator.json';
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => '/operator/woodland/hauls',
+}));
 const startLoadReconciledAction = vi.fn();
 vi.mock('../actions', () => ({
   startLoadAction: vi.fn(),
@@ -37,7 +40,7 @@ vi.mock('@/i18n/provider', async () => {
   };
 });
 
-import { HaulsClient, type HaulRowView } from './hauls-client';
+import { HaulsClient, pinnedRank, type HaulRowView } from './hauls-client';
 
 function row(over: Partial<HaulRowView> = {}): HaulRowView {
   return {
@@ -481,6 +484,16 @@ describe('2026-11-10 — the pinned block leads with what can be worked', () => 
       .map((li) => li.textContent?.match(/H-\d+/)?.[0]);
   }
 
+  // ADR-0074 Am.2 (PR-1) — the late-truck card has a WORKING control (the
+  // ADR-0096 two-tap check-in), so it is not inert and must not sink below cards
+  // that do nothing.
+  const late = row({
+    id: 'a2K-late',
+    externalHaulId: 'H-900004',
+    reconcilableExpectedLoadId: 'exp-late',
+    slotDayISO: '2026-11-09',
+  });
+
   it('THE INCIDENT: the startable truck is the first card, ahead of inert ones', () => {
     expect(pendingOrder([worked, withdrawn, open, startable])).toEqual([
       'H-900001',
@@ -490,15 +503,109 @@ describe('2026-11-10 — the pinned block leads with what can be worked', () => 
     ]);
   });
 
+  it('ranks: startable 0, open load 1, late-truck reconcile 2, inert 3', () => {
+    expect(pinnedRank(startable)).toBe(0);
+    expect(pinnedRank(open)).toBe(1);
+    expect(pinnedRank(late)).toBe(2);
+    expect(pinnedRank(worked)).toBe(3);
+    expect(pinnedRank(withdrawn)).toBe(3);
+    // A late slot with no haul number renders read-only, so it is inert.
+    expect(pinnedRank({ ...late, externalHaulId: null })).toBe(3);
+  });
+
+  it('the late-truck card sits after open loads and ahead of every inert card', () => {
+    expect(pendingOrder([worked, late, withdrawn, open, startable])).toEqual([
+      'H-900001',
+      'H-900003',
+      'H-900004',
+      'H-900002',
+      'H-900008',
+    ]);
+  });
+
+  it('no pinned card is hidden or dropped by the reorder', () => {
+    const input = [worked, late, withdrawn, open, startable];
+    const out = pendingOrder(input);
+    expect(out).toHaveLength(input.length);
+    expect([...out].sort()).toEqual(input.map((r) => r.externalHaulId).sort());
+  });
+
   it('leaves the order alone when nothing is actionable', () => {
     expect(pendingOrder([withdrawn, worked])).toEqual(['H-900008', 'H-900002']);
   });
 
   it('the reconcile confirm panel is scrolled into view when it opens', () => {
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
-    list(row({ reconcilableExpectedLoadId: 'exp-r', slotDayISO: '2026-11-03' }));
+    // jsdom has no `scrollIntoView`: stub it for this test only and restore it, so
+    // nothing later in the worker inherits a patched prototype.
+    const had = 'scrollIntoView' in Element.prototype;
+    if (!had) Element.prototype.scrollIntoView = () => {};
+    const scrollIntoView: MockInstance<Element['scrollIntoView']> = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+    try {
+      list(row({ reconcilableExpectedLoadId: 'exp-r', slotDayISO: '2026-11-03' }));
+      fireEvent.click(rowList().getByRole('button'));
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    } finally {
+      scrollIntoView.mockRestore();
+      if (!had) delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
+});
+
+// ADR-0144 — the late-truck control reports its failures by cause, like QueueRow.
+describe('ADR-0144 — a failed late-truck check-in says WHY', () => {
+  const lateRow = row({ reconcilableExpectedLoadId: 'exp-r', slotDayISO: '2026-11-09' });
+  async function confirmWith(result: () => void) {
+    result();
+    list(lateRow);
     fireEvent.click(rowList().getByRole('button'));
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    fireEvent.click(rowList().getByText(en.floor.hauls.late_yes));
+    return screen.findByTestId('checkin-failure');
+  }
+
+  it('THE INCIDENT: a 401 says the session ended and offers sign-in back to /hauls', async () => {
+    const notice = await confirmWith(() =>
+      startLoadReconciledAction.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        reason: 'not_authenticated_as_operator',
+      }),
+    );
+    expect(notice.textContent).toContain(en.floor.action_outcome.signed_out);
+    expect(notice.textContent).not.toContain(en.floor.confirm_checkin.mismatch);
+    const link = within(notice).getByRole('link', { name: en.floor.action_outcome.sign_in });
+    expect(link.getAttribute('href')).toBe(
+      '/operator/woodland?next=%2Foperator%2Fwoodland%2Fhauls',
+    );
+  });
+
+  it('a real 409 is the card-changed copy', async () => {
+    const notice = await confirmWith(() =>
+      startLoadReconciledAction.mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        reason: 'slot_day_mismatch',
+      }),
+    );
+    expect(notice.textContent).toContain(en.floor.confirm_checkin.mismatch);
+  });
+
+  it('an UNDEFINED result (success during a hard navigation) shows no failure notice', async () => {
+    startLoadReconciledAction.mockResolvedValueOnce(undefined);
+    list(lateRow);
+    fireEvent.click(rowList().getByRole('button'));
+    fireEvent.click(rowList().getByText(en.floor.hauls.late_yes));
+    await waitFor(() => expect(startLoadReconciledAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('checkin-failure')).toBeNull();
+  });
+
+  it('no network says no connection, not card changed', async () => {
+    const notice = await confirmWith(() =>
+      startLoadReconciledAction.mockRejectedValueOnce(new TypeError('Failed to fetch')),
+    );
+    expect(notice.textContent).toContain(en.floor.action_outcome.no_connection);
+    expect(notice.textContent).not.toContain(en.floor.confirm_checkin.mismatch);
   });
 });
