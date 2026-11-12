@@ -207,7 +207,7 @@ during build).
 
 That route proves the SERVER path only. To prove the BROWSER path (floor tablets), open
 `https://dr3-vision.svdp.us` in a browser, then in the devtools console run
-`setTimeout(() => { throw new Error('synthetic browser error HF-6') })`. Within ~30 s it should appear in
+`setTimeout(() => { throw new Error('synthetic browser error HF-8') })`. Within ~30 s it should appear in
 GlitchTip project 26. If it does not: check the network tab for the POST to
 `errors.barnardhq.com/api/26/envelope/` (blocked by CSP = `connect-src` regression; absent = no DSN baked,
 see 4a). This console method is not yet proven against this app: if no POST appears at all, confirm the bake

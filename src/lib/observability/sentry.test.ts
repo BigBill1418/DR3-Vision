@@ -164,6 +164,41 @@ describe('scrubUrl / scrubText', () => {
   });
 });
 
+describe('token containing a 4-6 digit run (review round 2)', () => {
+  // 32+ char base64url with an embedded digit run: masking digits first used to
+  // break the segment below 32 chars, so part of the token leaked.
+  const DIGIT_TOKEN = 'Yz012345AbCdEfGhIjKlMnOpQrStUvWx';
+  it('is fully redacted in exception text and in a breadcrumb url', () => {
+    const e: SentryErrorEvent = {
+      type: undefined,
+      exception: { values: [{ value: `fetch https://h.test/x/${DIGIT_TOKEN} failed` }] },
+      breadcrumbs: [{ category: 'fetch', data: { url: `/x/${DIGIT_TOKEN}/y` } }],
+    };
+    const out = scrubEvent(e)!;
+    expect(out.exception!.values![0]!.value).toBe('fetch https://h.test/x/[token] failed');
+    expect(out.breadcrumbs![0]!.data).toEqual({ url: '/x/[token]/y' });
+    expect(JSON.stringify(out)).not.toMatch(/AbCdEfGh|Yz0|12345/);
+  });
+
+  it('masks a bare token word in text but keeps long error codes', () => {
+    expect(scrubText(`grant ${DIGIT_TOKEN} expired`)).toBe('grant [token] expired');
+    expect(scrubText('throughput_machine_not_configured: no designation')).toBe(
+      'throughput_machine_not_configured: no designation',
+    );
+  });
+
+  it('masks number-typed tag values and non-ASCII digit runs, but not UUIDs', () => {
+    const e: SentryErrorEvent = {
+      type: undefined,
+      tags: { pin_guess: 4821 },
+      message: 'PIN ٤٨٢١ id 3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+    };
+    const out = scrubEvent(e)!;
+    expect(out.tags?.['pin_guess']).toBe('[digits]');
+    expect(out.message).toBe('PIN [digits] id 3f2504e0-4f89-11d3-9a0c-0305e82c3301');
+  });
+});
+
 describe('scrubBreadcrumb', () => {
   it('drops UI and console breadcrumbs at record time', () => {
     const click: SentryBreadcrumb = { category: 'ui.click', message: 'button[aria-label="7"]' };

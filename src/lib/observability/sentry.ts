@@ -59,16 +59,35 @@ export function scrubUrl(url: string): string {
 
 /**
  * Best-effort text scrub for free text we cannot drop (exception values, the
- * event message): 4–6 digit runs (a PIN is 4 digits) and email-like strings.
+ * event message, tag values). ORDER IS LOAD-BEARING: tokens first (URLs, then
+ * any bare 32+ char base64url word), then emails, then digit runs — masking
+ * digits first would cut a token below 32 chars and leak the rest of it.
+ * Digit runs are 4–6 digits in ANY script (\p{Nd}; a PIN is 4) standing alone
+ * as a word; UUIDs are set aside first so their hex groups are never masked.
  * Names in free text are NOT caught — code must not put them in thrown messages.
  */
 export function scrubText(text: string): string {
-  return scrubUrlsInText(
-    text
-      .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
-      .replace(/(?<!\d)\d{4,6}(?!\d)/g, '[digits]'),
+  const tokenless = scrubUrlsInText(text).replace(
+    /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g,
+    // Bare words need a digit AND a letter, so long error codes such as
+    // `throughput_machine_not_configured` survive; a random 32-char base64url
+    // token lacks a digit with probability ~(54/64)^32 ≈ 0.4% (accepted residual).
+    (w) => (UUID.test(w) || !/\d/.test(w) || !/[A-Za-z]/.test(w) ? w : '[token]'),
   );
+  // Split around UUIDs (capturing group ⇒ odd indexes are the UUIDs themselves).
+  return tokenless
+    .split(UUID_IN_TEXT)
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part
+            .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
+            .replace(/(?<![\p{L}\p{N}])\p{Nd}{4,6}(?![\p{L}\p{N}])/gu, '[digits]'),
+    )
+    .join('');
 }
+
+const UUID_IN_TEXT = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
 function scrubUrlsInText(text: string): string {
   return text.replace(/https?:\/\/[^\s"'<>)]+|\/(?:api\/)?survey\/[^\s"'<>)/?#]+/g, (u) =>
@@ -133,6 +152,9 @@ export const scrubEvent = ((event: SentryErrorEvent): SentryErrorEvent | null =>
   if (event.tags) {
     for (const [k, v] of Object.entries(event.tags)) {
       if (typeof v === 'string') event.tags[k] = scrubText(v);
+      // A number-typed tag (e.g. a PIN guess) is masked like text; other numbers stay numbers.
+      else if (typeof v === 'number' && scrubText(String(v)) !== String(v))
+        event.tags[k] = '[digits]';
     }
   }
   if (event.transaction) event.transaction = scrubPath(event.transaction);

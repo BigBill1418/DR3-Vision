@@ -411,8 +411,11 @@ reached GlitchTip. Two gaps, either one enough on its own:
   - breadcrumbs: `ui.*` dropped (a keypad tap records the tapped element, i.e. the PIN digits in order) and
     `console` dropped (log lines can carry names); the rest lose `message` and keep only `method`, `status_code`,
     `url`, `from`, `to`.
-  - free text (exception values, event message, tag values): best-effort regex replaces 4–6 digit runs and
-    email-like strings. Names in free text are NOT detected (tested as a residual).
+  - free text (exception values, event message, tag values, number-typed tags): best-effort, in this order —
+    tokens first (URLs, then any bare 32+ char base64url word with a digit and a letter, UUIDs excepted), then
+    email-like strings, then standalone 4–6 digit runs in any script (`\p{Nd}`; UUIDs set aside first). Order
+    matters: masking digits first would cut a token below 32 chars and leak the rest. Names in free text are NOT
+    detected (tested as a residual), nor is a bare random token with no digit (~0.4% of tokens).
   - `sendDefaultPii: false`.
 - The `has_pin` tag check that §2 described is REMOVED: nothing in the app ever set that tag, so the drop never
   fired. PIN safety rests on the structural rules above, not on a tag.
@@ -425,7 +428,7 @@ reached GlitchTip. Two gaps, either one enough on its own:
   CI builds with a synthetic DSN (`https://testkey@errors.barnardhq.com/26`) and runs the `--expect` check.
 
 **Not verified by this amendment:** arrival of a real browser event in GlitchTip project 26. That needs the CHAD
-value, a deploy, and a synthetic browser error (OPEN-ITEMS 0.HF HF-6).
+value, a deploy, and a synthetic browser error (OPEN-ITEMS 0.HF HF-8).
 
 **Residual:** free text is only regex-scrubbed (digit runs, emails, URLs); a name inside a thrown message
 survives, so code must not put names or PINs into thrown messages (CLAUDE.md hard rule #8). Source-map upload (`GLITCHTIP_AUTH_TOKEN`) is

@@ -22,12 +22,13 @@ entries were briefly headed 2026-08-11 for exactly this reason; corrected
   Referer/Authorization/Cookie go in any casing; request bodies, cookies and query strings are removed; survey
   capability tokens (and other long opaque URL segments) become `[token]` in every URL the event carries; only the
   user id survives; `extra` and non-device contexts are dropped; keypad-tap and console breadcrumbs are dropped and
-  the rest keep only method/status/URL; 4–6 digit runs and emails in error text are masked. The old `has_pin` drop
+  the rest keep only method/status/URL; tokens, then emails, then 4–6 digit runs (any script) in error text and
+  tags are masked, in that order. The old `has_pin` drop
   was removed: nothing ever set that tag. Names inside error text are not caught (documented residual).
 - **Volume cap:** at most 10 browser events per minute per tab; the rest are dropped and counted on the next event.
 - **Proof in the build:** `npm run check:browser-dsn` checks the built client chunks; CI builds with a synthetic DSN
   and runs it.
-- **Still open (OPEN-ITEMS 0.HF HF-6):** set the real value in CHAD-HQ's `/home/bbarnard065/DR3-Vision/.env`,
+- **Still open (OPEN-ITEMS 0.HF HF-8):** set the real value in CHAD-HQ's `/home/bbarnard065/DR3-Vision/.env`,
   deploy, and prove a synthetic browser error arrives in GlitchTip project 26.
 
 ## 2026-11-11 — A failed check-in says why; a signed-out operator can sign straight back in (ADR-0144, ADR-0074 Am.2)
