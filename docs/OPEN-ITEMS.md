@@ -19,23 +19,23 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **MERGED #319 (821e300) and DEPLOYED 2026-11-10 2:51 PM PT; real-iPad check at Woodland still open (HF-1); HF-3 in review (PR-1, ADR-0144); HF-5 in review (PR-4, ADR-0006 Am.1)**
+## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **#319, #321 (cb76fd9), #322 (e73ddc5) and #323 (73eab21) MERGED and DEPLOYED (last two 2026-11-12, before noon PT); real-iPad checks at Woodland still open (HF-1, HF-3, HF-5); HF-2/HF-4/HF-6/HF-7 open**
 
 - HF-1 (fix, this PR): the pinned block leads with actionable cards, and the confirm panels scroll on screen when
   they open. Verified on a local iPad-sized WebKit only. Still to do: merge, deploy, then a real Woodland iPad check.
 - HF-2 (open): which card was actually tapped on 2026-11-10 is unproven. `DeadEndBeacon` counts renders, not taps.
   Add a tap-on-inert beacon so the next report of this kind can be answered from data.
-- HF-3 (**in review**, PR-1 `fix/hf3a-session-ended-checkin-20261111`, ADR-0144): when the session expires with a
+- HF-3 (**merged #321 cb76fd9, deployed 2026-11-11 4:40 PM PT**, PR-1 `fix/hf3a-session-ended-checkin-20261111`, ADR-0144): when the session expires with a
   page open, tapping Yes on a check-in got `LoadAccessError 401` and the card showed the "card changed" copy (3 more
   such 401s from the hauls page after #319). The check-in actions now return their refusals, each failure class has
   its own sentence, and a signed-out operator gets a "Sign in again" control and `?next=` back to the same screen.
-  Still to do: merge, deploy, real-iPad check.
+  Still to do: real-iPad check.
 - HF-4 (open, investigating): beacons stopped after the 2026-11-10 deploy. Cause not known yet; until it is, a drop
   in beacon counts is not evidence that the inert-card taps stopped.
-- HF-5 (**in review**, PR-4 `fix/sw-no-server-action-replay-20261111`, ADR-0006 Am.1, Bill approved 2026-11-11):
+- HF-5 (**merged #322 e73ddc5, deployed 2026-11-12 10:56 AM PT; live /sw.js carries the legacy-queue purge**, PR-4 `fix/sw-no-server-action-replay-20261111`, ADR-0006 Am.1, Bill approved 2026-11-11):
   the service worker replayed failed server actions from its own queue, with whatever session was live at replay
   time. It now sends them straight to the network and, when the new worker activates, deletes the old queue
-  without sending it. Still open: merge and deploy (Bill), then a real-iPad check owned by Bill and the floor:
+  without sending it. Still open: a real-iPad check owned by Bill and the floor:
   1. On a floor iPad, take the update: wait for "update available" and tap Reload (ADR-0027).
   2. Open a test load at the BOL stage. Turn on **airplane mode**. Tap Continue (an action with no offline
      queue). Expect the floor error screen, not silence.
@@ -53,12 +53,13 @@ item below that names Kelsey as a dependency in that light.
   for a failed server action. `stage-bol`, `stage-decision` and `stage-door` have no `catch`, so a failure lands
   on `src/app/operator/error.tsx`. `stage-reject`, `stage-weight` and `void-load-panel` show the raw `e.message`
   (on iPad Safari that is "Load failed"). The reconcile and held-by surfaces need the same review.
-- HF-8 (fix in review, `fix/browser-glitchtip-dsn-20261111`, ADR-0022 Am.1): browser errors from the tablets were
-  never captured (no build-time DSN, and CSP `connect-src` blocked GlitchTip). Still to do after merge: add
-  `NEXT_PUBLIC_GLITCHTIP_DSN=https://<publickey>@errors.barnardhq.com/26` (project 26 `dr3-vision`) to
-  `/home/bbarnard065/DR3-Vision/.env` on CHAD-HQ, deploy (the build must re-run), then throw a synthetic browser
-  error and see it arrive in GlitchTip project 26. Also set a GlitchTip project rate limit on project 26 (fleet
-  observability: Watch/Jesse); the in-app cap is per tab and resets on reload. Supersedes C-7.
+- HF-8 (**merged #323 73eab21, deployed 2026-11-12 11:20 AM PT**, ADR-0022 Am.1): browser errors from the tablets
+  were never captured (no build-time DSN, and CSP `connect-src` blocked GlitchTip). Done: `NEXT_PUBLIC_GLITCHTIP_DSN`
+  set in CHAD-HQ `.env` (backup `.env.bak-20261112`), live CSP allows `https://errors.barnardhq.com`, served chunk
+  contains it, and a synthetic error thrown on the live /login arrived in GlitchTip project 26 as
+  `dr3 synthetic browser test [digits] [email]` with only a User-Agent header, no cookies, no user (issues 12076,
+  12077, 12079 resolved). Still open: a GlitchTip project rate limit on project 26 (Watch/Jesse); the in-app cap is
+  per tab and resets on reload. Supersedes C-7.
 
 ---
 

@@ -9,6 +9,14 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-12 — #322 and #323 deployed and proven live
+
+- #322 (`e73ddc5`) live 10:56 AM PT: `/sw.js` no longer replays server actions and purges the legacy queue.
+- #323 (`73eab21`) live 11:20 AM PT with the CHAD-HQ browser DSN: live CSP allows `https://errors.barnardhq.com`, the
+  served chunk carries it, and one synthetic error from the live login page reached GlitchTip project 26 scrubbed
+  (`[digits] [email]`, User-Agent only, no cookies or user). Test issues resolved.
+- Still needs a real-iPad check at Woodland (OPEN-ITEMS 0.HF HF-1, HF-3, HF-5).
+
 ## 2026-11-11 — Browser errors from the floor tablets can reach GlitchTip (ADR-0022 Am.1)
 
 - **Found:** no browser error from the Woodland or Eugene tablets has ever reached GlitchTip. The image was built

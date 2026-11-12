@@ -1,7 +1,6 @@
 # ADR-0144 — Floor check-in actions return their refusals; the message is chosen by failure class
 
-- **Status:** Accepted 2026-11-11 (Pacific). Implemented on branch `fix/hf3a-session-ended-checkin-20261111`
-  (PR-1 of the 2026-11-10 Woodland follow-up), **not merged, not deployed**. Closes OPEN-ITEMS 0.HF HF-3 once
+- **Status:** Accepted 2026-11-11 (Pacific). Implemented in #321 (cb76fd9), **merged and deployed 2026-11-11 4:40 PM PT** (PR-1 of the 2026-11-10 Woodland follow-up). Closes OPEN-ITEMS 0.HF HF-3 once
   shipped.
 - **Context:** Woodland, 2026-11-10: "tap the haul, nothing happens" (ADR-0074 Amendment 2). After #319
   (`821e300`) was deployed, production logged three more `LoadAccessError 401 not_authenticated_as_operator`

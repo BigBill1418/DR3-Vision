@@ -368,7 +368,7 @@ All documented in `.env.example`. None are required for the application to start
 
 ## Amendment 1 — 2026-11-11: the browser DSN is a BUILD-time value on the PUBLIC host
 
-**Status:** Accepted (fix in review; inert until the CHAD-side value is set and the image is rebuilt).
+**Status:** Accepted (#323 73eab21, deployed 2026-11-12 11:20 AM PT; CHAD-side value set; synthetic browser error proven in GlitchTip project 26).
 
 **What was wrong.** §2 wired browser error capture, but no browser error from the Woodland/Eugene tablets ever
 reached GlitchTip. Two gaps, either one enough on its own:
