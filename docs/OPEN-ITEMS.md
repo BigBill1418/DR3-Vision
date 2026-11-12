@@ -19,7 +19,7 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
-## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **MERGED #319 (821e300) and DEPLOYED 2026-11-10 2:51 PM PT; real-iPad check at Woodland still open (HF-1); HF-3 in review (PR-1, ADR-0144)**
+## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **MERGED #319 (821e300) and DEPLOYED 2026-11-10 2:51 PM PT; real-iPad check at Woodland still open (HF-1); HF-3 in review (PR-1, ADR-0144); HF-5 in review (PR-4, ADR-0006 Am.1)**
 
 - HF-1 (fix, this PR): the pinned block leads with actionable cards, and the confirm panels scroll on screen when
   they open. Verified on a local iPad-sized WebKit only. Still to do: merge, deploy, then a real Woodland iPad check.
@@ -32,8 +32,27 @@ item below that names Kelsey as a dependency in that light.
   Still to do: merge, deploy, real-iPad check.
 - HF-4 (open, investigating): beacons stopped after the 2026-11-10 deploy. Cause not known yet; until it is, a drop
   in beacon counts is not evidence that the inert-card taps stopped.
-- HF-5 (open, awaiting Bill): the service worker replays server actions. Whether and how to change that is Bill's
-  decision; ADR-0144 does not touch the service worker.
+- HF-5 (**in review**, PR-4 `fix/sw-no-server-action-replay-20261111`, ADR-0006 Am.1, Bill approved 2026-11-11):
+  the service worker replayed failed server actions from its own queue, with whatever session was live at replay
+  time. It now sends them straight to the network and, when the new worker activates, deletes the old queue
+  without sending it. Still open: merge and deploy (Bill), then a real-iPad check owned by Bill and the floor:
+  1. On a floor iPad, take the update: wait for "update available" and tap Reload (ADR-0027).
+  2. Open a test load at the BOL stage. Turn on **airplane mode**. Tap Continue (an action with no offline
+     queue). Expect the floor error screen, not silence.
+  3. Still offline, on a test load at the stacks stage, add one stack. Expect the "queued" banner.
+  4. Turn airplane mode off and let the queue drain. Then fully close Safari and reopen the app (this restarts the
+     worker, which is when the old code re-sent its queue).
+  5. In the manager portal: the stacks load has exactly one new stack, and the BOL load did **not** move past BOL
+     on its own. Anything from step 2 landing without a fresh tap is a failure.
+- HF-6 (open, owner Aegis): the service worker's PHOTO queues (`dr3-photo-mint`, `dr3-photo-confirm`,
+  `dr3-photo-put` in `src/app/sw.ts`) still replay failed requests from the worker, under whichever session cookie
+  is live at replay time (and on iPad Safari every time the worker starts). Same class of problem as HF-5; left
+  alone on purpose in PR-4 so that PR changes one thing. The app's own photo queue in `offline-queue.ts` already
+  carries the capture-time grant and AUTH_EXPIRED parking.
+- HF-7 (open, Terry's PR-3 lane; not in PR-4): floor callers that still need #321-style outcome classification
+  for a failed server action. `stage-bol`, `stage-decision` and `stage-door` have no `catch`, so a failure lands
+  on `src/app/operator/error.tsx`. `stage-reject`, `stage-weight` and `void-load-panel` show the raw `e.message`
+  (on iPad Safari that is "Load failed"). The reconcile and held-by surfaces need the same review.
 - HF-8 (fix in review, `fix/browser-glitchtip-dsn-20261111`, ADR-0022 Am.1): browser errors from the tablets were
   never captured (no build-time DSN, and CSP `connect-src` blocked GlitchTip). Still to do after merge: add
   `NEXT_PUBLIC_GLITCHTIP_DSN=https://<publickey>@errors.barnardhq.com/26` (project 26 `dr3-vision`) to
