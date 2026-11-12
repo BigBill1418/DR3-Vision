@@ -3,6 +3,7 @@ import { defaultCache } from '@serwist/next/worker';
 import type { PrecacheEntry, SerwistGlobalConfig, RuntimeCaching } from 'serwist';
 import { CacheFirst, ExpirationPlugin, NetworkFirst, NetworkOnly, Serwist } from 'serwist';
 import { BackgroundSyncPlugin } from '@serwist/background-sync';
+import { purgeBackgroundSyncQueue } from '../lib/sw-legacy-queue';
 
 // Service Worker entry point for DR3-Vision (T-009 / ADR-0006).
 //
@@ -20,6 +21,13 @@ import { BackgroundSyncPlugin } from '@serwist/background-sync';
 // iPad Safari (which does not implement the Background Sync API);
 // BackgroundSyncPlugin is the belt-and-braces backstop for any
 // browser that does.
+//
+// ADR-0006 Amendment 1 — Next.js SERVER ACTIONS are never replayed by this
+// worker. The IndexedDB queue in `src/lib/offline-queue.ts` (idempotency keys,
+// AUTH_EXPIRED parking, ADR-0140 deadlines) is the only replay path for them.
+// A SW replay carried whichever operator's cookie was live at replay time, no
+// idempotency key for most actions, and after a deploy an action id the server
+// no longer knows.
 
 declare const self: ServiceWorkerGlobalScope &
   SerwistGlobalConfig & {
@@ -40,9 +48,10 @@ const photoPutQueue = new BackgroundSyncPlugin('dr3-photo-put', {
 const photoConfirmQueue = new BackgroundSyncPlugin('dr3-photo-confirm', {
   maxRetentionTime: 24 * 60,
 });
-const serverActionQueue = new BackgroundSyncPlugin('dr3-server-actions', {
-  maxRetentionTime: 24 * 60,
-});
+// ADR-0006 Amendment 1 — the retired server-action queue. Never constructed
+// again (on iPad Safari a BackgroundSyncPlugin replays its queue from the
+// constructor); only named so `activate` can purge what older workers left.
+const RETIRED_SERVER_ACTION_QUEUE = 'dr3-server-actions';
 
 // Custom routes layered IN FRONT of `defaultCache`. Order matters —
 // Serwist evaluates `runtimeCaching` top-down and the first matcher
@@ -53,7 +62,8 @@ const serverActionQueue = new BackgroundSyncPlugin('dr3-server-actions', {
 //     POST/PUT lands in the SW's IDB queue (in addition to the
 //     application-level queue in `src/lib/offline-queue.ts`)
 //   - Next.js server actions land at the page route via POST with
-//     `Next-Action` header — those get queued too
+//     `Next-Action` header — those go straight to the network, never queued
+//     (ADR-0006 Amendment 1)
 const customCaching: RuntimeCaching[] = [
   // ADR-0078 — /healthz is NEVER cached, and this entry must stay FIRST.
   //
@@ -144,8 +154,11 @@ const customCaching: RuntimeCaching[] = [
     }),
   },
   // Next.js server actions — same-origin POST to a page route with the
-  // `Next-Action` header. Queue on failure so reload-after-replay sees
-  // the action.
+  // `Next-Action` header. NetworkOnly, no plugins (ADR-0006 Amendment 1): a
+  // failure rejects to the page like any failed fetch, and the caller decides —
+  // the floor clients enqueue into `offline-queue.ts` on `isOfflineError`. The
+  // explicit route (rather than no route) keeps a future catch-all POST rule
+  // from silently reclaiming these.
   {
     matcher: ({ request, sameOrigin, url }) =>
       sameOrigin &&
@@ -153,11 +166,7 @@ const customCaching: RuntimeCaching[] = [
       request.headers.has('Next-Action') &&
       !url.pathname.startsWith('/api/'),
     method: 'POST',
-    handler: new NetworkFirst({
-      cacheName: 'dr3-no-cache',
-      networkTimeoutSeconds: 10,
-      plugins: [serverActionQueue],
-    }),
+    handler: new NetworkOnly(),
   },
 ];
 
@@ -182,6 +191,20 @@ const serwist = new Serwist({
 });
 
 serwist.addEventListeners();
+
+// ADR-0006 Amendment 1 — drop, WITHOUT replaying, any server action an older
+// worker queued. Those were written before this deploy and carry an action id
+// and a session that may no longer be valid; firing them now would land a write
+// nobody made today. `activate` runs once per new worker version, after the old
+// worker is gone. A failure is logged and left: nothing reads that queue any
+// more, so a leftover row is inert.
+self.addEventListener('activate', (event: ExtendableEvent) => {
+  event.waitUntil(
+    purgeBackgroundSyncQueue(self.indexedDB, RETIRED_SERVER_ACTION_QUEUE).catch((e: unknown) => {
+      console.warn('[sw] could not purge the retired server-action queue', e);
+    }),
+  );
+});
 
 // Allow the page to force-promote a waiting SW immediately. Used by
 // the in-page "update available" prompt (`src/app/UpdatePrompt.tsx`,
