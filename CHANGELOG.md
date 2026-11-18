@@ -9,6 +9,15 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-17 — Security: Next.js 15.5.20 → 15.5.29 (image-optimizer RCE)
+
+- Bumped `next` and `eslint-config-next` to 15.5.29 (lockfile regenerated with npm). Closes
+  GHSA-2464-fhr4-w9xw (unauthenticated RCE through an SVG sent to the Image Optimization API,
+  fixed in 15.5.28) and GHSA-2xp9-vwfh-vxw4 (AVIF image-optimizer flaw, fixed in 15.5.24).
+  CVE-2026-75604 is Windows-only and does not apply. Found by a trivy scan of the running image on
+  CHAD-HQ; `/_next/image` is reachable from the internet at dr3-vision.svdp.us. No code change.
+  Bill approved patching tonight.
+
 ## 2026-11-12 — #322 and #323 deployed and proven live
 
 - #322 (`e73ddc5`) live 10:56 AM PT: `/sw.js` no longer replays server actions and purges the legacy queue.
