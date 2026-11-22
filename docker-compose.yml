@@ -481,8 +481,8 @@ services:
       # backstop (audit P1-4, scripts/bonus-escalation-check.mjs:publishFireFailure).
       # The tier fires POST through the app; if the app is down on payroll morning
       # every tier fails and the daemon must page ntfy directly — which needs this
-      # token. Optional, same fail-soft contract as bonus-eod-check: when the file
-      # is absent the daemon still attempts the tokenless ntfy.sh fallback topic.
+      # token. Optional: when the file is absent the page is logged and NOT sent —
+      # there is no public ntfy.sh fallback for an SVdP system (ADR-0145).
       - path: /home/bbarnard065/.dr3-vision-secrets/ntfy.env
         required: false
     environment:
@@ -520,8 +520,8 @@ services:
     # DATABASE_URL + the ntfy publisher token, not INTERNAL_BASE_URL.
     #
     # Fail-soft: when NTFY_PUBLISHER_TOKEN is unset the daemon logs a no-op per
-    # site instead of alerting; primary ntfy failure falls back to the public
-    # ntfy.sh fallback topic (ADR-0036).
+    # site instead of alerting; a primary ntfy failure is logged and dropped —
+    # no public ntfy.sh fallback for an SVdP system (ADR-0145).
     image: dr3-vision-app:local
     container_name: dr3-vision-bonus-eod-check
     init: true

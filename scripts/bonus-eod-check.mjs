@@ -65,9 +65,7 @@ const FIRE_HOUR_PT = 20;
 const FIRE_MINUTE_PT = 0;
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
-const FALLBACK_BASE = 'https://ntfy.sh';
 const TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
-const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
 
 /**
@@ -232,23 +230,9 @@ async function publishMissing({ siteCode, siteName, dateLabel, fingerprint }) {
     logTs(`published to ${TOPIC} for ${siteCode} (${fingerprint})`);
     return;
   }
-  const fbHeaders = {
-    'X-Title': toHeaderSafe(`[FALLBACK] ${title}`.slice(0, 250)),
-    Priority: 'high',
-    Click: CLICK_URL,
-    Tags: 'warning,bonus,dr3-vision',
-  };
-  const fbOk = await postWithTimeout(
-    `${FALLBACK_BASE}/${FALLBACK_TOPIC}`,
-    body,
-    fbHeaders,
-    TIMEOUT_MS,
-  );
-  logTs(
-    fbOk
-      ? `published to FALLBACK topic for ${siteCode} (${fingerprint})`
-      : `publish FAILED for ${siteCode} (${fingerprint})`,
-  );
+  // ADR-0145 (noc-master notify standard, amended 2026-11-22): no public ntfy.sh fallback for
+  // an SVdP system. Log and drop.
+  logTs(`publish FAILED for ${siteCode} (${fingerprint}); public fallback disabled (SVdP, ADR-0145)`);
 }
 
 // ── Per-site check ──────────────────────────────────────────────────

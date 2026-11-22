@@ -155,47 +155,30 @@ describe('publishFireFailure — app-independent backstop page', () => {
     expect(headers['Priority']).toBe('high');
   });
 
-  it('falls back to ntfy.sh when the primary publish fails', async () => {
+  it('retries the primary (3 attempts) and never falls back to ntfy.sh (ADR-0145)', async () => {
     process.env['NTFY_PUBLISHER_TOKEN'] = 'tk_test';
-    const { calls } = stubFetch(false, true); // primary fails, fallback ok
+    const { calls } = stubFetch(false, false, true); // primary fails twice, then ok
 
     const ok = await publishFireFailure('t3', FIXED_NOW);
 
     expect(ok).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]!.url).toBe(
-      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
-    );
-    const fbHeaders = calls[1]!.init.headers as Record<string, string>;
-    expect(String(fbHeaders['X-Title'])).toContain('[FALLBACK]');
-    // Fallback carries no bearer (public server).
-    expect(fbHeaders['Authorization']).toBeUndefined();
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c.url.startsWith('https://ntfy.barnardhq.com/'))).toBe(true);
   });
 
-  it('when NTFY_PUBLISHER_TOKEN is unset, skips the primary and pages the tokenless ntfy.sh fallback (never posts unauthenticated to the primary)', async () => {
-    const { calls } = stubFetch(true); // fallback ok
-    const ok = await publishFireFailure('t4', FIXED_NOW);
-    // App-independent payroll backstop must not go silent just because the token
-    // file is missing — it still reaches the anonymous fallback server.
-    expect(ok).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(
-      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
-    );
-    const fbHeaders = calls[0]!.init.headers as Record<string, string>;
-    expect(String(fbHeaders['X-Title'])).toContain('[FALLBACK]');
-    // The primary (authenticated) server is never touched without a bearer.
-    expect(calls[0]!.url).not.toContain('ntfy.barnardhq.com');
-    expect(fbHeaders['Authorization']).toBeUndefined();
-  });
-
-  it('returns false (fully silent only) when the token is unset AND the tokenless fallback also fails', async () => {
-    const { calls } = stubFetch(false); // fallback fails
+  it('returns false after 3 failed primary attempts, with no ntfy.sh call', async () => {
+    process.env['NTFY_PUBLISHER_TOKEN'] = 'tk_test';
+    const { calls } = stubFetch(false, false, false, true); // a 4th call would succeed
     const ok = await publishFireFailure('t4', FIXED_NOW);
     expect(ok).toBe(false);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(
-      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
-    );
+    expect(calls).toHaveLength(3);
+    expect(calls.some((c) => c.url.includes('ntfy.sh'))).toBe(false);
+  });
+
+  it('when NTFY_PUBLISHER_TOKEN is unset, sends nothing at all (no unauthenticated primary, no public fallback)', async () => {
+    const { calls } = stubFetch(true);
+    const ok = await publishFireFailure('t4', FIXED_NOW);
+    expect(ok).toBe(false);
+    expect(calls).toHaveLength(0);
   });
 });

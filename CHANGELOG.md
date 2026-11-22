@@ -9,6 +9,19 @@ the Pacific day the work happened, not by the commit stamp. (Two 2026-08-10
 entries were briefly headed 2026-08-11 for exactly this reason; corrected
 2026-08-10.)
 
+## 2026-11-22 — No public ntfy.sh fallback (ADR-0145)
+
+- Removed the public `ntfy.sh` fallback leg from every DR3 publisher: `src/lib/ntfy.ts`, `src/lib/mymrc/ntfy.ts`,
+  `scripts/bonus-eod-check.mjs`, `scripts/bonus-escalation-check.mjs`, `scripts/migrate-with-ntfy.mjs`. SVdP data
+  stays off external services (noc-master notify standard, amended 2026-11-22, Bill approved 2026-11-22). A failed primary publish
+  is logged with its reason and dropped; the cooldown claim is released so the next tick retries.
+- The escalation daemon's payroll backstop page now tries the primary three times instead of falling to the
+  public topic, and sends nothing when its token is missing (it used to post to ntfy.sh without trying the
+  primary).
+- `scripts/restore-drill.sh` and `scripts/dr3-pg-backup.sh` pass `--no-public-fallback` to the fleet helper.
+- Tests: behavioural no-ntfy.sh assertions per publisher, plus a source guard over all five publishers, the
+  compose file and the two host scripts.
+
 ## 2026-11-17 — Security: Next.js 15.5.20 → 15.5.29 (image-optimizer RCE)
 
 - Bumped `next` and `eslint-config-next` to 15.5.29 (lockfile regenerated with npm). Closes

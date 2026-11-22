@@ -24,16 +24,14 @@
 // dependency footprint vs. the bare invocation).
 
 // ADR-0019.5 — the shared header sanitizer. A raw em dash in X-Title throws
-// in undici before a socket opens, killing primary AND fallback identically.
+// in undici before a socket opens, killing every attempt identically.
 import { toHeaderSafe } from './ntfy-header-safe.mjs';
 
 import { spawnSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 
 const PRIMARY_BASE = process.env.NTFY_BASE_URL?.trim() || 'https://ntfy.barnardhq.com';
-const FALLBACK_BASE = 'https://ntfy.sh';
 const TOPIC = process.env.NTFY_TOPIC_SYSTEM?.trim() || 'dr3-vision-system';
-const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
 const TIMEOUT_MS = 5_000;
 
@@ -68,14 +66,9 @@ async function publishMigrationApplied(name) {
   };
   const ok = await postWithTimeout(`${PRIMARY_BASE}/${TOPIC}`, body, headers, TIMEOUT_MS);
   if (ok) return;
-  // Fallback — strip Authorization, prefix [FALLBACK].
-  const fbHeaders = {
-    'X-Title': toHeaderSafe(`[FALLBACK] ${title}`.slice(0, 250)),
-    Priority: 'default',
-    Click: CLICK_URL,
-    Tags: 'migration,dr3-vision',
-  };
-  await postWithTimeout(`${FALLBACK_BASE}/${FALLBACK_TOPIC}`, body, fbHeaders, TIMEOUT_MS);
+  // ADR-0145 (noc-master notify standard, amended 2026-11-22): no public ntfy.sh fallback for an
+  // SVdP system. Log and drop; the migration itself already succeeded.
+  console.error(`[migrate-with-ntfy] ntfy publish failed for ${name}; public fallback disabled (SVdP, ADR-0145)`);
 }
 
 async function postWithTimeout(url, body, headers, timeoutMs) {

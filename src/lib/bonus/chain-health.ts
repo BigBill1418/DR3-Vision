@@ -546,7 +546,7 @@ export async function runChainHealthSweep(
         fingerprint: `bonus-chain-health:${site.siteCode}:${site.status}`,
         cooldownMs: CHAIN_REPAGE_MS,
       });
-      didPage = res.outcome === 'sent' || res.outcome === 'fallback-sent';
+      didPage = res.outcome === 'sent';
       if (!didPage) {
         // The 2026-08-05 lesson: a page that never lands must not be recorded as
         // if it did, or the ledger will claim someone was told when nobody was.

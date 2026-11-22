@@ -53,7 +53,7 @@ fail() {
   local msg="$1"
   echo "[restore-drill] FAIL: ${msg}" >&2
   if [[ -x "${NTFY_HELPER}" ]]; then
-    "${NTFY_HELPER}" --topic "${NTFY_TOPIC}" --priority high \
+    "${NTFY_HELPER}" --no-public-fallback --topic "${NTFY_TOPIC}" --priority high \
       --title "[DR3-Vision] quarterly restore drill FAILED" \
       --tags "backup,error" --dedup-key dr3-vision-restore-drill --cooldown 21600 \
       --click "${NTFY_CLICK}" -- "restore-drill.sh failed: ${msg}" || true

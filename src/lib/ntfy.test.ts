@@ -12,8 +12,8 @@ import {
 //   - Token-less env is a successful no-op (CI + fresh checkouts).
 //   - Successful primary publish carries the right ADR-0036 headers
 //     (X-Title, Authorization, Click, Priority, Tags).
-//   - Primary failure falls through to the obscured ntfy.sh fallback
-//     with `[FALLBACK]` prefix and Authorization stripped.
+//   - Primary failure NEVER reaches public ntfy.sh (ADR-0145): after the
+//     bounded primary retries the page is dropped and the claim released.
 //   - Cooldown suppression is per-fingerprint and respects the caller-
 //     supplied window (ADR-0037 §3).
 //   - Convenience wrappers (publishContainerStart, publishMigrationApplied,
@@ -118,18 +118,18 @@ describe('publishNtfy — successful primary publish', () => {
   });
 });
 
-describe('publishNtfy — fallback on primary failure', () => {
+describe('publishNtfy — primary failure never reaches public ntfy.sh (ADR-0145)', () => {
   beforeEach(() => {
     process.env['NTFY_PUBLISHER_TOKEN'] = 'tk_test_token_value';
   });
 
-  it('falls back to the obscured ntfy.sh topic only after the primary retries are exhausted', async () => {
+  it('drops after the primary retries are exhausted, with no ntfy.sh call', async () => {
     fetchImpls = [
-      // Primary fails on all three attempts (1 initial + 2 retries).
+      // Primary fails on all three attempts (1 initial + 2 retries). A fourth
+      // impl is queued so a regressed fallback leg would SUCCEED and show up.
       () => Promise.resolve(new Response('bad gateway', { status: 502 })),
       () => Promise.resolve(new Response('bad gateway', { status: 502 })),
       () => Promise.resolve(new Response('bad gateway', { status: 502 })),
-      // Fallback succeeds on its first attempt.
       () => Promise.resolve(new Response(null, { status: 200 })),
     ];
     const result = await publishNtfy({
@@ -137,26 +137,52 @@ describe('publishNtfy — fallback on primary failure', () => {
       title: 'Migration applied 0001_init',
       body: 'applied',
     });
-    expect(result.outcome).toBe('fallback-sent');
-    expect(fetchCalls).toHaveLength(4);
-    // First three calls are the primary (with retries); fourth is the fallback.
-    expect(fetchCalls.slice(0, 3).map((c) => c.url)).toEqual([
+    expect(result).toEqual({ ok: false, outcome: 'dropped' });
+    expect(fetchCalls.map((c) => c.url)).toEqual([
       'https://ntfy.barnardhq.com/dr3-vision-system',
       'https://ntfy.barnardhq.com/dr3-vision-system',
       'https://ntfy.barnardhq.com/dr3-vision-system',
     ]);
-    expect(fetchCalls[3]!.url).toBe(
-      'https://ntfy.sh/bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
-    );
-    const fbHeaders = fetchCalls[3]!.init.headers as Record<string, string>;
-    expect(fbHeaders['X-Title']).toBe('[FALLBACK] [DR3-Vision] Migration applied 0001_init');
-    expect(fbHeaders['Authorization']).toBeUndefined();
+    expect(fetchCalls.some((c) => c.url.includes('ntfy.sh'))).toBe(false);
+  });
+
+  it('releases the cooldown claim on a drop so the next tick may retry', async () => {
+    fetchImpls = [
+      () => Promise.reject(new TypeError('network')),
+      () => Promise.reject(new TypeError('network')),
+      () => Promise.reject(new TypeError('network')),
+      () => Promise.resolve(new Response(null, { status: 200 })),
+    ];
+    const args = { topic: 'dr3-vision-floor', title: 'T', body: 'b', fingerprint: 'fp-drop' };
+    expect((await publishNtfy(args)).outcome).toBe('dropped');
+    expect((await publishNtfy(args)).outcome).toBe('sent');
+    expect(fetchCalls.every((c) => c.url.startsWith('https://ntfy.barnardhq.com/'))).toBe(true);
+  });
+
+  it('never calls public ntfy.sh for ANY dr3-vision topic, whatever the primary does', async () => {
+    for (const topic of [
+      'dr3-vision-system',
+      'dr3-vision-container',
+      'dr3-vision-deploys',
+      'dr3-vision-loads',
+      'dr3-vision-floor',
+    ]) {
+      fetchImpls = [
+        () => Promise.resolve(new Response(null, { status: 403 })),
+        () => Promise.resolve(new Response(null, { status: 403 })),
+        () => Promise.resolve(new Response(null, { status: 403 })),
+        () => Promise.resolve(new Response(null, { status: 200 })),
+      ];
+      await publishNtfy({ topic, title: `t-${topic}`, body: 'b' });
+    }
+    expect(fetchCalls.length).toBeGreaterThan(0);
+    expect(fetchCalls.some((c) => c.url.includes('ntfy.sh'))).toBe(false);
   });
 
   it('recovers a transient primary blip on retry without ever touching the fallback', async () => {
     // The 2026-06-09 t4-escalation drop: the first attempt fails instantly
     // (connection error), the retry succeeds. The alert must land as `sent`,
-    // not `dropped`, and the obscured fallback topic must never be hit.
+    // not `dropped`, and public ntfy.sh must never be hit.
     fetchImpls = [
       () => Promise.reject(new TypeError('fetch failed')),
       () => Promise.resolve(new Response(null, { status: 200 })),
@@ -171,28 +197,6 @@ describe('publishNtfy — fallback on primary failure', () => {
     expect(fetchCalls.every((c) => c.url === 'https://ntfy.barnardhq.com/dr3-vision-system')).toBe(
       true,
     );
-  });
-
-  it('returns dropped only after every primary AND fallback attempt fails', async () => {
-    // 3 primary attempts + 2 fallback attempts = 5 failed fetches.
-    fetchImpls = [
-      () => Promise.reject(new TypeError('network')),
-      () => Promise.reject(new TypeError('network')),
-      () => Promise.reject(new TypeError('network')),
-      () => Promise.resolve(new Response(null, { status: 503 })),
-      () => Promise.resolve(new Response(null, { status: 503 })),
-    ];
-    const result = await publishNtfy({
-      topic: 'dr3-vision-system',
-      title: 'Storm',
-      body: 'both down',
-    });
-    expect(result).toEqual({ ok: false, outcome: 'dropped' });
-    expect(fetchCalls).toHaveLength(5);
-    expect(
-      fetchCalls.slice(0, 3).every((c) => c.url.startsWith('https://ntfy.barnardhq.com')),
-    ).toBe(true);
-    expect(fetchCalls.slice(3).every((c) => c.url.startsWith('https://ntfy.sh'))).toBe(true);
   });
 
   it('records a cooldown after a retry-recovered success so it does not double-page', async () => {
@@ -211,24 +215,6 @@ describe('publishNtfy — fallback on primary failure', () => {
     expect(first.outcome).toBe('sent');
     const second = await publishNtfy({ ...args, body: 'b' });
     expect(second.outcome).toBe('cooldown-suppressed');
-  });
-
-  it('returns dropped (no fallback attempted) when topic has no fallback registered', async () => {
-    // Primary exhausts its 3 attempts; topic isn't in the fallback map, so
-    // no ntfy.sh call is made.
-    fetchImpls = [
-      () => Promise.resolve(new Response(null, { status: 502 })),
-      () => Promise.resolve(new Response(null, { status: 502 })),
-      () => Promise.resolve(new Response(null, { status: 502 })),
-    ];
-    const result = await publishNtfy({
-      topic: 'unregistered-topic-name',
-      title: 'X',
-      body: 'y',
-    });
-    expect(result).toEqual({ ok: false, outcome: 'dropped' });
-    expect(fetchCalls).toHaveLength(3);
-    expect(fetchCalls.every((c) => c.url.startsWith('https://ntfy.barnardhq.com'))).toBe(true);
   });
 });
 
@@ -494,14 +480,12 @@ describe('header encoding safety (ADR-0019.5)', () => {
     expect(String(fetchCalls[0]!.init.body)).toContain('—');
   });
 
-  it('the FALLBACK leg is sanitized too — it failed identically on 2026-08-05', async () => {
-    // Primary rejects; fallback must still deliver. Before the fix both threw on
-    // the same header, which is why the failure looked like a total outage.
-    // The primary makes up to 3 attempts (PRIMARY_RETRY_BACKOFF_MS has 2 entries),
-    // so all three must fail before the fallback leg is reached.
+  it('a sanitized title that the primary refuses is dropped, never re-sent to ntfy.sh (ADR-0145)', async () => {
+    // Before ADR-0145 this case reached a public fallback leg (which also had to
+    // be sanitized — it failed identically on 2026-08-05). That leg is gone.
     __testing.setSleep(async () => undefined);
     bytestringValidatingFetch();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       fetchImpls.push(async () => new Response('nope', { status: 500 }));
     }
     const res = await publishNtfy({
@@ -509,84 +493,58 @@ describe('header encoding safety (ADR-0019.5)', () => {
       title: AUG5_TITLE,
       body: 'b',
     });
-    expect(res).toEqual({ ok: true, outcome: 'fallback-sent' });
-    const fbTitle = String((fetchCalls.at(-1)!.init.headers as Record<string, string>)['X-Title']);
-    expect(fbTitle).toContain('[FALLBACK]');
-    expect(fbTitle).not.toContain('—');
+    expect(res).toEqual({ ok: false, outcome: 'dropped' });
+    expect(fetchCalls).toHaveLength(3);
+    expect(fetchCalls.some((c) => c.url.includes('ntfy.sh'))).toBe(false);
   });
 });
 
 // ────────────────────────────────────────────────────────────────────────
-// noc-master ADR-0194 Amendment 3 — the fallback topic name IS the credential,
-// and this repo keeps FIVE hand-maintained copies of one of them.
+// ADR-0145 (noc-master notify standard, amended 2026-11-22) — no public ntfy.sh leg anywhere.
 //
-// `dr3-vision-system`'s obscured topic is written out verbatim in five places:
-// this map, `src/lib/mymrc/ntfy.ts` (the alias-less MyMRC bundle, which cannot
-// import from here), and three standalone `scripts/*.mjs` daemons that run as
-// their own compose services. Nothing at runtime can notice them diverging —
-// the fallback only fires when ntfy.barnardhq.com is already down, and public
-// ntfy.sh returns 200 for a POST to ANY topic name, so a stale copy publishes
-// into the void and reports success. DroneOpsMap had exactly this drift for
-// months before the same sweep found it.
-//
-// These two tests are therefore the only mechanism that can catch it.
+// DR3-Vision is an SVdP system; SVdP data never goes to an external service,
+// and the public ntfy.sh fallback (an obscured topic on a third-party server,
+// noc-master ADR-0194) was one. Until this change FIVE hand-maintained copies of
+// the obscured topic lived in this repo: the app publisher, the alias-less MyMRC
+// bundle and three standalone `scripts/*.mjs` daemons. A behavioural test per
+// publisher proves today's code; this source guard is what stops a sixth copy,
+// or a revert of one of the five, from quietly re-opening the leg.
 // ────────────────────────────────────────────────────────────────────────
-describe('obscured ntfy.sh fallback topics (ADR-0194 Am.3)', () => {
-  const STRONG = /^[0-9a-f]{32,}$/;
+describe('no public ntfy.sh fallback in any DR3-Vision publisher (ADR-0145)', () => {
+  const PUBLISHERS = [
+    'src/lib/ntfy.ts',
+    'src/lib/mymrc/ntfy.ts',
+    'scripts/bonus-eod-check.mjs',
+    'scripts/bonus-escalation-check.mjs',
+    'scripts/migrate-with-ntfy.mjs',
+    'docker-compose.yml',
+  ];
+  const codeOnly = (text: string) =>
+    text
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|#)/.test(l))
+      .join('\n');
 
-  it('every pinned fallback topic carries its own >=32-hex suffix, within ntfy limits', () => {
-    const map = __testing.fallbackTopicByPrimary;
-    const entries = Object.entries(map);
-    expect(entries.length).toBeGreaterThan(0);
-
-    const suffixes = new Set<string>();
-    for (const [primary, topic] of entries) {
-      const suffix = topic.slice(topic.lastIndexOf('-') + 1);
-      expect(STRONG.test(suffix), `${primary} -> ${topic}: suffix is ${suffix.length} chars`).toBe(
-        true,
-      );
-      // ntfy silently 404s a topic over 64 chars on BOTH servers, so an
-      // over-length name is a fallback that reports success and delivers
-      // nothing (noc-master ADR-0194 3i).
-      expect(topic.length, `${primary} -> ${topic}`).toBeLessThanOrEqual(64);
-      expect(/^[A-Za-z0-9_-]+$/.test(topic), `${primary} -> ${topic}`).toBe(true);
-      suffixes.add(suffix);
-    }
-    // Distinct secrets: one shared suffix means one guess exposes them all.
-    expect(suffixes.size).toBe(entries.length);
-  });
-
-  it('guards the guard: the strength regex rejects the retired 5-char suffixes', () => {
-    expect(STRONG.test('k8m2n')).toBe(false);
-    expect(STRONG.test('r4w7q')).toBe(false);
-    expect(STRONG.test('f9j5p')).toBe(false);
-    expect(STRONG.test('a'.repeat(31))).toBe(false);
-    expect(STRONG.test('a'.repeat(32))).toBe(true);
-  });
-
-  it('all five hand-maintained copies of dr3-vision-system agree', async () => {
+  it.each(PUBLISHERS)('%s has no ntfy.sh URL and no obscured fallback topic', async (rel) => {
     const { readFile } = await import('node:fs/promises');
-    const expected = __testing.fallbackTopicByPrimary['dr3-vision-system'];
-    expect(expected).toBeTruthy();
+    const text = codeOnly(await readFile(new URL(`../../${rel}`, import.meta.url), 'utf8'));
+    expect(text).not.toMatch(/ntfy\.sh/);
+    expect(text).not.toMatch(/bhq-fb-dr3v-|barnardhq-fleet-dr3-vision-/);
+    expect(text).not.toMatch(/\[FALLBACK\]/);
+  });
 
-    // Each of these holds its own literal because it cannot import this module:
-    // the MyMRC bundle compiles alias-less, and the three .mjs daemons run as
-    // separate compose services outside the Next build graph.
-    const copies = [
-      'src/lib/mymrc/ntfy.ts',
-      'scripts/bonus-eod-check.mjs',
-      'scripts/bonus-escalation-check.mjs',
-      'scripts/migrate-with-ntfy.mjs',
-    ];
-    for (const rel of copies) {
+  it('the host scripts pass --no-public-fallback to the fleet helper', async () => {
+    const { readFile } = await import('node:fs/promises');
+    for (const rel of ['scripts/restore-drill.sh', 'scripts/dr3-pg-backup.sh']) {
       const text = await readFile(new URL(`../../${rel}`, import.meta.url), 'utf8');
-      expect(text, `${rel} does not carry the current dr3-vision-system fallback topic`).toContain(
-        expected,
-      );
-      expect(text, `${rel} still carries a retired fallback topic`).not.toMatch(
-        /bhq-fb-dr3v-\w+-\w{4,6}(?![0-9a-f])/,
-      );
+      const calls = text.split('\n').filter((l) => /"\$\{?NTFY_(HELPER|PUBLISH)\}?"\s+--/.test(l));
+      expect(calls.length, rel).toBeGreaterThan(0);
+      for (const l of calls) expect(l, rel).toContain('--no-public-fallback');
     }
+  });
+
+  it('the publisher has no fallback map left to drift', () => {
+    expect(Object.keys(__testing)).not.toContain('fallbackTopicByPrimary');
   });
 });
 
