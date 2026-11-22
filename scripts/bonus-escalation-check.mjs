@@ -55,13 +55,15 @@ const RETRY_SPACING_MS = 15 * 60 * 1000;
 // every tier fails — including t4, the "payroll deadline missed" backstop, which
 // would otherwise route its page through the same dead app. So when a tier
 // exhausts its retries the daemon itself publishes DIRECTLY to ntfy (never
-// touching the app), mirroring the primary→fallback helper in
-// `scripts/bonus-eod-check.mjs`.
+// touching the app). Primary only: ADR-0145 (noc-master notify standard, amended 2026-11-22)
+// removed the public ntfy.sh fallback — SVdP data never goes to an external
+// service — so the primary gets bounded retries instead.
 const NTFY_PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
-const NTFY_FALLBACK_BASE = 'https://ntfy.sh';
 const NTFY_TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
-const NTFY_FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const NTFY_CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
+// ADR-0145 — bounded primary retries replace the removed public fallback.
+const PRIMARY_ATTEMPTS = 3;
+const PRIMARY_RETRY_PAUSE_MS = 500;
 
 // ── Why there is no ADR-0130 durable cooldown in THIS daemon ────────────────
 //
@@ -270,12 +272,19 @@ async function publishFireFailure(tier, now = new Date()) {
 
   // This is a safety-critical, app-INDEPENDENT payroll page (P1-4). The primary
   // ntfy.barnardhq.com publish needs the bearer, so when the token is unset we
-  // must NOT post unauthenticated to the primary — but we still fall through to
-  // the tokenless, anonymous-publish ntfy.sh fallback topic rather than going
-  // silent (a stronger contract than bonus-eod-check's no-op, deliberately, since
-  // this alert flags a missed payroll deadline).
+  // must NOT post unauthenticated to the primary. Until ADR-0145 the token-unset
+  // and primary-failed paths fell through to a tokenless public ntfy.sh topic;
+  // that leg is gone (SVdP data stays off external services). In its place the
+  // primary gets up to three attempts, and a total failure is logged loudly.
   const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
-  if (token) {
+  if (!token) {
+    logTs(
+      `NTFY_PUBLISHER_TOKEN unset — tier ${tier} fire-failure page NOT sent; public fallback disabled (SVdP, ADR-0145) (${fingerprint})`,
+    );
+    return false;
+  }
+  for (let attempt = 0; attempt < PRIMARY_ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, PRIMARY_RETRY_PAUSE_MS));
     const ok = await postWithTimeout(`${NTFY_PRIMARY_BASE}/${NTFY_TOPIC}`, body, {
       ...baseHeaders,
       'X-Title': toHeaderSafe(title),
@@ -285,22 +294,11 @@ async function publishFireFailure(tier, now = new Date()) {
       logTs(`published tier ${tier} fire-failure page to ${NTFY_TOPIC} (${fingerprint})`);
       return true;
     }
-    logTs(`primary ntfy publish failed for tier ${tier} — trying ntfy.sh fallback (${fingerprint})`);
-  } else {
-    logTs(
-      `NTFY_PUBLISHER_TOKEN unset — skipping primary, attempting tokenless ntfy.sh fallback for tier ${tier} (${fingerprint})`,
-    );
   }
-  const fbOk = await postWithTimeout(`${NTFY_FALLBACK_BASE}/${NTFY_FALLBACK_TOPIC}`, body, {
-    ...baseHeaders,
-    'X-Title': toHeaderSafe(`[FALLBACK] ${title}`.slice(0, 250)),
-  });
   logTs(
-    fbOk
-      ? `published tier ${tier} fire-failure page to FALLBACK topic (${fingerprint})`
-      : `tier ${tier} fire-failure page FAILED (primary+fallback)`,
+    `tier ${tier} fire-failure page FAILED after ${PRIMARY_ATTEMPTS} primary attempts; public fallback disabled (SVdP, ADR-0145) (${fingerprint})`,
   );
-  return fbOk;
+  return false;
 }
 
 /**

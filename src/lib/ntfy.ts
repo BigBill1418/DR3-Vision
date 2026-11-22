@@ -20,19 +20,18 @@
 //     in `~/.claude/CLAUDE.md`).
 //   - `Priority` header: 'default' | 'high' | 'urgent'.
 //   - `Tags` header: comma-list.
-//   - On primary failure (HTTP error or thrown), retry once on the
-//     public ntfy.sh fallback topic from `~/noc-master/data/ntfy-fallback-topics.yml`
-//     with `[FALLBACK]` prefixed to the title and Authorization stripped
-//     (public ntfy.sh has no auth — its access control is the obscured
-//     topic suffix).
+//   - NO public fallback (ADR-0145, noc-master notify standard, amended 2026-11-22). DR3-Vision
+//     is an SVdP system and SVdP data never goes to an external service; the
+//     public ntfy.sh fallback this module used to retry on is one. On primary
+//     failure (after the bounded retries below) the page is logged with its
+//     reason and dropped, and the cooldown claim is released so the next
+//     watchdog tick may try again.
 //
 // Contract — ADR-0037 (noise reduction):
 //   - Per-fingerprint cooldown enforced in-process. Default 5 min, but
 //     callers can override (boot uses 30 min so a crashloop doesn't
 //     spam; unhandled errors use 30 min per fingerprint to dedupe a
 //     storm).
-//   - The fallback path does NOT apply cooldowns — primary failure
-//     always falls through (ADR-0037 §3 explicit carve-out).
 //
 // Fail-soft: when `NTFY_PUBLISHER_TOKEN` is unset (no `ntfy.env` on
 // CHAD-HQ yet), every call resolves to a no-op `false` and logs a
@@ -49,22 +48,6 @@ import { redactSecrets } from './redact-secrets';
 import { claimCooldown, releaseCooldown, __cooldownTesting } from './ntfy-cooldown-store';
 
 const PRIMARY_BASE_DEFAULT = 'https://ntfy.barnardhq.com';
-const FALLBACK_BASE = 'https://ntfy.sh';
-
-// Pinned obscured fallback topics from
-// `~/noc-master/data/ntfy-fallback-topics.yml` — the dr3-vision rows
-// added 2026-05-06. Public ntfy.sh topics; access control IS the
-// obscured suffix. Bill's reader subscribes; nobody else needs the name.
-const FALLBACK_TOPIC_BY_PRIMARY: Readonly<Record<string, string>> = {
-  'dr3-vision-system': 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def',
-  'dr3-vision-container': 'barnardhq-fleet-dr3-vision-8a7f2c91e6b4d3a85f0c9d2e7b1a8f4c3',
-  'dr3-vision-deploys': 'bhq-fb-dr3v-deploys-6438a50ae307f3744cbcc19d314f787a',
-  'dr3-vision-loads': 'bhq-fb-dr3v-loads-43e1bf27f2c2e628478017a0e756cf73',
-  // ADR-0122, added 2026-08-20 — the floor dead-end pager. Mirrored into
-  // `~/noc-master/data/ntfy-fallback-topics.yml` in the same change; nothing at
-  // runtime notices if these two drift, which is why they move together.
-  'dr3-vision-floor': 'bhq-fb-dr3v-floor-8393dc46c01da9992f600caf8fdef584',
-};
 
 // ADR-0036 §Click URL priority tier 3.
 const DEFAULT_CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
@@ -75,7 +58,6 @@ const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 
 // Best-effort timeout — never blocks request handlers longer than this.
 const PRIMARY_TIMEOUT_MS = 5_000;
-const FALLBACK_TIMEOUT_MS = 5_000;
 
 // Retry backoff schedules (ADR-0037 resilience addendum, 2026-06-09).
 // A transient egress blip on CHAD-HQ takes out a single primary attempt
@@ -83,15 +65,14 @@ const FALLBACK_TIMEOUT_MS = 5_000;
 // t4 payroll-deadline-missed escalation dropped (both paths failed ~16ms
 // apart, far too fast to be 5s timeouts, i.e. instant connection errors).
 // A couple of fast retries with short backoff turn that miss into a
-// `sent`/`fallback-sent`. Because a transient failure returns instantly,
+// `sent`. Because a transient failure returns instantly,
 // a retry costs roughly the backoff, not a full timeout.
 //
-// Array length = number of retries → PRIMARY does up to 3 attempts,
-// FALLBACK up to 2. Each value is the pause BEFORE the next attempt.
+// Array length = number of retries → PRIMARY does up to 3 attempts.
+// Each value is the pause BEFORE the next attempt.
 const PRIMARY_RETRY_BACKOFF_MS: readonly number[] = [250, 750];
-const FALLBACK_RETRY_BACKOFF_MS: readonly number[] = [500];
 
-// Overall wall-clock budget across ALL attempts (primary + fallback).
+// Overall wall-clock budget across ALL primary attempts.
 // Bounds the worst case when the server is genuinely hung (every attempt
 // times out) so a publish never blocks a caller far beyond this. A
 // fast-failing transient never approaches it; this only caps the
@@ -138,10 +119,13 @@ export interface PublishNtfyArgs {
 }
 
 export interface PublishNtfyResult {
-  /** True if a request landed (primary or fallback) or was suppressed by cooldown / unconfigured. */
+  /** True if the primary accepted it or it was suppressed by cooldown / unconfigured. */
   ok: boolean;
-  /** What happened — useful for logs and tests. */
-  outcome: 'sent' | 'fallback-sent' | 'cooldown-suppressed' | 'unconfigured' | 'dropped';
+  /**
+   * What happened — useful for logs and tests. There is no `fallback-sent`
+   * since ADR-0145: DR3-Vision has no public fallback transport.
+   */
+  outcome: 'sent' | 'cooldown-suppressed' | 'unconfigured' | 'dropped';
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -207,11 +191,9 @@ function buildHeaders(args: {
   priority: NtfyPriority;
   clickUrl: string;
   tags: readonly string[] | undefined;
-  publisherToken: string | undefined;
-  isFallback: boolean;
+  publisherToken: string;
 }): Record<string, string> {
-  const fullTitle =
-    (args.isFallback ? `[FALLBACK] ${TITLE_PREFIX} ` : `${TITLE_PREFIX} `) + args.title;
+  const fullTitle = `${TITLE_PREFIX} ` + args.title;
   const headers: Record<string, string> = {
     // ntfy accepts both `Title` and `X-Title`; we use `X-Title` per the
     // canonical fleet spelling in CLAUDE.md.
@@ -223,12 +205,12 @@ function buildHeaders(args: {
     const joined = args.tags.filter((t) => t).join(',');
     if (joined) headers['Tags'] = joined;
   }
-  if (!args.isFallback && args.publisherToken) {
+  if (args.publisherToken) {
     headers['Authorization'] = `Bearer ${args.publisherToken}`;
   }
 
   // Sanitize at this SINGLE choke point, after every header is assembled, so it
-  // covers every call site and both transports. Applying it per-field at the
+  // covers every call site. Applying it per-field at the
   // call sites is what let the defect survive three previous fixes.
   // Authorization is excluded: a token is ASCII by construction, and mangling
   // it would turn an encoding bug into an auth bug.
@@ -240,7 +222,7 @@ function buildHeaders(args: {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// HTTP POST helpers — primary + fallback
+// HTTP POST helpers — primary only (ADR-0145)
 // ────────────────────────────────────────────────────────────────────────
 
 /**
@@ -266,12 +248,7 @@ function buildHeaders(args: {
  * `reason` is the whole point: a drop with no reason is what turned a header
  * encoding bug into a month of invisible failures.
  */
-function logDrop(fields: {
-  topic: string;
-  fallbackTopic: string | null;
-  reason: string | null;
-  msg: string;
-}): void {
+function logDrop(fields: { topic: string; reason: string | null; msg: string }): void {
   console.error(JSON.stringify({ level: 50, op: 'ntfy', ...fields }));
 }
 
@@ -364,10 +341,6 @@ function readBaseUrl(): string {
   return process.env['NTFY_BASE_URL']?.trim() || PRIMARY_BASE_DEFAULT;
 }
 
-function fallbackTopicFor(primary: string): string | undefined {
-  return FALLBACK_TOPIC_BY_PRIMARY[primary];
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // Public API
 // ────────────────────────────────────────────────────────────────────────
@@ -378,10 +351,9 @@ function fallbackTopicFor(primary: string): string | undefined {
  * - Returns `unconfigured` (no-op) when `NTFY_PUBLISHER_TOKEN` is unset.
  * - Returns `cooldown-suppressed` when the fingerprint has fired
  *   within the cooldown window.
- * - Returns `sent` on primary success, `fallback-sent` on primary
- *   failure + fallback success.
- * - Returns `dropped` when both primary and fallback failed —
- *   caller may retry on the next watchdog tick.
+ * - Returns `sent` on primary success.
+ * - Returns `dropped` when every primary attempt failed — there is no
+ *   public fallback (ADR-0145); caller may retry on the next watchdog tick.
  *
  * Never throws.
  */
@@ -400,7 +372,7 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
   // ADR-0130 — CLAIM the window before sending, rather than checking then
   // recording after. The claim is a single atomic statement, so two processes
   // that wake on the same cron minute cannot both pass a check and both page.
-  // The claim is given back below if neither transport lands.
+  // The claim is given back below if the primary does not land.
   const claim = await claimCooldown(fp, cooldownMs, now);
   if (!claim.claimed) {
     return { ok: true, outcome: 'cooldown-suppressed' };
@@ -427,10 +399,9 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     clickUrl,
     tags: args.tags,
     publisherToken: token,
-    isFallback: false,
   });
 
-  // Overall budget shared across every primary + fallback attempt so a
+  // Overall budget shared across every primary attempt so a
   // hung server can't make this block far past PUBLISH_TOTAL_BUDGET_MS.
   const deadline = now + PUBLISH_TOTAL_BUDGET_MS;
 
@@ -446,51 +417,16 @@ export async function publishNtfy(args: PublishNtfyArgs): Promise<PublishNtfyRes
     return { ok: true, outcome: 'sent' };
   }
 
-  // Primary failed — fallback path. Per ADR-0037 §3 the fallback path itself
-  // applies NO cooldown gate: a primary failure always falls through, and it
-  // does here because the claim was already won above. The claim covers the
-  // fallback send too, so a subsequent primary-recovered call doesn't
-  // double-page — dropping a redundant alert beats spamming Bill.
-  const fbTopic = fallbackTopicFor(args.topic);
-  if (!fbTopic) {
-    logDrop({
-      topic: args.topic,
-      fallbackTopic: null,
-      reason: lastFailureReason,
-      msg: '[ntfy] primary failed and NO fallback topic is registered - page dropped',
-    });
-    // Nothing landed: give the window back so the next watchdog tick may retry.
-    await releaseCooldown(fp, claim.expiresAt);
-    return { ok: false, outcome: 'dropped' };
-  }
-  const fallbackHeaders = buildHeaders({
-    title: args.title,
-    priority,
-    clickUrl,
-    tags: args.tags,
-    publisherToken: undefined,
-    isFallback: true,
-  });
-  const fallbackOk = await postWithRetry(
-    `${FALLBACK_BASE}/${fbTopic}`,
-    truncated,
-    fallbackHeaders,
-    FALLBACK_TIMEOUT_MS,
-    FALLBACK_RETRY_BACKOFF_MS,
-    deadline,
-  );
-  if (fallbackOk) {
-    return { ok: true, outcome: 'fallback-sent' };
-  }
+  // Primary failed. ADR-0145 (noc-master notify standard, amended 2026-11-22): there is NO
+  // public ntfy.sh fallback for an SVdP system — log the reason and drop.
   logDrop({
     topic: args.topic,
-    fallbackTopic: fbTopic,
     reason: lastFailureReason,
-    msg: '[ntfy] primary AND fallback both failed - page dropped',
+    msg: '[ntfy] primary failed; public fallback disabled (SVdP, ADR-0145) - page dropped',
   });
-  // Neither transport landed. Release the claim — the ADR-0036 contract is that
-  // the caller "may retry on the next watchdog tick", and a claim held over a
-  // transient ntfy outage would silence the alert for its whole window.
+  // Nothing landed: give the window back so the next watchdog tick may retry —
+  // a claim held over a transient ntfy outage would silence the alert for its
+  // whole window.
   await releaseCooldown(fp, claim.expiresAt);
   return { ok: false, outcome: 'dropped' };
 }
@@ -577,13 +513,6 @@ function fingerprintFromError(err: unknown): string {
 // ────────────────────────────────────────────────────────────────────────
 
 export const __testing = {
-  /**
-   * The pinned obscured-fallback map, exposed so the suite can assert the
-   * suffixes are still strong. On public ntfy.sh the topic name is the whole
-   * access control (noc-master ADR-0194 Am.3), and this map is hand-copied
-   * from the fleet registry — so nothing at runtime can notice it rotting.
-   */
-  fallbackTopicByPrimary: FALLBACK_TOPIC_BY_PRIMARY,
   /**
    * Reset the cooldown ledger between tests. Since ADR-0130 this also clears the
    * registered durable backend, so a suite that does not register one gets the

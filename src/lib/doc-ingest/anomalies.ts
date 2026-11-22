@@ -439,9 +439,9 @@ async function maybePage(
   // record of its own failure. A ledger that cannot distinguish "sent" from
   // "attempted" does not just lose one page; it guarantees the loss is silent.
   //
-  // `ok` is true for 'sent', 'fallback-sent', 'cooldown-suppressed' and
-  // 'unconfigured' — all of which are correctly treated as paged (the first two
-  // reached ntfy; the last two are deliberate local suppressions that must not
+  // `ok` is true for 'sent', 'cooldown-suppressed' and
+  // 'unconfigured' — all of which are correctly treated as paged (the first
+  // reached ntfy; the other two are deliberate local suppressions that must not
   // spin). Only 'dropped' returns false, and leaving the stamp untouched there
   // lets the next sweep, fifteen minutes later, try again.
   if (!result.ok) return false;

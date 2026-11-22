@@ -10,7 +10,7 @@
 // no action and was ignored for weeks (ADR-0143 RC4, ADR-0037 gate q1).
 //
 // Delivered ≠ sent (the DR 0114/0126/0129 class): a page is STAMPED only when it
-// landed (`sent` / `fallback-sent`) or another process already claimed it
+// landed (`sent`) or another process already claimed it
 // (`cooldown-suppressed`). `dropped` / `unconfigured` leave the stamp empty, so the
 // next sweep (≤ 10 min, `/api/internal/inventory/pool-check`) tries again.
 //
@@ -50,7 +50,7 @@ function poolLabel(pool: string): string {
 }
 
 const landed = (r: PublishNtfyResult) =>
-  r.outcome === 'sent' || r.outcome === 'fallback-sent' || r.outcome === 'cooldown-suppressed';
+  r.outcome === 'sent' || r.outcome === 'cooldown-suppressed';
 
 interface OpenRow {
   id: string;

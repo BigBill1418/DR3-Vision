@@ -158,20 +158,8 @@ describe('the ADR-0037 cooldown', () => {
   });
 });
 
-describe('the fallback path exists', () => {
-  it('dr3-vision-floor has a registered obscured fallback topic', () => {
-    // A primary failure with no registered fallback is a DROPPED page — the
-    // helper logs it and moves on. Registering the topic in `ntfy.ts` is half the
-    // job; the other half is the row in noc-master's registry, which nothing at
-    // runtime can check. See ADR-0122 §Consequences.
-    const fb = __testing.fallbackTopicByPrimary[__alertContract.topic];
-    expect(fb, 'no fallback topic registered for the floor pager').toBeDefined();
-    expect(fb).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(fb!.length).toBeLessThanOrEqual(64);
-    expect(fb!.split('-').pop()).toMatch(/^[0-9a-f]{32,}$/);
-  });
-
-  it('falls through to ntfy.sh when the primary refuses', async () => {
+describe('no public fallback (ADR-0145)', () => {
+  it('a primary refusal is dropped and never reaches ntfy.sh', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init: RequestInit) => {
@@ -188,12 +176,10 @@ describe('the fallback path exists', () => {
       }),
     );
     const res = await alert();
-    expect(res.outcome).toBe('fallback-sent');
-    const last = calls.at(-1);
-    expect(last?.url).toContain('https://ntfy.sh/');
-    expect(last?.headers['X-Title']).toContain('[FALLBACK]');
-    // Public ntfy.sh has no auth; sending the bearer there would leak it.
-    expect(last?.headers['Authorization']).toBeUndefined();
+    expect(res.outcome).toBe('dropped');
+    expect(calls.length).toBeGreaterThan(0);
+    // SVdP floor data stays off the public server (noc-master notify standard, amended 2026-11-22).
+    expect(calls.every((c) => c.url.startsWith('https://ntfy.example.invalid'))).toBe(true);
   });
 });
 

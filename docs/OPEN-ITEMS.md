@@ -19,6 +19,15 @@ item below that names Kelsey as a dependency in that light.
 
 ---
 
+## 0.NF — 2026-11-22 SVdP public ntfy.sh fallback removed (ADR-0145)
+
+- NF-1 (**DONE 2026-11-22**, this PR): verified-open-because the five publishers and two host scripts named in
+  ADR-0145 still had a public `ntfy.sh` leg on `origin/main` d44377a. Removed; see CHANGELOG 2026-11-22.
+- NF-2 (accepted residual): a full `ntfy.barnardhq.com` outage now silences DR3 pages for its duration (ADR-0145
+  Consequences). No owner needed unless Bill wants a second self-hosted path.
+
+---
+
 ## 0.HF — 2026-11-10 Woodland "tap the haul, nothing happens" (ADR-0074 Am.2) — **#319, #321 (cb76fd9), #322 (e73ddc5) and #323 (73eab21) MERGED and DEPLOYED (last two 2026-11-12, before noon PT); real-iPad checks at Woodland still open (HF-1, HF-3, HF-5); HF-2/HF-4/HF-6/HF-7 open**
 
 - HF-1 (fix, this PR): the pinned block leads with actionable cards, and the confirm panels scroll on screen when

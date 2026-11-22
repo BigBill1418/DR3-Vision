@@ -2,8 +2,8 @@
 //
 // The mymrc modules compile standalone via tsconfig.mymrc.json (no `@/` alias),
 // so this cannot import `src/lib/ntfy.ts`; it re-implements the ADR-0036
-// transport (primary `ntfy.barnardhq.com` + obscured `ntfy.sh` fallback,
-// `[DR3-Vision]` title, tier-3 Click) and the ADR-0037 per-fingerprint cooldown.
+// transport (primary `ntfy.barnardhq.com` only — NO public ntfy.sh fallback
+// since ADR-0145, `[DR3-Vision]` title, tier-3 Click) and the ADR-0037 per-fingerprint cooldown.
 // Same pattern as upsert.ts duplicating `writeAudit` to stay self-contained.
 //
 // MyMRC sync failures are explicitly Bill-only SYSTEM events (charter Q16 /
@@ -24,9 +24,6 @@ import { redactSecrets } from './redact-secrets';
 import type { FeedName } from './types';
 
 const PRIMARY_BASE = process.env['NTFY_BASE_URL']?.trim() || 'https://ntfy.barnardhq.com';
-const FALLBACK_BASE = 'https://ntfy.sh';
-// Pinned obscured fallback topic for `dr3-vision-system` (ntfy-fallback-topics.yml).
-const FALLBACK_TOPIC = 'bhq-fb-dr3v-system-410f6daaf633b110fc69c96ae8d78def';
 const TOPIC = process.env['NTFY_TOPIC_SYSTEM']?.trim() || 'dr3-vision-system';
 // Tier-3 fallback click (ADR-0036): the NOC status page for this service.
 const CLICK_URL = 'https://noc-mastercontrol.barnardhq.com/status/dr3-vision';
@@ -233,8 +230,8 @@ async function postWithTimeout(
 }
 
 /**
- * The production pager. Publishes to `dr3-vision-system` with the ADR-0036
- * primary→fallback path and the ADR-0130 DURABLE cooldown claim. Never throws —
+ * The production pager. Publishes to `dr3-vision-system` on the ADR-0036
+ * primary only (ADR-0145: no public fallback for an SVdP system) and the ADR-0130 DURABLE cooldown claim. Never throws —
  * a paging failure must not fail the sync (`checkMirrorFreshness` explicitly
  * `.catch(() => undefined)`s this call, so a throw here would be swallowed and
  * indistinguishable from a delivery failure).
@@ -243,8 +240,8 @@ export const ntfyPager: Pager = {
   async page(alert: PageAlert): Promise<void> {
     const token = process.env['NTFY_PUBLISHER_TOKEN']?.trim();
     if (!token) return; // fail-soft: unconfigured is an operator state, not an error
-    // Claim the window atomically BEFORE sending; give it back below if neither
-    // transport lands, so a transient ntfy outage cannot silence the alert for the
+    // Claim the window atomically BEFORE sending; give it back below if the
+    // primary does not land, so a transient ntfy outage cannot silence the alert for the
     // whole window (`checkMirrorFreshness` retries on the next hourly tick).
     const grade = GRADE_BY_KIND[alert.kind];
     const claim = await claimCooldown(alert.fingerprint, alert.cooldownMs ?? grade.cooldownMs);
@@ -276,13 +273,18 @@ export const ntfyPager: Pager = {
       Authorization: `Bearer ${token}`,
     });
     if (ok) return;
-    const fallbackOk = await postWithTimeout(`${FALLBACK_BASE}/${FALLBACK_TOPIC}`, body, {
-      'X-Title': `[FALLBACK] ${title}`.slice(0, 250),
-      Priority: priority,
-      Click: click,
-      Tags: tags,
-    });
-    if (!fallbackOk) await releaseCooldown(alert.fingerprint, claim.expiresAt);
+    // ADR-0145 (noc-master notify standard, amended 2026-11-22): SVdP data never goes to an
+    // external service, so there is NO public ntfy.sh leg. Log and drop; the
+    // released claim lets the next hourly tick retry.
+    console.error(
+      JSON.stringify({
+        level: 50,
+        op: 'mymrc-ntfy',
+        msg: 'primary ntfy failed; public fallback disabled (SVdP, ADR-0145) - page dropped',
+        fingerprint: alert.fingerprint,
+      }),
+    );
+    await releaseCooldown(alert.fingerprint, claim.expiresAt);
   },
 };
 

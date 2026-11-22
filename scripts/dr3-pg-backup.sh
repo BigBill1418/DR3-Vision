@@ -41,7 +41,7 @@ log()  { echo "[dr3-pg-backup $(date -u +%FT%TZ)] $*"; }
 # never mask the backup result, but it is logged instead of swallowed.
 ntfy() {
   if [ -x "$NTFY_PUBLISH" ]; then
-    "$NTFY_PUBLISH" --topic "$NTFY_TOPIC" \
+    "$NTFY_PUBLISH" --no-public-fallback --topic "$NTFY_TOPIC" \
       --title "$1" --priority "${2:-default}" \
       "host CHAD-HQ — journalctl -u dr3-pg-backup / ~/backups/pg-backup.log" \
       >/dev/null 2>&1 || log "WARN: ntfy publish failed (title: $1)"

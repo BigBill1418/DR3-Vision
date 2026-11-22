@@ -100,7 +100,7 @@ export interface RunEscalationResult {
   /** Yesterday's-close periods examined for this tier. */
   periodsExamined: number;
   /**
-   * Count of ntfy publishes that were DELIVERED (`sent` / `fallback-sent`) or
+   * Count of ntfy publishes that were DELIVERED (`sent`) or
    * deliberately suppressed by cooldown.
    *
    * This used to count publishes ATTEMPTED, which made it a lie: on 2026-08-04
